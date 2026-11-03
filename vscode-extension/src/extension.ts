@@ -10,6 +10,7 @@ import { SettingsPanel } from "./panels/SettingsPanel.js";
 import { PlanEditorPanel } from "./panels/PlanEditorPanel.js";
 import { WaterfallPanel, WaterfallTraceStore } from "./panels/WaterfallPanel.js";
 import { FingerprintPanel } from "./panels/FingerprintPanel.js";
+import { ReceiptPanel } from "./panels/ReceiptPanel.js";
 import { ChangesReviewPanel } from "./panels/ChangesReviewPanel.js";
 import { SessionTabPanel } from "./panels/SessionTabPanel.js";
 import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
@@ -851,6 +852,16 @@ export async function activate(context: vscode.ExtensionContext) {
       } else {
         vscode.window.showInformationMessage("No active session to open Fingerprint trace for.");
       }
+    }),
+
+    registerTrackedCommand("andromity.openReceipt", (item?: any) => {
+      const sessionId = item?.session?.id || item?.id || chatProvider.getCurrentSessionId();
+      const sessionName = item?.session?.name || item?.name || "Chat Session";
+      if (!sessionId) {
+        vscode.window.showInformationMessage("Start a chat first. Each finished turn gets a receipt.");
+        return;
+      }
+      ReceiptPanel.createOrShow(context.extensionUri, sessionId, sessionName, pythonBridge?.getClient() || null);
     }),
 
     registerTrackedCommand("andromity.fixNotebookCell", async (cell?: vscode.NotebookCell) => {

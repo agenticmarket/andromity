@@ -307,6 +307,12 @@
         "icon": "$(type-hierarchy)"
       },
       {
+        "command": "andromity.openReceipt",
+        "title": "Show Turn Receipt",
+        "category": "Andromity",
+        "icon": "$(checklist)"
+      },
+      {
         "command": "andromity.deleteSession",
         "title": "Delete Session",
         "category": "Andromity",

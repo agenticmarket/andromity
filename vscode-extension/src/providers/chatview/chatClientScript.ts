@@ -250,6 +250,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const refreshingProviders = new Set();
     let sessionDisplayLimit = 10;
     const sessionsState = {};
+    const COMPACTION_ACKNOWLEDGEMENTS = [
+      'Understood. I have the context of our earlier discussion and will continue from here.',
+      'Understood. I have the context from our previous conversation and will continue from here.',
+    ];
     const sessionLiveBuffer = new Map(); // sessionId -> Array<raw msg> for replay when switching to a live session
     let turnEditedFiles = new Set();
     let globalDiffStats = {};
@@ -5062,6 +5066,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'copy-message':
           copyMessageText(target);
           break;
+        case 'open-receipt': {
+          const receiptTurn = parseInt(target.getAttribute('data-turn') || '', 10);
+          vscode.postMessage({ type: 'open_receipt', sessionId: currentSessionId, turnIndex: isNaN(receiptTurn) ? turnIndexForElement(target) : receiptTurn });
+          break;
+        }
         case 'approve-tool':
         case 'approve-tool-once':
           window.approveTool(target.getAttribute('data-approval-id'), 'once', target.getAttribute('data-tool'));
@@ -7402,6 +7411,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     var FOOTER_CLOCK_ICON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
     var FOOTER_COPY_ICON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
     var FOOTER_CHECK_ICON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    var FOOTER_RECEIPT_ICON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"></path><path d="M9 7h6"></path><path d="M9 11h6"></path><path d="M9 15h4"></path></svg>';
 
     /**
      * Single source of truth for the post-response meta strip:
@@ -7430,17 +7440,213 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       metaHtml += '<span class="message-time">' + timeStr + '</span></span>';
 
-      var actionsHtml = '';
+      var buttons = '';
       if (opts.copyAction) {
         var copyTitle = opts.copyTitle || 'Copy';
-        actionsHtml = '<span class="message-actions">' +
-          '<button type="button" class="msg-copy-btn" data-action="' + opts.copyAction + '" title="' + copyTitle + '" aria-label="' + copyTitle + '">' +
+        buttons += '<button type="button" class="msg-copy-btn" data-action="' + opts.copyAction + '" title="' + copyTitle + '" aria-label="' + copyTitle + '">' +
           FOOTER_COPY_ICON + '<span class="msg-action-label">Copy</span>' +
-          '</button></span>';
+          '</button>';
       }
+      if (opts.receiptAction) {
+        var turnKey = typeof opts.receiptTurnKey === 'string' && /^[0-9a-f]{32}$/.test(opts.receiptTurnKey) ? ' data-turn-key="' + opts.receiptTurnKey + '"' : '';
+        buttons += '<button type="button" class="msg-copy-btn msg-receipt-btn" data-action="open-receipt"' + turnKey + ' title="What this turn read, changed and ran" aria-label="Open the receipt for this turn" hidden>' +
+          FOOTER_RECEIPT_ICON + '<span class="msg-action-label">Receipt</span>' +
+          '</button>';
+      }
+      var actionsHtml = buttons ? '<span class="message-actions">' + buttons + '</span>' : '';
 
       footer.innerHTML = metaHtml + actionsHtml;
       return footer;
+    }
+
+    function turnIndexForElement(el) {
+      for (var node = el.closest('.message-wrap'); node; node = node.previousElementSibling) {
+        if (node.matches && node.matches('.message-wrap.user:not([data-steering])')) {
+          var value = parseInt(node.getAttribute('data-turn-index') || '', 10);
+          return isNaN(value) ? null : value;
+        }
+      }
+      return null;
+    }
+
+    var RECEIPT_TURN_KEY = /^[0-9a-f]{32}$/;
+
+    function isSafeStateKey(id) {
+      return typeof id === 'string' && id !== '' && id !== '__proto__' && id !== 'constructor' && id !== 'prototype';
+    }
+
+    function receiptCount(value) {
+      return Number.isInteger(value) && value >= 0 && value < 1000 ? value : null;
+    }
+
+    function receiptTally(value) {
+      return Number.isInteger(value) && value >= 0 && value < 1000000 ? value : null;
+    }
+
+    /** A receipt turn as the engine reported it, or null when the data is malformed. */
+    function receiptEntry(raw) {
+      if (!raw || !Number.isSafeInteger(raw.turn_index) || raw.turn_index < 0) return null;
+      var key = typeof raw.turn_key === 'string' && RECEIPT_TURN_KEY.test(raw.turn_key) ? raw.turn_key : null;
+      var attention = receiptCount(raw.attention);
+      return {
+        turn_index: raw.turn_index, turn_key: key, attention: attention,
+        high: attention === null ? null : receiptCount(raw.high),
+        files: receiptTally(raw.files_changed), commands: receiptTally(raw.commands), failed: receiptTally(raw.commands_failed),
+      };
+    }
+
+    function ownSessionState(sessionId) {
+      if (!isSafeStateKey(sessionId) || !Object.prototype.hasOwnProperty.call(sessionsState, sessionId)) return null;
+      var state = sessionsState[sessionId];
+      return state && typeof state === 'object' ? state : null;
+    }
+
+    function receiptStateFor(sessionId) {
+      if (!isSafeStateKey(sessionId)) return null;
+      var state = ownSessionState(sessionId) || (sessionsState[sessionId] = {});
+      if (!state.receipts || typeof state.receipts !== 'object') state.receipts = Object.create(null);
+      return state;
+    }
+
+    function receiptButtons() {
+      return Array.prototype.slice.call(chatContainer.querySelectorAll('.msg-receipt-btn'));
+    }
+
+    function receiptButtonForTurn(turnIndex) {
+      var prompt = null;
+      chatContainer.querySelectorAll('.message-wrap.user:not([data-steering])').forEach(function (wrap) {
+        if (wrap.getAttribute('data-turn-index') === String(turnIndex)) prompt = wrap;
+      });
+      var found = null;
+      for (var el = prompt ? prompt.nextElementSibling : null; el; el = el.nextElementSibling) {
+        if (el.matches('.message-wrap.user:not([data-steering])')) break;
+        var buttons = el.querySelectorAll('.msg-receipt-btn');
+        if (buttons.length) found = buttons[buttons.length - 1];
+      }
+      return found;
+    }
+
+    /** The button of a turn: by the turn's key when the engine gave one, else (older engines) by counting prompts. */
+    function receiptButtonForEntry(entry) {
+      if (entry.turn_key) {
+        var keyed = receiptButtons().filter(function (button) { return button.getAttribute('data-turn-key') === entry.turn_key; });
+        return keyed.length ? keyed[keyed.length - 1] : null;
+      }
+      return receiptButtonForTurn(entry.turn_index);
+    }
+
+    /** The newest answer's button when it belongs to the newest prompt and no turn has claimed it yet. */
+    function newestUnclaimedReceiptButton() {
+      var buttons = receiptButtons();
+      var newest = buttons[buttons.length - 1];
+      if (!newest || newest.getAttribute('data-turn-key') || newest.getAttribute('data-turn')) return null;
+      var prompts = chatContainer.querySelectorAll('.message-wrap.user:not([data-steering])');
+      var lastPrompt = prompts[prompts.length - 1];
+      return lastPrompt && (lastPrompt.compareDocumentPosition(newest) & Node.DOCUMENT_POSITION_FOLLOWING) ? newest : null;
+    }
+
+    function receiptPlural(count, one, many) {
+      return count + ' ' + (count === 1 ? one : many);
+    }
+
+    /** What a turn did, in a few words: files changed, commands run and how many failed. */
+    function receiptSummary(entry) {
+      var parts = [];
+      if (entry.files !== null && entry.files > 0) parts.push(receiptPlural(entry.files, 'file changed', 'files changed'));
+      if (entry.commands !== null && entry.commands > 0) {
+        parts.push(receiptPlural(entry.commands, 'command', 'commands') + (entry.failed ? ', ' + entry.failed + ' failed' : ''));
+      }
+      return parts.join(' · ');
+    }
+
+    /** A visible line under an answer whose turn changed files, ran commands or has something to check.
+     *  It takes the footer link's place, so each answer has one way into its receipt. */
+    function applyReceiptLine(button, entry, count, high) {
+      var footer = button.closest('.message-footer');
+      if (!footer || !footer.parentNode) return null;
+      var before = footer.previousElementSibling;
+      var line = before && before.classList.contains('receipt-line') ? before : null;
+      var summary = receiptSummary(entry);
+      if (!summary && count === 0) {
+        if (line) line.remove();
+        return null;
+      }
+      if (!line) {
+        line = document.createElement('button');
+        line.type = 'button';
+        line.className = 'receipt-line';
+        line.setAttribute('data-action', 'open-receipt');
+        line.innerHTML = '<span class="receipt-line-icon" aria-hidden="true">' + FOOTER_RECEIPT_ICON + '</span>' +
+          '<span class="receipt-line-title">Receipt</span><span class="receipt-line-summary"></span>' +
+          '<span class="receipt-line-status"></span><span class="receipt-line-chevron" aria-hidden="true">›</span>';
+        footer.parentNode.insertBefore(line, footer);
+      }
+      line.setAttribute('data-turn', String(entry.turn_index));
+      if (entry.turn_key) line.setAttribute('data-turn-key', entry.turn_key);
+      var status = count > 0 ? count + ' to check' : 'Nothing flagged';
+      line.querySelector('.receipt-line-summary').textContent = summary ? '· ' + summary : '';
+      line.querySelector('.receipt-line-status').textContent = status;
+      line.classList.toggle('has-attention', count > 0);
+      line.classList.toggle('has-high', count > 0 && high > 0);
+      line.title = 'Open the receipt: what this turn read, changed and ran, and who approved it';
+      line.setAttribute('aria-label', 'Open the receipt for this turn: ' + (summary ? summary + ', ' : '') + status.toLowerCase());
+      return line;
+    }
+
+    function applyReceiptBadge(button, entry) {
+      if (!button || !entry) return;
+      button.setAttribute('data-turn', String(entry.turn_index));
+      if (entry.turn_key) button.setAttribute('data-turn-key', entry.turn_key);
+      var count = entry.attention === null ? 0 : entry.attention;
+      var high = entry.high === null ? 0 : entry.high;
+      button.classList.toggle('has-attention', count > 0);
+      button.classList.toggle('has-high', count > 0 && high > 0);
+      var label = button.querySelector('.msg-action-label');
+      if (label) label.textContent = count > 0 ? 'Receipt \u00b7 ' + count + ' to check' : 'Receipt';
+      button.title = count > 0
+        ? count + (count === 1 ? ' thing' : ' things') + ' in this turn ' + (count === 1 ? 'needs' : 'need') + ' your eyes'
+        : 'What this turn read, changed and ran';
+      button.hidden = Boolean(applyReceiptLine(button, entry, count, high));
+    }
+
+    /** Replace what the chat knows with the engine's list; counts seen live are kept only where the engine has none. */
+    function rememberReceiptTurns(sessionId, turns) {
+      var state = receiptStateFor(sessionId);
+      if (!state || !Array.isArray(turns)) return;
+      var previous = state.receipts;
+      var next = Object.create(null);
+      turns.forEach(function (raw) {
+        var entry = receiptEntry(raw);
+        if (!entry) return;
+        var id = entry.turn_key || ('#' + entry.turn_index);
+        var seen = previous[id];
+        if (seen && entry.attention === null && seen.attention !== null) {
+          entry.attention = seen.attention;
+          entry.high = seen.high;
+        }
+        ['files', 'commands', 'failed'].forEach(function (name) {
+          if (seen && entry[name] === null && Number.isInteger(seen[name])) entry[name] = seen[name];
+        });
+        next[id] = entry;
+      });
+      state.receipts = next;
+    }
+
+    function rememberReceiptReady(message) {
+      var entry = receiptEntry(message);
+      var state = entry && receiptStateFor(message.session_id);
+      if (!state) return null;
+      state.receipts[entry.turn_key || ('#' + entry.turn_index)] = entry;
+      return entry;
+    }
+
+    function applyStoredReceiptBadges() {
+      var state = ownSessionState(currentSessionId);
+      var receipts = state && state.receipts ? state.receipts : {};
+      Object.keys(receipts).forEach(function (id) {
+        var entry = receipts[id];
+        applyReceiptBadge(receiptButtonForEntry(entry), entry);
+      });
     }
 
     /** Pins the meta strip of the newest turn; every older strip stays hover-only. */
@@ -9230,6 +9436,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           timestamp: Date.now(),
           copyAction: 'copy-message',
           copyTitle: 'Copy response',
+          receiptAction: true,
         }));
         pinLatestMessageFooter();
         scrollToBottomIfNeeded();
@@ -9928,7 +10135,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session && Array.isArray(msg.session.messages) && msg.session.messages.length > 0) {
             allMessages = allMessages.concat(msg.session.messages.filter(m => {
               if (m.role === 'system') return false;
-              if (m.role === 'assistant' && extractMessageText(m.content).trim() === 'Understood. I have the context of our earlier discussion and will continue from here.') {
+              if (m.role === 'assistant' && COMPACTION_ACKNOWLEDGEMENTS.indexOf(extractMessageText(m.content).trim()) !== -1) {
                 return false;
               }
               return true;
@@ -9950,6 +10157,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               appendCompactedHistoryBanner(msg.session.compacted_history.length);
             }
             let lastUserMsgTs = null;
+            let currentTurnKey = null;
             let currentAssistantWrap = null;
             let currentTurnToolSeq = null;
             let currentTurnToolBody = null;
@@ -9972,7 +10180,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 turnEditedFilesForLoad = new Set();
 
                 const uContent = extractMessageText(m.content).trim();
+                if (!m.steering) currentTurnKey = typeof m.turn_key === 'string' ? m.turn_key : null;
                 if (uContent.startsWith('[Conversation summary') || uContent.startsWith('[Previous context summary')) {
+                  currentTurnKey = null;
                   appendCompactionSummaryCard(uContent);
                 } else {
                   try {
@@ -10199,6 +10409,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     timestamp: m.ts || Date.now(),
                     copyAction: 'copy-message',
                     copyTitle: 'Copy response',
+                    receiptAction: true,
+                    receiptTurnKey: currentTurnKey,
                   }));
                   currentAssistantWrap = null;
                 }
@@ -10294,6 +10506,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           renderNextStep();
           renderConversationTimeline();
+          rememberReceiptTurns(currentSessionId, msg.session && msg.session.receipt_turns);
+          applyStoredReceiptBadges();
           userScrolledUp = false;
           scrollToBottom(false);
           settleSessionScroll();
@@ -11293,6 +11507,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           flushQueue();
           renderNextStep();
           if (finishedTurn) vscode.postMessage(finishedTurn);
+          break; }
+
+        case 'receipt_ready': {
+          const readyEntry = rememberReceiptReady(msg);
+          if (readyEntry && msg.session_id === currentSessionId) {
+            applyReceiptBadge(receiptButtonForEntry(readyEntry) || newestUnclaimedReceiptButton(), readyEntry);
+          }
           break; }
 
         case 'feature_tip':

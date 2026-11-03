@@ -1,3 +1,5 @@
+import asyncio
+import dataclasses
 import json
 import sys
 import time
@@ -5,7 +7,9 @@ from pathlib import Path
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 
 from andromity.core.provider import ERROR_KINDS, ERROR_SOURCES, stream_completion, sanitize_messages_for_api
-from andromity.core.session import Session, skipped_image_count
+from andromity.core.call_ids import UniqueCallIds, used_call_ids
+from andromity.core.identity import approver_record, local_identity
+from andromity.core.session import Session, skipped_image_count, tool_gate_kind
 from andromity.core.profiles import (
     filter_tools_for_profile, get_allowed_tools, get_system_prompt, load_project_instructions,
 )
@@ -160,6 +164,22 @@ _ERROR_FEATURE_NAMES = {
 }
 
 
+DEFAULT_MAX_TOOL_ROUNDS = 60
+
+
+def _max_tool_rounds() -> int:
+    """How many tool rounds one user turn may take before the agent stops and reports.
+
+    Without a bound, a model that answers every tool result with another tool call
+    runs until the context fills: spend, edits and commands with nobody watching.
+    """
+    try:
+        value = int(config.get("default", "max_tool_rounds", DEFAULT_MAX_TOOL_ROUNDS))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_TOOL_ROUNDS
+    return value if value > 0 else DEFAULT_MAX_TOOL_ROUNDS
+
+
 def error_feature_name(error_type: Optional[str]) -> str:
     kind = (error_type or "generic").strip().lower()
     if kind.startswith("error_"):
@@ -208,6 +228,8 @@ class Agent:
         if not next_step_suggestions:
             self.allowed_tools = [t for t in self.allowed_tools if t["function"]["name"] != "suggest_next_step"]
         self._empty_retried = False
+        self.max_tool_rounds = _max_tool_rounds()
+        self._approver_identity: Optional[Dict[str, str]] = None
         # Set when the current turn carries pasted images (see run()).
         self._turn_image_parts = None
         from andromity.core.inputs import InputQueue
@@ -284,6 +306,12 @@ class Agent:
 
     def _workspace_trusted(self) -> bool:
         return config.is_trusted(str(Path(self.session.project_path or Path.cwd()).resolve()))
+
+    async def _approver(self) -> Dict[str, str]:
+        if self._approver_identity is None:
+            project = getattr(self.session, "project_path", None) if self.session else None
+            self._approver_identity = approver_record(await asyncio.to_thread(local_identity, project))
+        return self._approver_identity
 
     def _refresh_prompt_if_stale(self) -> None:
         """Rewrite the prompt when something it states has changed mid-session.
@@ -621,6 +649,7 @@ class Agent:
                 effective_input += f"\n\n[Co-Agent Mailbox: {'; '.join(notices)}]"
         self.session.add_message("user", content=effective_input, images=thumb_uris, image_files=image_files,
                                  images_skipped=skipped_images or None)
+        self._call_ids = UniqueCallIds(used_call_ids(self.session))
         if self._turn_image_parts:
             message = self.session.messages[-1]
             self._message_images[id(message)] = (message, self._turn_image_parts)
@@ -691,6 +720,7 @@ class Agent:
 
             llm_start_time = time.time()
             first_token_time = None
+            self._call_ids.next_response()
             yield LLMCallStart(
                 turn_id=turn_id,
                 model=self.model or config.get("default", "model", ""),
@@ -703,6 +733,8 @@ class Agent:
                 self._messages_for_api(),
                 **stream_kwargs,
             ):
+                if isinstance(event, (ToolCallStart, ToolCallDelta, ToolCallEnd)):
+                    event = dataclasses.replace(event, tool_id=self._call_ids.map(event.tool_id))
                 if first_token_time is None and isinstance(event, (TextDelta, ThinkingDelta, ToolCallStart)):
                     first_token_time = time.time()
 
@@ -747,7 +779,7 @@ class Agent:
             pending_tool_calls.clear()
 
             if not tool_calls_to_execute and ("<atem:invoke" in assistant_content or "<atem:function_calls>" in assistant_content):
-                import re, uuid
+                import re
                 matches = re.finditer(r'<atem:invoke\s+name="([^"]+)">([\s\S]*?)</atem:invoke>', assistant_content)
                 for m in matches:
                     fn_name = m.group(1)
@@ -757,7 +789,7 @@ class Agent:
                         p_name = param_match.group(1)
                         p_val = param_match.group(2).strip()
                         args[p_name] = p_val
-                    call_id = f"call_{uuid.uuid4().hex[:8]}"
+                    call_id = self._call_ids.fresh()
                     tool_calls_to_execute.append({
                         "id": call_id,
                         "type": "function",
@@ -1022,6 +1054,8 @@ class Agent:
                     elif isinstance(approval_res, dict):
                         is_approved = bool(approval_res.get("approved", False))
                         rejection_reason = approval_res.get("reason")
+                        if approval_res.get("by") == "person" and self.session is not None:
+                            self.session.record_tool_decision(tool_call.get("id"), is_approved, await self._approver())
                     else:
                         is_approved = bool(approval_res)
 
@@ -1050,6 +1084,13 @@ class Agent:
                     final_results[call["id"]] = "Not executed: superseded by a new user instruction."
                     yield ToolResult(tool_id=call["id"], result=final_results[call["id"]], success=False)
                 prepared.clear()
+
+            if self.session is not None:
+                accepted = {call["id"] for call, _, _ in prepared}
+                for call in other_calls:
+                    stopped = final_results.get(call["id"])
+                    if stopped is not None and call["id"] not in accepted:
+                        self.session.record_tool_gate(call["id"], tool_gate_kind(stopped))
 
             # ── Phase 2: run all accepted calls CONCURRENTLY. Results are
             # yielded as each call finishes so the UI can mark that tool's
@@ -1085,10 +1126,14 @@ class Agent:
                     t_run = (tool_name or "").strip().lower()
                     if prof_run in ("planner", "reviewer") and t_run in _MUTATING_TOOLS:
                         dur = round((time.time() - t0) * 1000, 2)
+                        if self.session is not None:
+                            self.session.record_tool_gate(tool_call["id"], "blocked")
                         return tool_call["id"], f"Error: Tool '{tool_name}' is forbidden for profile '{self.profile}'.", dur, False
                     p_dir = getattr(self.session, "project_path", "") if self.session else ""
                     if p_dir and not config.is_trusted(p_dir) and requires_workspace_trust(t_run):
                         dur = round((time.time() - t0) * 1000, 2)
+                        if self.session is not None:
+                            self.session.record_tool_gate(tool_call["id"], "blocked")
                         return tool_call["id"], f"Error: Workspace is untrusted. Tool '{tool_name}' is blocked.", dur, False
 
                     try:
@@ -1193,6 +1238,18 @@ class Agent:
                     self._fire_session_end(had_error=False, error_type=None)
                     break
                 resumed_for_steering = True
+
+            if iteration_idx >= self.max_tool_rounds:
+                notice = (
+                    f"\n**[Stopped after {iteration_idx} tool rounds]** This turn kept calling tools without "
+                    "finishing. Nothing further ran. Send the next instruction to continue, or raise "
+                    "`max_tool_rounds` in your config if the task genuinely needs more steps.\n"
+                )
+                self.session.add_message("assistant", content=notice, turn_id=turn_id, model=self._model_id())
+                yield TextDelta(text=notice)
+                yield Done(usage=last_usage, outcome="error", error_type="tool_round_limit")
+                self._fire_session_end(had_error=True, error_type="tool_round_limit")
+                break
 
     def _tools_for_this_call(self) -> list:
         """Collaboration tools only when another session is around or something is waiting for this one."""

@@ -25,6 +25,7 @@ import { SettingsPanel } from "./SettingsPanel.js";
 import { PlanEditorPanel } from "./PlanEditorPanel.js";
 import { WaterfallPanel } from "./WaterfallPanel.js";
 import { BackgroundTaskPanel } from "./BackgroundTaskPanel.js";
+import { ReceiptPanel } from "./ReceiptPanel.js";
 import { wakeSessionForQuestion } from "../collabActions.js";
 import { recordNextStepEvent } from "../nextSteps.js";
 import { handleFeedbackMessage } from "../engagement/feedbackWebview.js";
@@ -358,6 +359,9 @@ export class SessionTabPanel {
     bind("agent/error", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "agent_error", ...params });
     });
+    bind("receipt/ready", (params: any) => {
+      if (params?.session_id === this._sessionId) this._postMessage({ type: "receipt_ready", ...params });
+    });
     bind("session/compacting", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "session_compacting", ...params });
     });
@@ -593,6 +597,12 @@ export class SessionTabPanel {
 
     if (WAITLIST_MESSAGES.has(message.type)) {
       await this._viewProvider?.waitlist?.handleMessage(message, (reply) => this._postMessage(reply));
+      return;
+    }
+
+    if (message.type === "open_receipt") {
+      const turn = Number.isSafeInteger(message.turnIndex) && message.turnIndex >= 0 ? message.turnIndex : null;
+      ReceiptPanel.createOrShow(this._extensionUri, this._sessionId, this._sessionName || "Chat Session", this._rpcClient, turn);
       return;
     }
 

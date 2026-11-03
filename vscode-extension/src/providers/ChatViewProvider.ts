@@ -18,6 +18,7 @@ import { SettingsPanel } from "../panels/SettingsPanel.js";
 import { SessionTabPanel } from "../panels/SessionTabPanel.js";
 import { WaterfallPanel } from "../panels/WaterfallPanel.js";
 import { FingerprintPanel } from "../panels/FingerprintPanel.js";
+import { ReceiptPanel } from "../panels/ReceiptPanel.js";
 import { BackgroundTaskPanel } from "../panels/BackgroundTaskPanel.js";
 import { ChangesReviewPanel } from "../panels/ChangesReviewPanel.js";
 import { PythonBridge } from "../server/PythonBridge.js";
@@ -1677,6 +1678,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("mcp/statusChanged", () => this._refreshSidePanel(["mcp"]));
 
+    bind("receipt/ready", (params: any) => {
+      this._postToWebview({ type: "receipt_ready", ...params });
+    });
+
     bind("agent/done", (params: any) => {
       const sid = params?.session_id || this._currentSessionId;
       if (params?.error_action === "join_waitlist") void this._waitlist?.markOffered();
@@ -3327,6 +3332,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this._rpcClient,
             this._context!
           );
+        }
+        break;
+      }
+
+      case "open_receipt": {
+        const sid = typeof message.sessionId === "string" && message.sessionId ? message.sessionId : this.getCurrentSessionId();
+        const turn = Number.isSafeInteger(message.turnIndex) && message.turnIndex >= 0 ? message.turnIndex : null;
+        if (sid) {
+          ReceiptPanel.createOrShow(this._extensionUri, sid, this._sessionNames.get(sid) || "Chat Session", this._rpcClient, turn);
         }
         break;
       }

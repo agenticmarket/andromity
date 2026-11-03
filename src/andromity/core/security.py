@@ -124,7 +124,13 @@ SENSITIVE_EXACT_SYSTEM_PATHS = {
     "/proc/self/environ",
 }
 
-_SHELL_FORBIDDEN = re.compile(r'[;&|`$(){}<>\n\r%^]')
+_LITERAL_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyz"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789"
+    "_-.,:=+@/\\~"
+)
+_QUOTES = ("'", '"')
 
 
 SOURCE_CODE_EXTS = {
@@ -219,8 +225,16 @@ def _is_sensitive_literal(path: str) -> bool:
 # Writing these turns a file edit into later command execution (git fsmonitor/hooks,
 # project crons and MCP servers, editor tasks, direnv, npm scripts run by allowlisted
 # `npm run`), so they always need explicit approval outside FULL/YOLO.
-EXECUTION_CONTROL_DIRS = {".git", ".andromity", ".vscode", ".husky"}
-EXECUTION_CONTROL_NAMES = {".envrc", "package.json", ".mcp.json", ".gitmodules"}
+# The second group is the other half of the same loop: an allowlisted runner such as
+# `pytest`, `make` or `npm test` executes whatever these files say, so a silent write
+# to one would turn an approved command into arbitrary code.
+EXECUTION_CONTROL_DIRS = {".git", ".andromity", ".vscode", ".husky", ".github"}
+EXECUTION_CONTROL_NAMES = {
+    ".envrc", "package.json", ".mcp.json", ".gitmodules",
+    "conftest.py", "pytest.ini", "tox.ini", "noxfile.py", "setup.py", "sitecustomize.py",
+    "makefile", "gnumakefile", "justfile", "taskfile.yml", "taskfile.yaml",
+    "rakefile", "gulpfile.js", "dockerfile", ".pre-commit-config.yaml",
+}
 
 
 def _is_execution_control_literal(path: str) -> bool:
@@ -252,60 +266,160 @@ def mcp_tool_may_change(tool_name: str) -> bool:
     return any(word in tool for word in MCP_CHANGE_WORDS)
 
 
-def is_command_allowlisted(command: str, allowed: Optional[List[str]] = None) -> bool:
+def _literal_tokens(command: str) -> Optional[List[str]]:
+    """Split a command into the exact argv every supported shell produces, or None.
+
+    A guard that tokenises one way while the shell expands, unquotes and rewrites
+    the text another way approves a command it has not actually read. So this
+    accepts only commands with no shell-significant character left in them:
+    whitespace splitting is then the shell's own word splitting, and the result
+    holds for bash, sh, zsh, cmd and PowerShell alike. Everything else — a quote
+    inside a word, an expansion, a separator, a redirect — returns None and goes
+    to a person.
+    """
+    if not command or "\x00" in command:
+        return None
+
+    tokens: List[str] = []
+    current: Optional[str] = None
+    quote: Optional[str] = None
+    quoted_word = False
+
+    for ch in command:
+        if quote:
+            if ch == quote:
+                quote = None
+            elif ch in _QUOTES or (ch not in _LITERAL_CHARS and ch not in " \t"):
+                return None
+            else:
+                current = (current or "") + ch
+            continue
+        if ch in " \t":
+            if current is not None:
+                tokens.append(current)
+                current = None
+                quoted_word = False
+            continue
+        if ch in _QUOTES:
+            # A quote may only wrap a whole word: `"a b"` is one argument in every
+            # shell, while `".e"nv` is the quote-removal bypass, read as `.env`.
+            if current is not None:
+                return None
+            quote = ch
+            quoted_word = True
+            current = ""
+            continue
+        if quoted_word or ch not in _LITERAL_CHARS:
+            return None
+        current = (current or "") + ch
+
+    if quote:
+        return None
+    if current is not None:
+        tokens.append(current)
+    return tokens
+
+
+def _token_readings(token: str) -> List[str]:
+    """Every path one argument can mean, because the guard cannot know the shell.
+
+    A backslash is a path separator to cmd and PowerShell and an escape to bash,
+    so ``.e\\nv`` is two different files; an option may carry its value after an
+    ``=``, and the part before it is still a path. Each reading is checked, and
+    any unsafe one refuses the command.
+    """
+    readings = {token}
+    if "\\" in token:
+        readings.add(token.replace("\\", ""))
+    for reading in list(readings):
+        if "=" in reading:
+            head, _, tail = reading.partition("=")
+            readings.update({head, tail})
+    return [r for r in readings if r]
+
+
+# Programs that take their work from an argument: a script, a module, a remote
+# host, another command. The allowlist cannot describe what they will run, so
+# they auto-approve only as the exact prefix the user wrote, never with extra
+# arguments. Pipes into these are already impossible — `|` never parses.
+_PROGRAMS_THAT_RUN_CODE = {
+    "sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "ash", "busybox",
+    "cmd", "command", "powershell", "pwsh",
+    "python", "python2", "python3", "py", "pypy", "node", "nodejs", "deno", "bun",
+    "ruby", "perl", "php", "lua", "rscript", "osascript", "java", "dotnet",
+    "env", "xargs", "nohup", "timeout", "nice", "setsid", "stdbuf", "script",
+    "sudo", "doas", "su", "runas", "start", "eval", "exec", "source",
+    "find", "awk", "gawk", "mawk", "ssh", "scp", "sftp", "rsync", "telnet",
+    "docker", "podman", "kubectl", "nc", "ncat", "netcat", "socat", "curl", "wget",
+    "sqlite3", "psql", "mysql", "mongosh", "mongo", "redis-cli",
+}
+
+
+def _program_name(token: str) -> str:
+    name = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for suffix in (".exe", ".cmd", ".bat", ".com", ".ps1"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return name
+
+
+def is_command_allowlisted(
+    command: str, allowed: Optional[List[str]] = None, root: Optional[str] = None
+) -> bool:
+    """True when ``command`` may run without a person approving it.
+
+    ``root`` is the project folder; arguments are resolved against it so a link,
+    junction or short name that leaves the workspace is seen for what it is.
+    """
     if not command or not allowed:
         return False
 
-    cmd_clean = command.strip()
-    if not cmd_clean or "\x00" in cmd_clean or _SHELL_FORBIDDEN.search(cmd_clean):
-        return False
-
-    import os
-    import shlex
-    try:
-        tokens = shlex.split(cmd_clean, posix=(os.name != 'nt' and '\\' not in cmd_clean))
-    except ValueError:
-        return False
-
+    tokens = _literal_tokens(command.strip())
     if not tokens:
         return False
 
     matched_prefix_tokens: Optional[List[str]] = None
     for prefix in allowed:
-        p_str = prefix.strip()
-        if not p_str:
-            continue
-        try:
-            p_tokens = shlex.split(p_str, posix=(os.name != 'nt' and '\\' not in p_str))
-        except ValueError:
-            continue
+        p_tokens = _literal_tokens((prefix or "").strip())
         if not p_tokens:
             continue
-
-        if len(tokens) >= len(p_tokens) and tokens[:len(p_tokens)] == p_tokens:
+        if len(tokens) >= len(p_tokens) and tokens[: len(p_tokens)] == p_tokens:
             matched_prefix_tokens = p_tokens
             break
 
     if matched_prefix_tokens is None:
         return False
 
-    is_git = tokens[0].lower() in ("git", "git.exe")
-    for token in tokens[len(matched_prefix_tokens):]:
-        clean_token = token.split("=", 1)[-1].strip("'\"")
-        if is_sensitive_path(clean_token) or _escapes_workspace(clean_token):
+    program = _program_name(tokens[0])
+    extra_tokens = tokens[len(matched_prefix_tokens):]
+    if program in _PROGRAMS_THAT_RUN_CODE and extra_tokens:
+        return False
+
+    unsafe_option = _UNSAFE_OPTIONS.get(program)
+    for token in extra_tokens:
+        if unsafe_option and unsafe_option.match(token):
             return False
-        if is_git and _GIT_UNSAFE_OPTION.match(token):
-            return False
+        for reading in _token_readings(token):
+            if is_sensitive_path(reading, root) or _escapes_workspace(reading):
+                return False
 
     return True
 
 
-# Options that make an otherwise read-only git command write files, run programs or read outside the repo.
-_GIT_UNSAFE_OPTION = re.compile(
-    r"^(?:--output(?:=|$)|--ext-diff$|--textconv$|--no-index$|-O|--open-files-in-pager|--upload-pack|"
-    r"--receive-pack|--exec(?:=|$)|--exec-path|-c$|--config-env|--git-dir|--work-tree)",
-    re.IGNORECASE,
-)
+# Options that make an otherwise read-only command write files, load code or
+# reach outside the repository. A second layer: the program check above is what
+# keeps a general-purpose runner out of the allowlist in the first place.
+_UNSAFE_OPTIONS = {
+    "git": re.compile(
+        r"^(?:--output(?:=|$)|--ext-diff$|--textconv$|--no-index$|-O|--open-files-in-pager|--upload-pack|"
+        r"--receive-pack|--exec(?:=|$)|--exec-path|-c$|--config-env|--git-dir|--work-tree)",
+        re.IGNORECASE,
+    ),
+    "pytest": re.compile(r"^(?:-p|--plugin|--pyargs|--rootdir)", re.IGNORECASE),
+    "tar": re.compile(r"^(?:--use-compress-program|--to-command|--checkpoint-action|-I$|-C$)", re.IGNORECASE),
+    "npm": re.compile(r"^(?:--(?:script-shell|node-options|prefix|userconfig|globalconfig)(?:=|$))", re.IGNORECASE),
+}
 
 
 _WINDOWS_SWITCH = re.compile(r"^/[A-Za-z?]{1,2}(?::[A-Za-z-]*)?$")

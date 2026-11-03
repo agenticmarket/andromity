@@ -1,11 +1,12 @@
 import asyncio
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from andromity.config import config
+from andromity.core.call_ids import UniqueCallIds, used_call_ids
 from andromity.core.debug_log import get_logger
 from andromity.core.events import (
     Done, StreamEvent, SubAgentDone, SubAgentFailed, SubAgentKilled,
@@ -281,6 +282,11 @@ class SubAgent:
         finally:
             self.finished_at = time.time()
             duration_ms = (self.finished_at - self.started_at) * 1000.0
+            # Saved now rather than on the debounce timer: the parent turn's receipt reads this session as it ends.
+            try:
+                self.session.save()
+            except Exception as exc:
+                log.debug("Subagent session not saved: %s", exc)
 
         compressed_summary = self._compress_summary(final_summary)
 
@@ -390,7 +396,7 @@ class SubAgent:
                 from andromity.config import config
                 cmd = str(targs.get("command", "")).strip()
                 allowed = config.get("default", "allowed_commands", []) or []
-                if not is_command_allowlisted(cmd, allowed):
+                if not is_command_allowlisted(cmd, allowed, self.project_path):
                     res_str = f"TOOL BLOCKED: Command '{cmd}' is not in allowlist or contains forbidden shell constructs for subagents in TRUST mode."
             elif self.permission_mode in ("safe", "trust") and tname in ("read_file", "view_file", "grep_search"):
                 from andromity.core.security import is_sensitive_path
@@ -417,9 +423,11 @@ class SubAgent:
             try:
                 from andromity.core.tools import register_session
                 register_session(self.session)
-                res_str = await execute_tool_async(tname, targs)
+                res_str = await execute_tool_async(tname, targs, tool_id=tcall_id)
             except Exception as ex:
                 res_str = f"Error: Tool {tname} failed: {ex}"
+        else:
+            self.session.record_tool_gate(tcall_id, "blocked")
         tool_dur_ms = (time.time() - t_start) * 1000.0
         act_desc = _format_tool_activity(tname, targs)
         tool_status = "error" if ("Error:" in res_str or "BLOCKED" in res_str) else "done"
@@ -455,6 +463,7 @@ class SubAgent:
                 "3. After tool calls, write your final summary as plain text prose."
             ),
         )
+        call_ids = UniqueCallIds(used_call_ids(self.session))
 
         for turn in range(max_turns):
             if self._killed:
@@ -480,7 +489,10 @@ class SubAgent:
             if turn > 0:
                 self._notify_progress(event_type="thinking", detail="Thinking...")
 
+            call_ids.next_response()
             async for event in stream_completion(msgs, **stream_kwargs):
+                if isinstance(event, (ToolCallStart, ToolCallDelta, ToolCallEnd)):
+                    event = replace(event, tool_id=call_ids.map(event.tool_id))
                 events_accum.append(event)
                 if isinstance(event, ThinkingDelta):
                     self._notify_progress(event_type="thinking", detail="Thinking...")

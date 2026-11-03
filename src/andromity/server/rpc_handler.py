@@ -75,6 +75,19 @@ from andromity.core.git_ops import (
     list_snapshots,
     get_git_status,
 )
+from andromity.core.identity import identity_id, local_identity
+from andromity.core.receipt import (
+    ReceiptUnavailable,
+    build_receipt,
+    close_turn_record,
+    receipt_turns,
+    render_markdown,
+    render_text,
+    seal_receipt,
+    sealed_counts,
+    start_turn_record,
+    turn_started,
+)
 from andromity.core.models import (
     MODEL_CATALOG,
     get_context_limit_for_model,
@@ -133,6 +146,16 @@ def _refers_to_image(session: Session, name: str) -> bool:
     messages = [*session.messages, *(getattr(session, "compacted_history", None) or [])]
     return any(isinstance(m, dict) and isinstance(m.get("image_files"), list) and name in m["image_files"]
                for m in messages)
+
+
+def _undo_limit_error(available: int, summarized: bool) -> str:
+    """Why undo can't reach back as far as asked."""
+    turns = f"{available} turn{'' if available == 1 else 's'}"
+    if summarized:
+        reach = f"Only the last {turns} can be undone. " if available else ""
+        return reach + ("Earlier turns were summarized when the conversation was compacted, so they can't be "
+                        "undone from here.")
+    return f"There {'is' if available == 1 else 'are'} only {turns} to undo."
 
 
 class JsonRpcHandler:
@@ -876,6 +899,7 @@ class JsonRpcHandler:
             "scheduled_run": self._scheduled_run_info(session),
             "started_from": deepcopy(getattr(session, "started_from", None)),
             "background_runs": deepcopy(getattr(session, "background_runs", None) or []),
+            "receipt_turns": receipt_turns(session) if config.is_trusted(session.project_path) else [],
         }
 
     def _scheduled_run_info(self, session) -> Optional[Dict[str, Any]]:
@@ -1145,6 +1169,45 @@ class JsonRpcHandler:
             return unavailable
         uri = await asyncio.to_thread(stored_image_uri, getattr(session, "storage_dir", None), name)
         return {"success": True, "uri": uri} if uri else unavailable
+
+    async def _seal_receipt(self, session: Session, checkpoint: Dict[str, Any]) -> None:
+        """Build the turn's receipt as it ends, keep its checksum so later copies can be checked against it, and
+        tell clients how much needs a look."""
+        try:
+            receipt = await asyncio.to_thread(seal_receipt, session, checkpoint)
+        except Exception as exc:
+            log.debug("Receipt for turn %s not built: %s", checkpoint.get("turn_index"), exc)
+            return
+        if receipt is None:
+            return
+        session.save()
+        self.notify("receipt/ready", {
+            "session_id": session.id,
+            "turn_index": checkpoint["turn_index"],
+            "turn_key": checkpoint.get("turn_key"),
+            **sealed_counts(checkpoint),
+        })
+
+    async def rpc_session_receipt(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = params.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return {"success": False, "error": "Choose a session to see its receipt."}
+        turn = params.get("turn_index")
+        if turn is not None and (isinstance(turn, bool) or not isinstance(turn, int) or turn < 0):
+            return {"success": False, "error": "Choose a turn number from this session."}
+        session = self._active_sessions.get(session_id) or Session.load_by_id(session_id, params.get("project_path"))
+        if session is None:
+            return {"success": False, "error": "That session was not found. It may have been deleted."}
+        if not config.is_trusted(session.project_path):
+            return {"success": False, "error": "Trust this workspace to read its receipts."}
+        try:
+            receipt = await asyncio.to_thread(build_receipt, session, turn)
+        except ReceiptUnavailable as exc:
+            return {"success": False, "error": str(exc)}
+        viewer = await asyncio.to_thread(local_identity, session.project_path)
+        turns = [entry["turn_index"] for entry in receipt_turns(session)]
+        return {"success": True, "receipt": receipt, "text": render_text(receipt, viewer),
+                "markdown": render_markdown(receipt), "viewer_id": identity_id(viewer), "turns": turns}
 
     async def rpc_session_sendMessage(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.session_bus import SessionBus
@@ -1797,7 +1860,7 @@ class JsonRpcHandler:
                     global_allowed = config.get("default", "allowed_commands", []) or []
                     session_allowed = getattr(session, "allowed_commands", []) or []
                     allowed = list(set(global_allowed) | set(session_allowed))
-                    if not is_command_allowlisted(command, allowed):
+                    if not is_command_allowlisted(command, allowed, session.project_path):
                         needs_approval = True
 
             elif tool_name == "shell_kill":
@@ -1851,8 +1914,8 @@ class JsonRpcHandler:
             })
 
             try:
-                approved = await fut
-                return bool(approved)
+                decision = await fut
+                return decision if isinstance(decision, dict) else bool(decision)
             finally:
                 self._pending_approvals.pop(approval_id, None)
                 self.notify("agent/interactionResolved", {"session_id": session_id, "interaction_id": approval_id})
@@ -1919,6 +1982,7 @@ class JsonRpcHandler:
             try:
                 # Reset turn snapshot flag and take pre-turn snapshot
                 session._turn_snapshotted = False
+                session.turn_key = None
                 try:
                     p_path = Path(session.project_path)
                     if not config.is_trusted(str(p_path)):
@@ -1927,12 +1991,7 @@ class JsonRpcHandler:
                     snap_hash = await asyncio.to_thread(create_pre_edit_snapshot, p_path)
                     if snap_hash:
                         session._turn_snapshotted = True
-                        if not hasattr(session, "undo_stack") or session.undo_stack is None:
-                            session.undo_stack = []
-                        user_turn_idx = len(session.get_user_turn_indices())
-                        turn_checkpoint = {"snapshot_hash": snap_hash, "msg_count": len(session.messages),
-                                           "turn_index": user_turn_idx, "anchored": True}
-                        session.undo_stack.append(turn_checkpoint)
+                        turn_checkpoint = start_turn_record(session, snap_hash)
                         session.save()
                 except Exception as snap_err:
                     log.debug("Pre-edit snapshot skipped: %s", snap_err)
@@ -1967,6 +2026,7 @@ class JsonRpcHandler:
                             agent.input_queue.pause()
                         turn_files = self._extract_turn_files(session)
                         if turn_checkpoint:
+                            turn_checkpoint.update(close_turn_record(session))
                             turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path))
                             if turn_checkpoint["after_hash"]:
                                 from andromity.core.git_ops import checkpoint_changed_files
@@ -1983,6 +2043,8 @@ class JsonRpcHandler:
                             "cost_usd": getattr(session, "cost_usd", 0.0),
                             "turn_files": turn_files,
                         })
+                        if turn_checkpoint and turn_checkpoint.get("after_hash"):
+                            await self._seal_receipt(session, turn_checkpoint)
                     else:
                         self._forward_agent_event(session_id, session, agent, event)
 
@@ -2064,9 +2126,10 @@ class JsonRpcHandler:
                     pass
             finally:
                 if turn_checkpoint:
-                    if not session.turn_was_added(turn_checkpoint):
+                    if not turn_started(session, turn_checkpoint):
                         session.undo_stack.remove(turn_checkpoint)
                     elif not turn_checkpoint.get("after_hash"):
+                        turn_checkpoint.update(close_turn_record(session))
                         turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path))
                     session.save()
                 self._active_agents.pop(session_id, None)
@@ -2214,7 +2277,7 @@ class JsonRpcHandler:
     async def rpc_agent_approve_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:
         approval_id = params.get("approval_id")
         session_id = params.get("session_id")
-        approved = params.get("approved", True)
+        approved = params.get("approved", True) is True
         scope = params.get("scope", "once")  # "once" | "session" | "always" | "project"
         tool_name = params.get("tool_name")
         args = params.get("args") or {}
@@ -2275,7 +2338,7 @@ class JsonRpcHandler:
                                     session.allow_domain(domain)
 
             if not fut.done():
-                fut.set_result(approved)
+                fut.set_result({"approved": bool(approved), "by": "person"})
                 self.notify("agent/interactionResolved", {"session_id": session_id, "interaction_id": approval_id})
             return {"success": True, "approval_id": approval_id, "approved": approved, "scope": scope}
         return {"success": False, "error": "Approval ID not found or already resolved"}
@@ -2475,7 +2538,7 @@ class JsonRpcHandler:
                             continue
                     elif tool_name in ("shell_exec", "shell_bg"):
                         allowed = (config.get("default", "allowed_commands", []) or []) + (getattr(session, "allowed_commands", []) or [])
-                        if not is_command_allowlisted(str(args.get("command", "")), allowed):
+                        if not is_command_allowlisted(str(args.get("command", "")), allowed, session.project_path):
                             continue
                     elif tool_name == "fetch_url":
                         domains = (config.get("default", "allowed_domains", []) or []) + (getattr(session, "allowed_domains", []) or [])
@@ -3101,10 +3164,14 @@ class JsonRpcHandler:
 
 
     async def rpc_git_diff(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        from andromity.core.git_review import review_base
+        from andromity.core.git_ops import UnsafeGitConfig
+        from andromity.core.git_review import full_diff
         repo = self._review_repo(params)
         try:
-            return {"diff": await asyncio.to_thread(repo.git.diff, "--no-ext-diff", "--no-renames", review_base(repo)) if repo else ""}
+            return {"diff": await asyncio.to_thread(full_diff, repo) if repo else ""}
+        except UnsafeGitConfig as exc:
+            raise ValueError("This repository's git settings define a filter Andromity can't safely switch off, "
+                             "so it won't run git diff here. Use git directly.") from exc
         finally:
             if repo:
                 await asyncio.to_thread(repo.close)

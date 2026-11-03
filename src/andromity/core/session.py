@@ -12,6 +12,7 @@ import re
 
 from andromity.config import get_config_dir
 from andromity.core.debug_log import get_logger
+from andromity.core.identity import valid_approver
 from andromity.core.run_owner import current_owner_id, is_owner_alive
 
 log = get_logger("session")
@@ -21,6 +22,45 @@ LIVE_STATUSES = frozenset({"running", "compacting", "approval_required"})
 # Rows saved before run owners were recorded carry no owner; an older engine in
 # another window may still be on such a run, so only a long-silent one counts.
 LEGACY_LIVE_GRACE = timedelta(minutes=30)
+MAX_TOOL_DECISIONS = 2000
+TOOL_GATE_KINDS = frozenset({"blocked", "declined", "skipped", "dry_run", "timeout", "cancelled"})
+
+
+def tool_gate_kind(refusal: str) -> str:
+    """Classify the harness's own message for a tool call it stopped before running."""
+    text = str(refusal)
+    if text.startswith("TOOL REJECTED BY USER"):
+        return "declined"
+    if text.startswith("Not executed: superseded"):
+        return "skipped"
+    if text.startswith("[DRY RUN]"):
+        return "dry_run"
+    if text.startswith("TOOL BLOCKED"):
+        return "blocked"
+    return "declined"
+
+
+def valid_tool_gates(raw: Any) -> Dict[str, str]:
+    """Keep only well-formed records of tool calls the harness stopped before they ran."""
+    if not isinstance(raw, dict):
+        return {}
+    gates = {call_id: kind for call_id, kind in raw.items()
+             if isinstance(call_id, str) and call_id and kind in TOOL_GATE_KINDS}
+    return dict(list(gates.items())[-MAX_TOOL_DECISIONS:])
+
+
+def valid_tool_decisions(raw: Any) -> Dict[str, Dict[str, Any]]:
+    """Keep only well-formed person decisions from stored metadata."""
+    if not isinstance(raw, dict):
+        return {}
+    decisions: Dict[str, Dict[str, Any]] = {}
+    for call_id, entry in raw.items():
+        if not isinstance(call_id, str) or not call_id or not isinstance(entry, dict):
+            continue
+        approved, at = entry.get("approved"), entry.get("at")
+        if isinstance(approved, bool) and isinstance(at, str):
+            decisions[call_id] = {"approved": approved, "at": at, **valid_approver(entry)}
+    return dict(list(decisions.items())[-MAX_TOOL_DECISIONS:])
 
 
 def resolve_live_status(status: str, run_owner: Optional[str], updated_at: Optional[str],
@@ -49,7 +89,7 @@ def _validate_session_id(session_id: str) -> str:
         raise ValueError("session_id must be a non-empty string")
     clean_id = session_id.strip()
     # Allow alphanumeric characters, hyphens, and underscores (1 to 64 chars)
-    if not re.fullmatch(r"[a-zA-Z0-9_\-]{1,64}", clean_id):
+    if not re.fullmatch(r"[a-zA-Z0-9_\-]{1,64}", clean_id) or clean_id in ("__proto__", "constructor", "prototype"):
         raise ValueError(f"Invalid session_id format: {session_id!r}")
     return clean_id
 
@@ -121,6 +161,10 @@ class Session:
         self.allowed_domains: List[str] = []
         self.allowed_external_files: set = set()
         self.undo_stack: List[Dict[str, Any]] = []
+        # Set while a recorded turn runs; every message added meanwhile carries it (see receipt.start_turn_record).
+        self.turn_key: Optional[str] = None
+        self.tool_decisions: Dict[str, Dict[str, Any]] = {}
+        self.tool_gates: Dict[str, str] = {}
         from andromity.config import config
         self.permission_mode = config.get("default", "permission_mode", "safe")
         self.provider = config.get("default", "provider", "")
@@ -307,6 +351,8 @@ class Session:
             msg["steering"] = True
         if model:
             msg["model"] = model
+        if role != "system" and getattr(self, "turn_key", None):
+            msg["turn_key"] = self.turn_key
         with self._save_lock:
             self.messages.append(msg)
             need_save = not self._persisted
@@ -361,6 +407,8 @@ class Session:
             "watching_for": getattr(self, "watching_for", None),
             "started_from": copy.deepcopy(getattr(self, "started_from", None)),
             "background_runs": copy.deepcopy(getattr(self, "background_runs", [])),
+            "tool_decisions": copy.deepcopy(getattr(self, "tool_decisions", {}) or {}),
+            "tool_gates": dict(getattr(self, "tool_gates", {}) or {}),
         }
 
     def compact_messages(self, new_summary: str, keep_last_n: int = 10) -> int:
@@ -439,8 +487,11 @@ class Session:
                 if isinstance(record, dict):
                     record["compacted"] = True
             elif start in moved:
+                shift = moved[start] - start
                 record["msg_count"] = moved[start]
                 record["anchored"] = True
+                if isinstance(record.get("msg_end"), int) and not isinstance(record["msg_end"], bool):
+                    record["msg_end"] += shift
             else:
                 record["compacted"] = True
 
@@ -484,11 +535,6 @@ class Session:
                  if (start := self._record_start(record, starts, compacted_before)) is not None and start >= position]
         return [record for _, record in sorted(found, key=lambda pair: pair[0])]
 
-    def turn_was_added(self, record: Any) -> bool:
-        """Whether the prompt a turn record was made for is in the conversation."""
-        starts, compacted_before = self._record_context()
-        return self._record_start(record, starts, compacted_before) is not None
-
     # ── Plan helpers (session-scoped) ────────────────────────────────────────
 
     def save_plan(self, plan_dict: Dict[str, Any]):
@@ -518,7 +564,37 @@ class Session:
             "run_owner": getattr(self, "run_owner", None),
             "started_from": getattr(self, "started_from", None),
             "background_runs": list(getattr(self, "background_runs", [])),
+            "tool_decisions": dict(getattr(self, "tool_decisions", {}) or {}),
+            "tool_gates": dict(getattr(self, "tool_gates", {}) or {}),
         }
+
+    def record_tool_gate(self, tool_call_id: Optional[str], kind: str) -> None:
+        """Remember how the harness stopped one tool call: refused before it ran, or timed out or cancelled while running."""
+        if not isinstance(tool_call_id, str) or not tool_call_id or kind not in TOOL_GATE_KINDS:
+            return
+        gates = getattr(self, "tool_gates", None)
+        if not isinstance(gates, dict):
+            gates = {}
+        gates[tool_call_id] = kind
+        while len(gates) > MAX_TOOL_DECISIONS:
+            gates.pop(next(iter(gates)))
+        self.tool_gates = gates
+        self._mark_dirty()
+
+    def record_tool_decision(self, tool_call_id: Optional[str], approved: bool,
+                             approver: Optional[Dict[str, str]] = None) -> None:
+        """Remember that a person answered the approval prompt for one tool call, and who they said they were."""
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            return
+        decisions = getattr(self, "tool_decisions", None)
+        if not isinstance(decisions, dict):
+            decisions = {}
+        decisions[tool_call_id] = {"approved": bool(approved), "at": datetime.now(timezone.utc).isoformat(),
+                                   **valid_approver(approver or {})}
+        while len(decisions) > MAX_TOOL_DECISIONS:
+            decisions.pop(next(iter(decisions)))
+        self.tool_decisions = decisions
+        self._mark_dirty()
 
     def _save_to_db(self):
         """Persist session and messages into SQLite database."""
@@ -601,6 +677,8 @@ class Session:
                         int(bool(m.get("steering"))),
                         j(m["image_files"]) if "image_files" in m else None,
                         skipped_image_count(m) or None,
+                        clean_surrogates(m.get("model")),
+                        m.get("turn_key"),
                     )
                     for seq, m in enumerate(self.messages)
                 ]
@@ -612,8 +690,8 @@ class Session:
                         INSERT OR REPLACE INTO session_messages (
                             session_id, seq, role, content, tool_calls,
                             thinking, name, tool_call_id, ts, images, duration, turn_id, steering,
-                            image_files, images_skipped
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            image_files, images_skipped, model, turn_key
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, rows_to_insert)
             self._persisted = True
             self._message_digests = digests
@@ -699,6 +777,8 @@ class Session:
         session.run_owner = metadata.get("run_owner")
         session.started_from = metadata.get("started_from")
         session.background_runs = metadata.get("background_runs") or []
+        session.tool_decisions = valid_tool_decisions(metadata.get("tool_decisions"))
+        session.tool_gates = valid_tool_gates(metadata.get("tool_gates"))
         session.status = resolve_live_status(session.status, session.run_owner, row["updated_at"] if "updated_at" in keys else None)
         if session.status not in LIVE_STATUSES:
             session.run_owner = None
@@ -746,6 +826,10 @@ class Session:
                 m["steering"] = True
             if "images_skipped" in mr_keys and (skipped := skipped_image_count({"images_skipped": mr["images_skipped"]})):
                 m["images_skipped"] = skipped
+            if "model" in mr_keys and mr["model"]:
+                m["model"] = mr["model"]
+            if "turn_key" in mr_keys and mr["turn_key"]:
+                m["turn_key"] = mr["turn_key"]
             msgs.append(m)
         session.messages = msgs
 
@@ -802,6 +886,8 @@ class Session:
         session.watching_for = data.get("watching_for")
         session.started_from = data.get("started_from")
         session.background_runs = data.get("background_runs") or []
+        session.tool_decisions = valid_tool_decisions(data.get("tool_decisions"))
+        session.tool_gates = valid_tool_gates(data.get("tool_gates"))
         from andromity.config import config
         session.permission_mode = data.get("permission_mode", config.get("default", "permission_mode", "safe"))
         session.profile = data.get("profile", "builder")
@@ -815,6 +901,15 @@ class Session:
         session._messages_loaded = True
         session._message_digests = []
         return session
+
+    @classmethod
+    def child_session_ids(cls, parent_id: str) -> List[str]:
+        """Ids of the subagent sessions started from one session, oldest first."""
+        from andromity.core.db import get_conn, init_schema
+        init_schema()
+        rows = get_conn().execute("SELECT id FROM sessions WHERE parent_session = ? ORDER BY created_at ASC",
+                                  (parent_id,)).fetchall()
+        return [row["id"] for row in rows]
 
     @classmethod
     def list_sessions(cls, project_path: Optional[str] = None, limit: int = 100, include_subagents: bool = False) -> List["Session"]:

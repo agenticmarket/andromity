@@ -50,6 +50,16 @@ Out of scope:
 - Vulnerabilities in third-party model providers, MCP servers or tools that you connect yourself; please report those to their maintainers.
 - Findings that require an already-compromised machine or an account you control.
 
+## Reproducing our own safety tests
+
+`pytest tests/safety` runs the guardrail suite: shell-guard bypass classes and
+six scenarios (link traversal out of the workspace, bulk delete, a destructive
+database command, prompt injection in a README, a runaway tool loop, writes
+outside the workspace), checked in SAFE, TRUST and FULL. It needs no API key, no
+network and no model. `tests/safety/README.md` records the results, including
+what failed and what is still a known gap. A case we got wrong is a welcome pull
+request; a case that gets through is a security report.
+
 ## Testing guidelines
 
 - Test only against your own accounts and data. Never access, change or delete other people's data.

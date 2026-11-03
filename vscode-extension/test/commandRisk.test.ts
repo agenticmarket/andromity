@@ -106,17 +106,25 @@ describe("describeCommandRisks", () => {
 describe("canRememberCommand", () => {
   it("matches the server rule for which commands can be allowlisted", () => {
     const security = readFileSync(join(__dirname, "..", "..", "..", "src", "andromity", "core", "security.py"), "utf8");
-    const serverClass = /_SHELL_FORBIDDEN\s*=\s*re\.compile\(r'\[([^\]]+)\]'\)/.exec(security)?.[1];
-    assert.ok(serverClass, "server rule found");
-    const forbidden = new Set([...serverClass!.replace(/\\n/g, "\n").replace(/\\r/g, "\r")]);
-    for (const ch of forbidden) {
-      assert.equal(canRememberCommand("npm run x" + ch + "y"), false, JSON.stringify(ch));
+    const start = security.indexOf("_LITERAL_CHARS = frozenset(");
+    assert.ok(start > -1, "server rule found");
+    const block = security.slice(start, security.indexOf(")", start));
+    const backslash = String.fromCharCode(92);
+    const literal = new Set(block.split('"').filter((_, i) => i % 2 === 1).join("").split(backslash + backslash).join(backslash));
+    assert.ok(literal.has("a") && literal.has("Z") && literal.has("7") && literal.has(backslash) && literal.size > 60);
+    for (let code = 33; code < 127; code++) {
+      const ch = String.fromCharCode(code);
+      if (ch === "'" || ch === '"') continue;
+      assert.equal(canRememberCommand("npm run x" + ch + "y"), literal.has(ch), JSON.stringify(ch));
     }
-    for (const ch of ["-", "_", ".", "/", ":", "=", "@", "+", ",", "\"", "'", "~", "#", "!", "*", "?", "[", "]"]) {
-      if (!forbidden.has(ch)) assert.equal(canRememberCommand("npm run x" + ch + "y"), true, ch);
-    }
-    assert.equal(canRememberCommand("   "), false);
-    assert.equal(canRememberCommand("npm test\u0000"), false);
+    const tab = String.fromCharCode(9);
+    const cases: Array<[string, boolean]> = [
+      ['npm run "a b"', true], ["npm run 'a b'", true], ["npm" + tab + "test", true],
+      ['npm run ".e"nv', false], ['npm run a"b"', false], ['npm run "a"b', false], ['npm run "a', false],
+      ['npm run "a' + "'" + 'b"', false], ["npm run" + String.fromCharCode(10) + "x", false], ["   ", false],
+      ["npm test" + String.fromCharCode(0), false], ["npm run caf" + String.fromCharCode(233), false],
+    ];
+    for (const [command, expected] of cases) assert.equal(canRememberCommand(command), expected, JSON.stringify(command));
   });
 });
 

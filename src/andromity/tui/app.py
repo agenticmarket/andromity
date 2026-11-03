@@ -31,6 +31,15 @@ from andromity.tui.overlays.questions import QuestionPanel, format_question_answ
 from andromity.core.session import Session
 from andromity.core.session_context import prompt_as_written
 from andromity.core.agent import Agent, note_images_skipped
+from andromity.core.receipt import (
+    ReceiptUnavailable,
+    build_receipt,
+    close_turn_record,
+    render_text,
+    seal_receipt,
+    start_turn_record,
+    turn_started,
+)
 from andromity.core.events import (
     StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, SubAgentProgress
 )
@@ -75,7 +84,7 @@ def _apply_textual_workarounds() -> None:
 
 _apply_textual_workarounds()
 
-COMMANDS = ["/help", "/mode", "/model", "/profile", "/reason", "/update", "/context-menu", "/undo", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp", "/skills", "/compact", "/export", "/tips", "/news"]
+COMMANDS = ["/help", "/mode", "/model", "/profile", "/reason", "/update", "/context-menu", "/undo", "/receipt", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp", "/skills", "/compact", "/export", "/tips", "/news"]
 
 CSS = """\
 Screen { background: $surface; }
@@ -628,7 +637,7 @@ class AndromityApp(App):
         except Exception:
             pass
 
-    async def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
+    async def _on_tool_approval(self, tool_name: str, args: dict) -> bool | dict:
         if not config.is_trusted(self._project_path):
             from andromity.core.tools import requires_workspace_trust
             if requires_workspace_trust(tool_name):
@@ -683,7 +692,7 @@ class AndromityApp(App):
                 global_allowed = config.get("default", "allowed_commands", []) or []
                 session_allowed = getattr(self.session, "allowed_commands", []) if hasattr(self, "session") else []
                 allowed = list(set(global_allowed) | set(session_allowed))
-                if not is_command_allowlisted(command, allowed):
+                if not is_command_allowlisted(command, allowed, policy_root):
                     needs_approval = True
         elif tool_name == "shell_kill":
             if mode == "safe":
@@ -725,9 +734,55 @@ class AndromityApp(App):
             self._tool_approval_future = asyncio.Future()
             result = await self._tool_approval_future
             self._tool_approval_future = None
-            return result
+            return {"approved": result is True, "by": "person"}
             
         return True
+
+    async def _seal_turn_receipt(self, record: dict, after_hash: str | None) -> None:
+        """Keep a finished turn's receipt checksum and point out anything that needs a look."""
+        session = self.session
+        if not turn_started(session, record):
+            if record in session.undo_stack:
+                session.undo_stack.remove(record)
+            return
+        record["after_hash"] = after_hash
+        if not after_hash:
+            session.save()
+            return
+        try:
+            receipt = await asyncio.to_thread(seal_receipt, session, record)
+            session.save()
+        except Exception as exc:
+            log.debug("Receipt for turn %s not built: %s", record.get("turn_index"), exc)
+            return
+        findings = (receipt or {}).get("needs_attention") or []
+        if findings:
+            count = len(findings)
+            self.query_one(ChatPanel).add_system_message(
+                f"[yellow]Receipt: {count} {'thing' if count == 1 else 'things'} in this turn "
+                f"{'needs' if count == 1 else 'need'} your eyes.[/] Type [bold]/receipt[/] to see what it read, changed and ran.")
+
+    async def _show_receipt(self, argument: str) -> None:
+        """/receipt [turn]: what one turn read, changed and ran, built from Andromity's own records."""
+        from andromity.core.identity import local_identity
+        chat = self.query_one(ChatPanel)
+        turn = None
+        if argument:
+            if not argument.isdigit() or int(argument) < 1:
+                chat.add_system_message("Usage: /receipt [turn number], for example /receipt 2", markup=False)
+                return
+            turn = int(argument) - 1
+        if not config.is_trusted(str(self._project_path)):
+            chat.add_system_message("Trust this folder with /trust to read its receipts.", markup=False)
+            return
+        try:
+            receipt = await asyncio.to_thread(build_receipt, self.session, turn)
+        except ReceiptUnavailable as exc:
+            chat.add_system_message(str(exc), markup=False)
+            return
+        viewer = await asyncio.to_thread(local_identity, str(self._project_path))
+        title, _, body = render_text(receipt, viewer).partition("\n")
+        chat.add_system_message(f"[bold]{escape(title)}[/bold]\n{escape(body)}")
 
     def _resolve_tool_approval(self, approved: bool) -> None:
         """Called to resolve a pending tool approval (e.g. from UI buttons or panel closing)."""
@@ -1410,6 +1465,7 @@ class AndromityApp(App):
         # write-tree, commit-tree) to the OS thread pool so the event loop
         # and TUI stay fully responsive while the snapshot is created.
         snapshot_hash: str | None = None
+        self.session.turn_key = None
         try:
             def _take_snapshot() -> str | None:
                 from andromity.core.git_ops import ensure_git_tracking, create_pre_edit_snapshot
@@ -1430,6 +1486,7 @@ class AndromityApp(App):
         self._pre_turn_snapshot = snapshot_hash
         if len(self._undo_stack) > 20:
             self._undo_stack.pop(0)
+        receipt_record = start_turn_record(self.session, snapshot_hash) if snapshot_hash else None
 
         try:
             async for event in self.agent.run(prompt, images=images or None):
@@ -1549,9 +1606,13 @@ class AndromityApp(App):
         finally:
             if not _prompt_added(self.session, msg_count_before, summarized_before):
                 self._undo_stack = [checkpoint for checkpoint in self._undo_stack if checkpoint is not turn_checkpoint]
-            elif snapshot_hash:
+            if snapshot_hash:
                 from andromity.core.git_ops import create_pre_edit_snapshot
+                if receipt_record is not None:
+                    receipt_record.update(close_turn_record(self.session))
                 turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(self._project_path))
+            if receipt_record is not None:
+                await self._seal_turn_receipt(receipt_record, turn_checkpoint.get("after_hash"))
             self._current_task = None
             self._is_streaming = False
             status_bar.set_streaming(False)
@@ -2249,6 +2310,8 @@ Your output must be:
                 )
         elif command == "/undo":
             self._run_undo()
+        elif command == "/receipt":
+            self.run_worker(self._show_receipt(parts[1].strip() if len(parts) > 1 else ""))
         elif command in ("/tips", "/tip"):
             subtag = parts[1].strip().lstrip("#") if len(parts) > 1 and parts[1].strip() else None
             self.run_worker(self._handle_tip_command(subtag))
@@ -2507,7 +2570,10 @@ Your output must be:
                 return
 
             prompt_message = self.session.messages[cutoff]
+            undone = {id(record) for record in self.session.turn_records_from(cutoff)}
             self.session.messages = self.session.messages[:cutoff]
+            self.session.undo_stack = [record for record in (self.session.undo_stack or [])
+                                       if id(record) not in undone]
             try:
                 from andromity.core.agent import _estimate_tokens as _est2
                 self.session.context_tokens = _est2(self.session.messages)

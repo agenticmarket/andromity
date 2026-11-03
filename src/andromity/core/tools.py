@@ -25,6 +25,7 @@ _PLAN_CALLBACKS: List[Callable] = []  # list of callables(plan) to notify on pla
 _TODO_CALLBACKS: List[Callable] = []  # list of callables() to notify on todo changes
 _SUBAGENT_PROGRESS_CALLBACKS: List[Callable] = []  # list of callables(StreamEvent) for subagent activity
 _current_session_var: contextvars.ContextVar[Any] = contextvars.ContextVar("current_session", default=None)
+_current_tool_call_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("current_tool_call", default=None)
 _mcp_manager = None  # global MCPClientManager instance
 
 # ── Background process registry & lifecycle callbacks ──────────────────────────
@@ -36,6 +37,7 @@ _bg_lock = threading.Lock()
 _fg_processes: Dict[str, set] = {}
 _fg_cancelled: set = set()
 _fg_lock = threading.Lock()
+EXIT_CODE_MARKER = "[exit code "
 _PROCESS_STARTED_CALLBACKS: List[Callable] = []  # callables(dict) to notify when a bg process starts
 _PROCESS_EXITED_CALLBACKS: List[Callable] = []   # callables(dict) to notify when a bg process exits
 # shell_bg watches a new process this long so a command that dies at once (wrong syntax for the
@@ -149,6 +151,25 @@ def get_current_session():
     return _current_session_var.get()
 
 
+def _note_outcome(kind: str) -> None:
+    """Record how the harness ended the running tool call (blocked, timeout, cancelled), so receipts never have to
+    read it from text a command could print."""
+    call_id = _current_tool_call_var.get()
+    record = getattr(get_current_session(), "record_tool_gate", None)
+    if call_id and callable(record):
+        record(call_id, kind)
+
+
+def _refuse(message: str) -> PermissionError:
+    _note_outcome("blocked")
+    return PermissionError(message)
+
+
+def _refused(message: str) -> str:
+    _note_outcome("blocked")
+    return message
+
+
 def register_mcp_manager(manager):
     """Register the active MCPClientManager for MCP tool execution."""
     global _mcp_manager
@@ -197,13 +218,13 @@ def _is_sensitive_path(resolved: Path) -> bool:
 def _assert_safe_write_path(p: Path) -> Path:
     """Strictly verify that path is within the project directory for modifying/deleting operations."""
     if not _is_trusted():
-        raise PermissionError("Workspace is untrusted. Use /trust to allow workspace tools.")
+        raise _refuse("Workspace is untrusted. Use /trust to allow workspace tools.")
     root = _get_project_root()
     resolved = p.resolve() if p.is_absolute() else (root / p).resolve()
     try:
         resolved.relative_to(root)
     except ValueError:
-        raise PermissionError(
+        raise _refuse(
             f"Access denied: '{p}' is outside the project directory ({root}). "
             "Modifying or deleting files outside the active project directory is strictly forbidden."
         )
@@ -213,14 +234,14 @@ def _assert_safe_write_path(p: Path) -> Path:
 def _assert_safe_read_path(p: Path) -> Path:
     """Verify that path is safe to read: inside workspace, in approved skill roots, or explicitly attached."""
     if not _is_trusted():
-        raise PermissionError("Workspace is untrusted. Use /trust to allow workspace tools.")
+        raise _refuse("Workspace is untrusted. Use /trust to allow workspace tools.")
     root = _get_project_root()
     resolved = p.resolve() if p.is_absolute() else (root / p).resolve()
 
     try:
         resolved.relative_to(root)
         if _is_sensitive_path(resolved):
-            raise PermissionError(
+            raise _refuse(
                 f"Access denied: Path '{p}' matches sensitive system/credential targets and cannot be read."
             )
         return resolved
@@ -233,7 +254,7 @@ def _assert_safe_read_path(p: Path) -> Path:
             try:
                 resolved.relative_to(skill_root)
                 if _is_sensitive_path(resolved):
-                    raise PermissionError(
+                    raise _refuse(
                         f"Access denied: Path '{p}' matches sensitive system/credential targets and cannot be read."
                     )
                 return resolved
@@ -246,12 +267,12 @@ def _assert_safe_read_path(p: Path) -> Path:
     if session and hasattr(session, "allowed_external_files"):
         if resolved in session.allowed_external_files:
             if _is_sensitive_path(resolved):
-                raise PermissionError(
+                raise _refuse(
                     f"Access denied: Path '{p}' matches sensitive system/credential targets and cannot be read."
                 )
             return resolved
 
-    raise PermissionError(
+    raise _refuse(
         f"Access denied: '{p}' is outside the project directory ({root}) "
         "and is not an approved skill or attached file."
     )
@@ -446,7 +467,7 @@ def read_file(
 def write_file(path: str, content: str) -> str:
     """Writes full content to a new or existing file."""
     if not _is_trusted():
-        return "Error: This folder is not trusted. Use /trust to allow file writes."
+        return _refused("Error: This folder is not trusted. Use /trust to allow file writes.")
     p = _resolve_project_path(path)
     try:
         _assert_safe_path(p)
@@ -476,7 +497,7 @@ def edit_file(
     3. Line-bounded window search
     """
     if not _is_trusted():
-        return "Error: This folder is not trusted. Use /trust to allow file edits."
+        return _refused("Error: This folder is not trusted. Use /trust to allow file edits.")
     p = _resolve_project_path(path)
     try:
         _assert_safe_path(p)
@@ -585,7 +606,7 @@ def edit_file_multi(path: str, edits: list) -> str:
     Optional 'start_line' and 'end_line' can be provided per edit.
     """
     if not _is_trusted():
-        return "Error: This folder is not trusted. Use /trust to allow file edits."
+        return _refused("Error: This folder is not trusted. Use /trust to allow file edits.")
     p = _resolve_project_path(path)
     try:
         _assert_safe_path(p)
@@ -759,14 +780,14 @@ def check_airgap_violation(command: str) -> Optional[str]:
     ]
     for pat, desc in blocked_patterns:
         if re.search(pat, command, re.IGNORECASE):
-            return f"Error: Command blocked by air-gap policy ({desc}). Network access is strictly disabled during benchmark evaluation."
+            return _refused(f"Error: Command blocked by air-gap policy ({desc}). Network access is strictly disabled during benchmark evaluation.")
     return None
 
 
 def shell_exec(command: str, timeout: int = 300) -> str:
     """Executes a shell command (blocking — waits for it to finish)."""
     if not _is_trusted():
-        return "Error: This folder is not trusted. Use /trust to allow shell commands."
+        return _refused("Error: This folder is not trusted. Use /trust to allow shell commands.")
 
     airgap_err = check_airgap_violation(command)
     if airgap_err:
@@ -805,6 +826,7 @@ def shell_exec(command: str, timeout: int = 300) -> str:
     except subprocess.TimeoutExpired:
         _kill_process_tree(proc)
         proc.communicate()
+        _note_outcome("timeout")
         return (
             f"Error: Command timed out after {timeout} seconds. "
             "If you need to run a long-running process (e.g. a dev server), use "
@@ -821,11 +843,16 @@ def shell_exec(command: str, timeout: int = 300) -> str:
             was_cancelled = proc.pid in _fg_cancelled
             _fg_cancelled.discard(proc.pid)
     if was_cancelled:
+        _note_outcome("cancelled")
         return "Stopped: the user cancelled this command before it finished."
     output = stdout or ""
     if stderr:
         output += f"\nSTDERR:\n{stderr}"
-    return output.strip() if output.strip() else "Command executed successfully with no output."
+    output = output.strip()
+    if proc.returncode:
+        marker = f"{EXIT_CODE_MARKER}{proc.returncode}]"
+        return f"{output}\n{marker}" if output else marker
+    return output if output else "Command executed successfully with no output."
 
 
 def _kill_process_tree(proc: subprocess.Popen) -> None:
@@ -867,7 +894,7 @@ def shell_bg(command: str, process_id: str = "") -> str:
     live output, shell_kill(process_id) to stop it.
     """
     if not _is_trusted():
-        return "Error: This folder is not trusted. Use /trust to allow shell commands."
+        return _refused("Error: This folder is not trusted. Use /trust to allow shell commands.")
 
     airgap_err = check_airgap_violation(command)
     if airgap_err:
@@ -1150,7 +1177,7 @@ def grep_search(
     try:
         _assert_safe_path(p)
         if _is_sensitive_path(p):
-            raise PermissionError(f"Access denied: Path '{path}' matches sensitive system/credential targets and cannot be searched.")
+            raise _refuse(f"Access denied: Path '{path}' matches sensitive system/credential targets and cannot be searched.")
     except Exception as e:
         return f"Error in grep_search: {e}"
     from andromity.core.search import grep_search as core_grep_search
@@ -2391,7 +2418,7 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
     if name in COLLAB_TOOLS:
         name, args = expand_collab_call(name, args or {})
     if requires_workspace_trust(name) and not _is_trusted():
-        return "Error: Workspace is untrusted. Use /trust to allow workspace tools."
+        return _refused("Error: Workspace is untrusted. Use /trust to allow workspace tools.")
     log.debug("TOOL CALL: %s(%s)", name, {k: (str(v)[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in args.items()})
 
     try:
@@ -2527,10 +2554,18 @@ def mark_external_content(name: str, result: str) -> str:
 
 async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[str] = None, timeout: Optional[float] = None) -> str:
     """Asynchronous tool execution (natively awaits MCP tools and async coordination tools, dispatches core tools)."""
+    token = _current_tool_call_var.set(tool_id)
+    try:
+        return await _execute_tool_async(name, args, tool_id, timeout)
+    finally:
+        _current_tool_call_var.reset(token)
+
+
+async def _execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[str], timeout: Optional[float]) -> str:
     if name in COLLAB_TOOLS:
         name, args = expand_collab_call(name, args or {})
     if requires_workspace_trust(name) and not _is_trusted():
-        return "Error: Workspace is untrusted. Use /trust to allow workspace tools."
+        return _refused("Error: Workspace is untrusted. Use /trust to allow workspace tools.")
     # Dynamically resolve effective timeout if not explicitly passed
     if timeout is not None:
         effective_timeout = float(timeout)
@@ -2615,6 +2650,7 @@ async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[
                     raise
     except asyncio.TimeoutError:
         log.warning("Tool %s timed out after %ss", name, effective_timeout)
+        _note_outcome("timeout")
         return f"Error: Tool '{name}' timed out after {effective_timeout:.0f} seconds."
     except Exception as e:
         log.exception("Error in execute_tool_async for %s: %s", name, e)

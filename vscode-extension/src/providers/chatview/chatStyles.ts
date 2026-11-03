@@ -3709,6 +3709,88 @@ ${STATUS_SHIMMER_STYLES}
       color: var(--green);
       background: rgba(63, 185, 80, 0.12);
     }
+    .msg-receipt-btn.has-attention {
+      opacity: 1;
+      color: var(--vscode-editorWarning-foreground, #cca700);
+    }
+    .msg-receipt-btn.has-high {
+      color: var(--red);
+    }
+    .msg-receipt-btn[hidden] {
+      display: none;
+    }
+
+    /* Receipt line: always visible under an answer whose turn changed files, ran commands
+       or has something to check; one click opens the full receipt. */
+    .receipt-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      box-sizing: border-box;
+      margin: 8px 0 2px;
+      padding: 6px 10px;
+      background: rgba(var(--tint), 0.02);
+      border: 1px solid rgba(var(--tint), 0.08);
+      border-radius: 6px;
+      color: var(--muted);
+      font-family: var(--font-ui);
+      font-size: 11.5px;
+      line-height: 1.4;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+    }
+    .receipt-line:hover {
+      color: var(--fg);
+      background: rgba(var(--tint), 0.05);
+      border-color: rgba(var(--tint), 0.16);
+    }
+    .receipt-line:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: 1px;
+    }
+    .receipt-line-icon {
+      display: inline-flex;
+      flex-shrink: 0;
+      color: var(--accent);
+    }
+    .receipt-line-title {
+      flex-shrink: 0;
+      color: var(--fg);
+      font-weight: 600;
+    }
+    .receipt-line-summary {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .receipt-line-status {
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+    .receipt-line-chevron {
+      flex-shrink: 0;
+      font-size: 14px;
+      line-height: 1;
+      opacity: 0.55;
+    }
+    .receipt-line.has-attention {
+      border-left: 3px solid var(--vscode-editorWarning-foreground, #cca700);
+      padding-left: 8px;
+    }
+    .receipt-line.has-attention .receipt-line-status {
+      color: var(--vscode-editorWarning-foreground, #cca700);
+      font-weight: 600;
+    }
+    .receipt-line.has-high {
+      border-left-color: var(--red);
+    }
+    .receipt-line.has-high .receipt-line-status {
+      color: var(--red);
+    }
 
     /* User bubbles: footer sits right-aligned under the prompt bubble */
     .message-wrap.user .message-footer {
