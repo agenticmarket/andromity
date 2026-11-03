@@ -2,6 +2,17 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Turn receipts.** A receipt line under each answer that changed files or ran commands shows what the turn did: files changed, commands and their results, sensitive files touched, and who approved or declined each risky step. Open it for the full receipt, copy it as Markdown for a pull request, or save it as JSON. Fixed code writes it from Andromity's own records; the model never does. Also available as **Andromity: Show Turn Receipt**.
+
+### Changed
+- **Safer auto-approval.** Command checks were rebuilt against the published GuardFall bypasses, and "always allow this command" follows the same stricter rule.
+
+### Fixed
+- Andromity's own git calls no longer run programs set in a repository's config.
+
 ## [0.2.25] — 2026-10-31
 
 ### Added

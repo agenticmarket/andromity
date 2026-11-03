@@ -2,6 +2,20 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+- **Turn receipts.** Each turn gets a receipt of what it actually did: files changed, files read, every command with its real exit code, commands that were blocked, declined, timed out or cancelled, sensitive files touched, git hook or config changes, and who approved or declined each risky step. Fixed code builds it from Andromity's own records; the model never writes it. In VS Code a receipt line under each answer that changed files or ran commands opens the receipt tab (also **Andromity: Show Turn Receipt**), the terminal app has `/receipt`, and `andromity receipt` prints it as text, JSON or Markdown for a pull request. Receipts contain no prompts, file contents or command output, and secrets are masked. The JSON format is described in `docs/receipt-v1.schema.json`.
+- **Named approvers.** When you approve or decline a command, the receipt names you from your git `user.name`, marked as not verified. Your email is never stored.
+- **Sealed receipts.** A receipt's checksum is kept when its turn ends, and a receipt rebuilt later says whether it still matches that record.
+
+### Changed
+- **Command checks rebuilt against the GuardFall bypasses.** Auto-approval refuses commands with shell-significant characters, checks both sides of `=`, needs an exact allowlist match for programs that run code (such as `bash -c`, `python`, `sudo` and `ssh`), blocks risky options per program (git, pytest, tar, npm), and a turn stops after `max_tool_rounds` (default 60). VS Code's "always allow this command" follows the same rule.
+
+### Fixed
+- **Git calls no longer run programs from repository config.** Snapshots, undo, status, diffs, Changes Review and search turn off hooks, fsmonitor, clean and smudge filters and textconv, so a cloned repository can't run code through them. Discard refuses files whose filter was turned off.
+- **Reused tool-call ids.** A provider that reuses a tool-call id can no longer give a new call an earlier approval or refusal.
+
 ## [0.2.25] — 2026-10-31
 
 ### Added
