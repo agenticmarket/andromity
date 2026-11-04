@@ -158,6 +158,7 @@ const button = (reply: Node) => reply.querySelector(".msg-receipt-btn") as Node;
 const label = (reply: Node) => button(reply).querySelector(".msg-action-label")!.textContent;
 const line = (reply: Node) => reply.querySelector(".receipt-line");
 const part = (reply: Node, name: string) => line(reply)!.querySelector(`.receipt-line-${name}`)!.textContent;
+const sentence = (reply: Node) => line(reply)!.children.map((child) => child.textContent).join("");
 /** How a reader gets into the turn's receipt: the visible line, the footer link, or not at all. */
 const way = (reply: Node) => (line(reply) ? "line" : button(reply).hidden ? "none" : "link");
 
@@ -176,7 +177,7 @@ describe("receipt badge in the chat", () => {
     assert.equal(way(turns[1]), "line");
     assert.equal(line(turns[1])!.getAttribute("data-turn"), "7");
     assert.equal(button(turns[1]).getAttribute("data-turn"), "7");
-    assert.equal(part(turns[1], "status"), "2 to check");
+    assert.equal(sentence(turns[1]), "2 things to check, 1 high.");
     assert.equal(label(turns[1]), "Receipt · 2 to check");
     assert.equal(way(turns[0]), "none");
     assert.equal(way(turns[2]), "none");
@@ -367,10 +368,8 @@ describe("receipt badge in the chat", () => {
     assert.equal(shown.getAttribute("data-action"), "open-receipt");
     assert.equal(shown.getAttribute("data-turn"), "0");
     assert.equal(shown.getAttribute("data-turn-key"), key(0));
-    assert.equal(part(turns[0], "title"), "Receipt");
-    assert.equal(part(turns[0], "summary"), "· 2 files changed · 1 command");
-    assert.equal(part(turns[0], "status"), "Nothing flagged");
-    assert.equal(shown.getAttribute("aria-label"), "Open the receipt for this turn: 2 files changed · 1 command, nothing flagged");
+    assert.equal(sentence(turns[0]), "Nothing to check. Changed 2 files and ran 1 command.");
+    assert.equal(shown.getAttribute("aria-label"), "Open the receipt for this turn: Nothing to check. Changed 2 files and ran 1 command.");
     assert.ok(!shown.classList.contains("has-attention") && !shown.classList.contains("has-high"));
   });
 
@@ -382,11 +381,60 @@ describe("receipt badge in the chat", () => {
       { turn_index: 2, turn_key: key(2), attention: 1, high: 0, files_changed: 1, commands: 0, commands_failed: 0 },
     ]);
     ctx.applyStoredReceiptBadges();
-    assert.equal(part(turns[1], "summary"), "· 2 commands, 1 failed");
-    assert.equal(part(turns[1], "status"), "2 to check");
+    assert.equal(sentence(turns[1]), "2 things to check, 1 high. Ran 2 commands; 1 failed.");
+    assert.equal(part(turns[1], "verdict"), "2 things to check, 1 high.");
+    assert.equal(part(turns[1], "failed"), "1 failed");
     assert.ok(line(turns[1])!.classList.contains("has-attention") && line(turns[1])!.classList.contains("has-high"));
-    assert.equal(part(turns[2], "summary"), "· 1 file changed");
+    assert.equal(sentence(turns[2]), "1 thing to check. Changed 1 file.");
     assert.ok(line(turns[2])!.classList.contains("has-attention") && !line(turns[2])!.classList.contains("has-high"));
+  });
+
+  it("says what the turn did in words, verdict first, from the counts alone", () => {
+    const { container, turns } = chat([key(0), key(1), key(2)]);
+    const ctx = load(container);
+    const say = (raw: Record<string, unknown>) => {
+      ctx.applyReceiptBadge(button(turns[0]), ctx.receiptEntry({ turn_index: 0, turn_key: key(0), attention: 0, high: 0, ...raw }));
+      return line(turns[0]) ? sentence(turns[0]) : null;
+    };
+    assert.equal(say({ files_changed: 1, commands: 0 }), "Nothing to check. Changed 1 file.");
+    assert.equal(say({ files_changed: 0, commands: 1 }), "Nothing to check. Ran 1 command.");
+    assert.equal(say({ files_changed: 2, commands: 3 }), "Nothing to check. Changed 2 files and ran 3 commands.");
+    assert.equal(say({ files_changed: 0, commands: 1, commands_failed: 1, attention: 1 }), "1 thing to check. Ran 1 command; 1 failed.");
+    assert.equal(say({ files_changed: 3, commands: 4, commands_failed: 4 }), "Nothing to check. Changed 3 files and ran 4 commands; 4 failed.");
+    assert.equal(say({ attention: 2, high: 1 }), "2 things to check, 1 high.", "an engine without work counts");
+    assert.equal(say({ attention: 3, high: 3 }), "3 things to check, 3 high.");
+    assert.equal(say({ attention: 1, high: 5 }), "1 thing to check, 1 high.", "never more high than there are things");
+    assert.equal(say({ files_changed: 1, commands: 0, commands_failed: 2 }), "Nothing to check. Changed 1 file.", "no failures without commands");
+    assert.equal(say({ files_changed: 1, commands_failed: 2 }), "Nothing to check. Changed 1 file.");
+    assert.equal(say({ files_changed: 0, commands: 0, commands_failed: 3 }), null, "failures alone are not work");
+  });
+
+  it("clears the parts of the sentence a turn no longer has", () => {
+    const { container, turns } = chat([key(0), key(1), key(2)]);
+    const ctx = load(container);
+    const apply = (raw: Record<string, unknown>) =>
+      ctx.applyReceiptBadge(button(turns[0]), ctx.receiptEntry({ turn_index: 0, turn_key: key(0), ...raw }));
+    apply({ attention: 2, high: 1, files_changed: 1, commands: 2, commands_failed: 1 });
+    assert.equal(sentence(turns[0]), "2 things to check, 1 high. Changed 1 file and ran 2 commands; 1 failed.");
+    apply({ attention: 0, high: 0, files_changed: 1, commands: 2, commands_failed: 0 });
+    assert.equal(sentence(turns[0]), "Nothing to check. Changed 1 file and ran 2 commands.");
+    assert.equal(part(turns[0], "failed"), "");
+    assert.ok(!line(turns[0])!.classList.contains("has-attention") && !line(turns[0])!.classList.contains("has-high"));
+    apply({ attention: 1, high: 0, files_changed: 0, commands: 0 });
+    assert.equal(sentence(turns[0]), "1 thing to check.");
+    assert.equal(line(turns[0])!.getAttribute("aria-label"), "Open the receipt for this turn: 1 thing to check.");
+    assert.equal(turns[0].querySelectorAll(".receipt-line").length, 1);
+  });
+
+  it("builds the line from fixed markup and writes the counts in as text", () => {
+    const body = script.slice(script.indexOf("function applyReceiptLine"), script.indexOf("function applyReceiptBadge"));
+    const markup = /line\.innerHTML = ([\s\S]*?);\n/.exec(body)?.[1] || "";
+    assert.ok(markup, "the line has markup");
+    assert.match(markup, /^'[^']*'(\s*\+\s*'[^']*')*$/, "only string literals, nothing interpolated");
+    for (const name of ["verdict", "did", "failed", "stop"]) {
+      assert.match(body, new RegExp(`querySelector\\('\\.receipt-line-${name}'\\)\\.textContent = `), name);
+    }
+    assert.doesNotMatch(body, /innerHTML \+=|outerHTML|insertAdjacentHTML/);
   });
 
   it("adds nothing to a turn that only talked, and keeps its footer link", () => {
@@ -408,8 +456,7 @@ describe("receipt badge in the chat", () => {
     ctx.applyReceiptBadge(button(turns[0]), entry(1, 0));
     ctx.applyReceiptBadge(button(turns[0]), entry(3, 1));
     assert.equal(turns[0].querySelectorAll(".receipt-line").length, 1);
-    assert.equal(part(turns[0], "summary"), "· 3 files changed");
-    assert.equal(part(turns[0], "status"), "1 to check");
+    assert.equal(sentence(turns[0]), "1 thing to check. Changed 3 files.");
     ctx.applyReceiptBadge(button(turns[0]), entry(0, 0));
     assert.equal(way(turns[0]), "link");
   });
@@ -433,17 +480,37 @@ describe("receipt badge in the chat", () => {
     ctx.rememberReceiptReady({ session_id: "s1", turn_index: 0, turn_key: key(0), attention: 0, high: 0, files_changed: 4, commands: 2, commands_failed: 1 });
     ctx.rememberReceiptTurns("s1", [{ turn_index: 0, turn_key: key(0), attention: 0, high: 0, files_changed: null, commands: null, commands_failed: null }]);
     ctx.applyStoredReceiptBadges();
-    assert.equal(part(turns[0], "summary"), "· 4 files changed · 2 commands, 1 failed");
+    assert.equal(sentence(turns[0]), "Nothing to check. Changed 4 files and ran 2 commands; 1 failed.");
     ctx.rememberReceiptTurns("s1", [{ turn_index: 0, turn_key: key(0), attention: 0, high: 0, files_changed: 1, commands: 0, commands_failed: 0 }]);
     ctx.applyStoredReceiptBadges();
-    assert.equal(part(turns[0], "summary"), "· 1 file changed", "the engine's own counts win");
+    assert.equal(sentence(turns[0]), "Nothing to check. Changed 1 file.", "the engine's own counts win");
   });
 
   it("really hides a footer link the chat marks hidden", () => {
     const { getChatStyles } = require("../src/providers/chatview/chatStyles.js");
     const css = getChatStyles().replace(/\s+/g, " ");
     assert.match(css, /\.msg-receipt-btn\[hidden\] \{ display: none; \}/);
-    assert.match(css, /\.receipt-line \{[^}]*display: flex;/);
+    assert.match(css, /\.receipt-line \{[^}]*display: block;/);
+  });
+
+  it("styles the line as plain text that wraps, coloured only where it means something", () => {
+    const { getChatStyles } = require("../src/providers/chatview/chatStyles.js");
+    const css = getChatStyles().replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s+/g, " ");
+    const rules = [...css.matchAll(/([^{}]*\.receipt-line[^{}]*)\{([^}]*)\}/g)].map((match) => ({ selector: match[1].trim(), body: match[2] }));
+    assert.ok(rules.length >= 4, "receipt line rules exist");
+    for (const { selector, body } of rules) {
+      assert.doesNotMatch(body, /text-overflow|white-space: nowrap|overflow: hidden|-webkit-line-clamp/, `${selector} must never cut a count off`);
+      assert.doesNotMatch(body, /border-left|box-shadow|gradient|text-transform/, `${selector} stays plain`);
+    }
+    const base = rules.find((rule) => rule.selector === ".receipt-line")!.body;
+    assert.match(base, /border: none;/);
+    assert.match(base, /background: none;/);
+    const coloured = rules.filter((rule) => /(^|[^-])color: (?!var\(--muted\)|var\(--fg\))/.test(rule.body)).map((rule) => rule.selector).sort();
+    assert.deepEqual(coloured, [
+      ".receipt-line-failed",
+      ".receipt-line.has-attention .receipt-line-verdict",
+      ".receipt-line.has-high .receipt-line-verdict",
+    ]);
   });
 
   it("hides every compaction acknowledgement the engine writes, so none gets an answer footer", () => {

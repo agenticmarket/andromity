@@ -7549,25 +7549,33 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return count + ' ' + (count === 1 ? one : many);
     }
 
-    /** What a turn did, in a few words: files changed, commands run and how many failed. */
-    function receiptSummary(entry) {
+    /** What a turn did, as words: "Changed 2 files and ran 3 commands", and how many of those commands failed. */
+    function receiptWork(entry) {
       var parts = [];
-      if (entry.files !== null && entry.files > 0) parts.push(receiptPlural(entry.files, 'file changed', 'files changed'));
-      if (entry.commands !== null && entry.commands > 0) {
-        parts.push(receiptPlural(entry.commands, 'command', 'commands') + (entry.failed ? ', ' + entry.failed + ' failed' : ''));
-      }
-      return parts.join(' · ');
+      if (entry.files !== null && entry.files > 0) parts.push('changed ' + receiptPlural(entry.files, 'file', 'files'));
+      var ran = entry.commands !== null && entry.commands > 0;
+      if (ran) parts.push('ran ' + receiptPlural(entry.commands, 'command', 'commands'));
+      var did = parts.join(' and ');
+      return {
+        did: did ? did.charAt(0).toUpperCase() + did.slice(1) : '',
+        failed: ran && entry.failed ? entry.failed + ' failed' : '',
+      };
     }
 
-    /** A visible line under an answer whose turn changed files, ran commands or has something to check.
+    function receiptVerdict(count, high) {
+      if (count === 0) return 'Nothing to check.';
+      return receiptPlural(count, 'thing', 'things') + ' to check' + (high > 0 ? ', ' + Math.min(high, count) + ' high' : '') + '.';
+    }
+
+    /** A sentence under an answer whose turn changed files, ran commands or has something to check, built only from counts.
      *  It takes the footer link's place, so each answer has one way into its receipt. */
     function applyReceiptLine(button, entry, count, high) {
       var footer = button.closest('.message-footer');
       if (!footer || !footer.parentNode) return null;
       var before = footer.previousElementSibling;
       var line = before && before.classList.contains('receipt-line') ? before : null;
-      var summary = receiptSummary(entry);
-      if (!summary && count === 0) {
+      var work = receiptWork(entry);
+      if (!work.did && count === 0) {
         if (line) line.remove();
         return null;
       }
@@ -7576,20 +7584,23 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         line.type = 'button';
         line.className = 'receipt-line';
         line.setAttribute('data-action', 'open-receipt');
-        line.innerHTML = '<span class="receipt-line-icon" aria-hidden="true">' + FOOTER_RECEIPT_ICON + '</span>' +
-          '<span class="receipt-line-title">Receipt</span><span class="receipt-line-summary"></span>' +
-          '<span class="receipt-line-status"></span><span class="receipt-line-chevron" aria-hidden="true">›</span>';
+        line.innerHTML = '<span class="receipt-line-verdict"></span><span class="receipt-line-did"></span>' +
+          '<span class="receipt-line-failed"></span><span class="receipt-line-stop"></span>';
         footer.parentNode.insertBefore(line, footer);
       }
       line.setAttribute('data-turn', String(entry.turn_index));
       if (entry.turn_key) line.setAttribute('data-turn-key', entry.turn_key);
-      var status = count > 0 ? count + ' to check' : 'Nothing flagged';
-      line.querySelector('.receipt-line-summary').textContent = summary ? '· ' + summary : '';
-      line.querySelector('.receipt-line-status').textContent = status;
+      var verdict = receiptVerdict(count, high);
+      var did = work.did ? ' ' + work.did + (work.failed ? '; ' : '') : '';
+      var stop = work.did ? '.' : '';
+      line.querySelector('.receipt-line-verdict').textContent = verdict;
+      line.querySelector('.receipt-line-did').textContent = did;
+      line.querySelector('.receipt-line-failed').textContent = work.failed;
+      line.querySelector('.receipt-line-stop').textContent = stop;
       line.classList.toggle('has-attention', count > 0);
       line.classList.toggle('has-high', count > 0 && high > 0);
       line.title = 'Open the receipt: what this turn read, changed and ran, and who approved it';
-      line.setAttribute('aria-label', 'Open the receipt for this turn: ' + (summary ? summary + ', ' : '') + status.toLowerCase());
+      line.setAttribute('aria-label', 'Open the receipt for this turn: ' + verdict + did + work.failed + stop);
       return line;
     }
 

@@ -3720,75 +3720,39 @@ ${STATUS_SHIMMER_STYLES}
       display: none;
     }
 
-    /* Receipt line: always visible under an answer whose turn changed files, ran commands
-       or has something to check; one click opens the full receipt. */
+    /* Receipt line: one plain sentence under an answer that did work; it wraps rather than cut off a count. */
     .receipt-line {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      width: 100%;
-      box-sizing: border-box;
-      margin: 8px 0 2px;
-      padding: 6px 10px;
-      background: rgba(var(--tint), 0.02);
-      border: 1px solid rgba(var(--tint), 0.08);
-      border-radius: 6px;
+      display: block;
+      max-width: 100%;
+      margin: 10px 0 2px;
+      padding: 0;
+      background: none;
+      border: none;
       color: var(--muted);
       font-family: var(--font-ui);
-      font-size: 11.5px;
-      line-height: 1.4;
+      font-size: 12px;
+      line-height: 1.5;
       text-align: left;
       cursor: pointer;
-      transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
     }
     .receipt-line:hover {
       color: var(--fg);
-      background: rgba(var(--tint), 0.05);
-      border-color: rgba(var(--tint), 0.16);
+      text-decoration: underline;
+      text-underline-offset: 2px;
     }
     .receipt-line:focus-visible {
       outline: 1px solid var(--accent);
-      outline-offset: 1px;
+      outline-offset: 2px;
+      border-radius: 2px;
     }
-    .receipt-line-icon {
-      display: inline-flex;
-      flex-shrink: 0;
-      color: var(--accent);
-    }
-    .receipt-line-title {
-      flex-shrink: 0;
-      color: var(--fg);
-      font-weight: 600;
-    }
-    .receipt-line-summary {
-      flex: 1 1 auto;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .receipt-line-status {
-      flex-shrink: 0;
-      white-space: nowrap;
-    }
-    .receipt-line-chevron {
-      flex-shrink: 0;
-      font-size: 14px;
-      line-height: 1;
-      opacity: 0.55;
-    }
-    .receipt-line.has-attention {
-      border-left: 3px solid var(--vscode-editorWarning-foreground, #cca700);
-      padding-left: 8px;
-    }
-    .receipt-line.has-attention .receipt-line-status {
+    .receipt-line.has-attention .receipt-line-verdict {
       color: var(--vscode-editorWarning-foreground, #cca700);
       font-weight: 600;
     }
-    .receipt-line.has-high {
-      border-left-color: var(--red);
+    .receipt-line.has-high .receipt-line-verdict {
+      color: var(--red);
     }
-    .receipt-line.has-high .receipt-line-status {
+    .receipt-line-failed {
       color: var(--red);
     }
 
