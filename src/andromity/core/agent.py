@@ -3,6 +3,7 @@ import dataclasses
 import json
 import sys
 import time
+from contextlib import aclosing
 from pathlib import Path
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 
@@ -507,9 +508,10 @@ class Agent:
             compaction_kwargs["model"] = self.model
 
         try:
-            async for event in stream_completion(summary_prompt, **compaction_kwargs):
-                if isinstance(event, TextDelta):
-                    summary_text += event.text
+            async with aclosing(stream_completion(summary_prompt, **compaction_kwargs)) as events:
+                async for event in events:
+                    if isinstance(event, TextDelta):
+                        summary_text += event.text
         except Exception as e:
             log.warning("Compaction summary stream failed: %s", e)
             yield TextDelta(text=f"*[Context compaction failed: {e}]*\n\n")
@@ -729,42 +731,43 @@ class Agent:
                 ts=llm_start_time,
             )
 
-            async for event in stream_completion(
+            async with aclosing(stream_completion(
                 self._messages_for_api(),
                 **stream_kwargs,
-            ):
-                if isinstance(event, (ToolCallStart, ToolCallDelta, ToolCallEnd)):
-                    event = dataclasses.replace(event, tool_id=self._call_ids.map(event.tool_id))
-                if first_token_time is None and isinstance(event, (TextDelta, ThinkingDelta, ToolCallStart)):
-                    first_token_time = time.time()
+            )) as events:
+                async for event in events:
+                    if isinstance(event, (ToolCallStart, ToolCallDelta, ToolCallEnd)):
+                        event = dataclasses.replace(event, tool_id=self._call_ids.map(event.tool_id))
+                    if first_token_time is None and isinstance(event, (TextDelta, ThinkingDelta, ToolCallStart)):
+                        first_token_time = time.time()
 
-                if isinstance(event, Done):
-                    last_usage = event.usage
-                    provider_outcome = event.outcome
-                    provider_error_type = event.error_type
-                    provider_error_action = event.error_action
-                    provider_error_detail = event.error_detail
-                else:
-                    yield event
-                if isinstance(event, TextDelta):
-                    assistant_content += event.text
-                elif isinstance(event, ThinkingDelta):
-                    assistant_thinking += event.text
-                elif isinstance(event, ToolCallStart):
-                    pending_tool_calls[event.tool_id] = {
-                        "name": event.tool_name,
-                        "args": "",
-                    }
-                elif isinstance(event, ToolCallDelta):
-                    if event.tool_id in pending_tool_calls:
-                        pending_tool_calls[event.tool_id]["args"] += event.args_json_chunk
-                elif isinstance(event, ToolCallEnd):
-                    if event.tool_id in pending_tool_calls:
-                        call_info = pending_tool_calls.pop(event.tool_id)
-                        tool_calls_to_execute.append({
-                            "id": event.tool_id, "type": "function",
-                            "function": {"name": call_info["name"], "arguments": call_info["args"]},
-                        })
+                    if isinstance(event, Done):
+                        last_usage = event.usage
+                        provider_outcome = event.outcome
+                        provider_error_type = event.error_type
+                        provider_error_action = event.error_action
+                        provider_error_detail = event.error_detail
+                    else:
+                        yield event
+                    if isinstance(event, TextDelta):
+                        assistant_content += event.text
+                    elif isinstance(event, ThinkingDelta):
+                        assistant_thinking += event.text
+                    elif isinstance(event, ToolCallStart):
+                        pending_tool_calls[event.tool_id] = {
+                            "name": event.tool_name,
+                            "args": "",
+                        }
+                    elif isinstance(event, ToolCallDelta):
+                        if event.tool_id in pending_tool_calls:
+                            pending_tool_calls[event.tool_id]["args"] += event.args_json_chunk
+                    elif isinstance(event, ToolCallEnd):
+                        if event.tool_id in pending_tool_calls:
+                            call_info = pending_tool_calls.pop(event.tool_id)
+                            tool_calls_to_execute.append({
+                                "id": event.tool_id, "type": "function",
+                                "function": {"name": call_info["name"], "arguments": call_info["args"]},
+                            })
 
             llm_end_time = time.time()
             ttfb_ms = round(((first_token_time or llm_end_time) - llm_start_time) * 1000, 2)

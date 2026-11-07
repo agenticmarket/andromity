@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -490,41 +491,42 @@ class SubAgent:
                 self._notify_progress(event_type="thinking", detail="Thinking...")
 
             call_ids.next_response()
-            async for event in stream_completion(msgs, **stream_kwargs):
-                if isinstance(event, (ToolCallStart, ToolCallDelta, ToolCallEnd)):
-                    event = replace(event, tool_id=call_ids.map(event.tool_id))
-                events_accum.append(event)
-                if isinstance(event, ThinkingDelta):
-                    self._notify_progress(event_type="thinking", detail="Thinking...")
-                elif isinstance(event, TextDelta):
-                    assistant_content += event.text
-                elif isinstance(event, ToolCallStart):
-                    pending_tool_calls[event.tool_id] = {
-                        "name": event.tool_name,
-                        "args": "",
-                    }
-                    # Do NOT emit here — wait for ToolCallEnd so args are available
-                elif isinstance(event, ToolCallDelta):
-                    if event.tool_id in pending_tool_calls:
-                        pending_tool_calls[event.tool_id]["args"] += event.args_json_chunk
-                elif isinstance(event, ToolCallEnd):
-                    if event.tool_id in pending_tool_calls:
-                        call_info = pending_tool_calls.pop(event.tool_id)
-                        tool_calls_to_execute.append({
-                            "id": event.tool_id,
-                            "type": "function",
-                            "function": {"name": call_info["name"], "arguments": call_info["args"]},
-                        })
-                        act_desc = _format_tool_activity(call_info["name"], call_info["args"])
-                        self._notify_progress(
-                            event_type="tool_call",
-                            tool_id=event.tool_id,
-                            tool_name=call_info["name"],
-                            tool_args=call_info["args"],
-                            detail=act_desc,
-                        )
-                elif isinstance(event, Done):
-                    last_usage = event.usage
+            async with aclosing(stream_completion(msgs, **stream_kwargs)) as events:
+                async for event in events:
+                    if isinstance(event, (ToolCallStart, ToolCallDelta, ToolCallEnd)):
+                        event = replace(event, tool_id=call_ids.map(event.tool_id))
+                    events_accum.append(event)
+                    if isinstance(event, ThinkingDelta):
+                        self._notify_progress(event_type="thinking", detail="Thinking...")
+                    elif isinstance(event, TextDelta):
+                        assistant_content += event.text
+                    elif isinstance(event, ToolCallStart):
+                        pending_tool_calls[event.tool_id] = {
+                            "name": event.tool_name,
+                            "args": "",
+                        }
+                        # Do NOT emit here — wait for ToolCallEnd so args are available
+                    elif isinstance(event, ToolCallDelta):
+                        if event.tool_id in pending_tool_calls:
+                            pending_tool_calls[event.tool_id]["args"] += event.args_json_chunk
+                    elif isinstance(event, ToolCallEnd):
+                        if event.tool_id in pending_tool_calls:
+                            call_info = pending_tool_calls.pop(event.tool_id)
+                            tool_calls_to_execute.append({
+                                "id": event.tool_id,
+                                "type": "function",
+                                "function": {"name": call_info["name"], "arguments": call_info["args"]},
+                            })
+                            act_desc = _format_tool_activity(call_info["name"], call_info["args"])
+                            self._notify_progress(
+                                event_type="tool_call",
+                                tool_id=event.tool_id,
+                                tool_name=call_info["name"],
+                                tool_args=call_info["args"],
+                                detail=act_desc,
+                            )
+                    elif isinstance(event, Done):
+                        last_usage = event.usage
 
             for tid, call_info in list(pending_tool_calls.items()):
                 tool_calls_to_execute.append({
