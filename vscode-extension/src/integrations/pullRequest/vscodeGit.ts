@@ -106,6 +106,18 @@ function gitDirOf(root: string): string | null {
   }
 }
 
+/** The directory holding refs shared by all worktrees of the repository. */
+function commonDirOf(root: string): string | null {
+  const dir = gitDirOf(root);
+  if (!dir) return null;
+  try {
+    const common = fs.readFileSync(path.join(dir, "commondir"), "utf8").trim();
+    return common ? path.resolve(dir, common) : dir;
+  } catch {
+    return dir;
+  }
+}
+
 /** GitPort over the built-in Git extension, so the user's credentials, hooks and signing apply. */
 export class VscodeGitPort implements GitPort {
   constructor(private readonly repo: ApiRepository, public readonly root: string) {}
@@ -135,6 +147,7 @@ export class VscodeGitPort implements GitPort {
   }
 
   async remotes(): Promise<RemoteEntry[]> {
+    await this.repo.status();
     return this.repo.state.remotes.map((remote) => ({ name: remote.name, fetchUrl: remote.fetchUrl, pushUrl: remote.pushUrl }));
   }
 
@@ -183,13 +196,20 @@ export class VscodeGitPort implements GitPort {
   }
 
   async remoteHeadBranch(remote: string): Promise<string | undefined> {
+    const common = commonDirOf(this.root);
+    if (common && /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(remote)) {
+      try {
+        const pointer = /^ref:\s*refs\/remotes\/([^\s]+)\s*$/.exec(fs.readFileSync(path.join(common, "refs", "remotes", remote, "HEAD"), "utf8"));
+        if (pointer && pointer[1].startsWith(`${remote}/`)) return pointer[1].slice(remote.length + 1);
+      } catch {}
+    }
     const refs = (await this.refs(`refs/remotes/${remote}`)).filter((ref) => ref.type === REF_REMOTE_HEAD && ref.name);
     const head = refs.find((ref) => ref.name === `${remote}/HEAD`);
     if (!head?.commit) return undefined;
     const names = refs
       .filter((ref) => ref.name !== `${remote}/HEAD` && ref.commit === head.commit)
       .map((ref) => (ref.name as string).slice(remote.length + 1));
-    return names.find((name) => name === "main") ?? names.find((name) => name === "master") ?? (names.length === 1 ? names[0] : undefined);
+    return names.length === 1 ? names[0] : undefined;
   }
 
   async fetch(remote: string, ref: string): Promise<void> {

@@ -8,11 +8,12 @@ import { airGapOffMessage } from "../airgap.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
 import { appendCoAuthorTrailer, draftCommitAndDescription, DraftError } from "../integrations/GitCommit.js";
 import { readResponse } from "../providers/receipt/receiptView.js";
+import { findSecrets, redactSecrets } from "../secretScan.js";
 import type { Receipt } from "../providers/receipt/types.js";
 import { FetchLike, GitHubClient, GitHubError, HttpResponse } from "../integrations/pullRequest/github.js";
 import { HostKind, enterpriseHostsFrom, newPullRequestUrl, requestNoun } from "../integrations/pullRequest/remotes.js";
 import { branchPrefix, isValidBranchName, suggestBranchName } from "../integrations/pullRequest/branchName.js";
-import { SecretHit, chooseReviewers, closedIssuesIn, isLockfile, mentionsIn, secretsInText, sizeWarningLimit } from "../integrations/pullRequest/checks.js";
+import { SecretHit, chooseReviewers, closedIssuesIn, isLockfile, looksSensitive, mentionsIn, secretsInText, sizeWarningLimit } from "../integrations/pullRequest/checks.js";
 import { MAX_COMMIT_MESSAGE, MAX_DESCRIPTION, MAX_TITLE, ReceiptLink, cleanDraft, cleanTitle, composeBody, composeReceiptComment, plainText } from "../integrations/pullRequest/body.js";
 import {
   FlowDeps, FlowError, RepoContext, RunMode, RunPlan, RunResult, RunState, SelectionReport, StepId,
@@ -124,6 +125,8 @@ export class PullRequestController {
   private selection: SelectionReport | null = null;
   private receipt: LoadedReceipt | null = null;
   private receiptReason: string | null = "Loading the receipt…";
+  private receiptLoading = false;
+  private branchRenamedFrom: string | null = null;
   private form: FormState = freshForm();
   private opened = new Set<string>();
   private generation = 0;
@@ -243,11 +246,11 @@ export class PullRequestController {
     this.postView();
     this.postField("branchName", this.form.branchName);
     if (this.form.descriptionSource === "template") this.postField("description", this.form.description);
-    void this.loadReceipt(generation);
     void this.loadAssignees(generation);
-    this.scheduleEvaluate(0);
-    void this.draft(generation, this.form.descriptionSource !== "template");
     if (this.form.createBranch) void this.ensureFreeBranch(generation);
+    this.scheduleEvaluate(0);
+    void this.loadReceipt(generation);
+    void this.draft(generation, this.form.descriptionSource !== "template");
   }
 
   private reset(): void {
@@ -256,6 +259,8 @@ export class PullRequestController {
     this.selection = null;
     this.receipt = null;
     this.receiptReason = "Loading the receipt…";
+    this.receiptLoading = false;
+    this.branchRenamedFrom = null;
     this.blocked = null;
     this.plan = null;
     this.runState = {};
@@ -285,7 +290,7 @@ export class PullRequestController {
       ? suggestBranchName(branchPrefix(settings.get("pullRequest.branchPrefix")), undefined, this.scopeFiles().map((file) => file.path))
       : context.head.branch ?? "";
     this.form.fromLatest = true;
-    this.form.attachReceipt = settings.get<boolean>("pullRequest.attachReceipt", true) !== false;
+    this.form.attachReceipt = settings.inspect<boolean>("pullRequest.attachReceipt")?.globalValue !== false;
     if (context.template) {
       this.form.description = plainText(context.template, MAX_DESCRIPTION);
       this.form.descriptionSource = "template";
@@ -309,7 +314,12 @@ export class PullRequestController {
   private isTicked(file: PrFile): boolean {
     if (this.form.ticked.has(file.path)) return true;
     if (this.form.unticked.has(file.path)) return false;
-    return !this.receipt?.sensitive.has(file.path);
+    return !this.isSensitive(file.path);
+  }
+
+  /** Flagged by the turn's receipt, or named like a secrets file by the same rule the engine uses. */
+  private isSensitive(filePath: string): boolean {
+    return !!this.receipt?.sensitive.has(filePath) || looksSensitive(filePath);
   }
 
   private tickedFiles(): PrFile[] {
@@ -345,6 +355,9 @@ export class PullRequestController {
       return;
     }
     let raw: unknown;
+    this.receiptLoading = true;
+    this.receiptReason = "Loading the receipt…";
+    this.postView();
     try {
       raw = await rpc.call<unknown>("session.receipt", {
         session_id: turn.sessionId,
@@ -353,6 +366,8 @@ export class PullRequestController {
       });
     } catch {
       raw = null;
+    } finally {
+      if (generation === this.generation) this.receiptLoading = false;
     }
     if (generation !== this.generation) return;
     const response = readResponse(raw);
@@ -441,7 +456,7 @@ export class PullRequestController {
     if (this.receipt?.high.some((finding) => finding.kind === "git_internals")) {
       notes.push("Committing and pushing will run this repository's git hooks.");
     }
-    if ([...(this.receipt?.sensitive ?? [])].some((file) => ticked.has(file))) {
+    if ([...ticked].some((file) => this.isSensitive(file))) {
       notes.push("A sensitive file is ticked. Pushing it can publish secrets.");
     }
     const placeText: Record<string, string> = { commit_message: "in the commit message", title: "in the title", description: "in the description" };
@@ -454,7 +469,7 @@ export class PullRequestController {
       notes.push("Remove the key and rotate it, untick the file, or tick below if it's a test value. The scan knows common key formats only; a plain password can slip past it.");
     }
     if (!items.length) return null;
-    const key = createHash("sha256").update(JSON.stringify(items)).digest("hex").slice(0, 16);
+    const key = createHash("sha256").update(JSON.stringify([items, notes])).digest("hex").slice(0, 16);
     return { items, notes, key };
   }
 
@@ -505,6 +520,7 @@ export class PullRequestController {
     const ctx = this.context;
     if (!ctx) return "Reading the repository…";
     if (this.host.agentRunning()) return "Wait for the turn to finish. Files are still changing.";
+    if (this.receiptLoading) return "Loading the receipt…";
     const ticked = this.tickedFiles();
     if (!ticked.length) return "Tick at least one file.";
     if (!ctx.userConfigured) return "Set your git name and email first: git config --global user.name \"Your Name\" and git config --global user.email you@example.com";
@@ -587,7 +603,7 @@ export class PullRequestController {
     const files: PrFileRow[] = this.scopeFiles().map((file) => {
       const tags: PrTag[] = [];
       const checked = tickedSet.has(file.path);
-      if (this.receipt?.sensitive.has(file.path)) tags.push({ text: checked ? "sensitive" : "sensitive · left out", tone: "danger" });
+      if (this.isSensitive(file.path)) tags.push({ text: checked ? "sensitive" : "sensitive · left out", tone: "danger" });
       if (this.receipt?.runsCode.has(file.path)) tags.push({ text: "runs code", tone: "danger" });
       const lines = secretsByPath.get(file.path);
       if (lines?.length) tags.push({ text: lines[0] ? `secret · line ${lines[0]}` : "secret", tone: "danger" });
@@ -643,6 +659,8 @@ export class PullRequestController {
       : head.branch === this.form.base
         ? `You're on ${head.branch}, so this goes on a new branch. ${head.branch} itself won't change.`
         : this.form.createBranch ? `A new branch from ${head.branch}.` : `Commits onto ${head.branch}, your current branch.`;
+    const renamed = this.form.createBranch && this.branchRenamedFrom && this.branchRenamedFrom !== this.form.branchName && !this.form.branchEdited
+      ? ` ${this.branchRenamedFrom} is taken, so this uses ${this.form.branchName}.` : "";
 
     let account: PrFormView["account"] = null;
     let accountNote: string | null = null;
@@ -699,7 +717,7 @@ export class PullRequestController {
         current: head.branch,
         mustCreate: this.mustCreate(),
         create: this.form.createBranch,
-        note: branchNote,
+        note: branchNote + renamed,
         nameProblem: this.form.createBranch && this.form.branchName && !isValidBranchName(this.form.branchName)
           ? "Use letters, numbers, dots, dashes, underscores and slashes."
           : this.form.branchTaken ? "That name is taken." : null,
@@ -870,9 +888,11 @@ export class PullRequestController {
     let diff = "";
     for (const file of files) {
       if (diff.length >= 8000) break;
+      if (this.isSensitive(file.path)) continue;
       const res = await this.fileDiff(file.path);
       if (res?.diff) diff += res.diff.endsWith("\n") ? res.diff : res.diff + "\n";
     }
+    diff = redactSecrets(diff, findSecrets(diff), "[secret removed]");
     if (generation !== this.generation) return;
     if (!diff.trim()) {
       this.draftNote = "Nothing to draft from: the ticked files have no text changes.";
@@ -938,6 +958,7 @@ export class PullRequestController {
     if (seq !== this.branchSeq || generation !== this.generation || this.form.branchEdited) return;
     this.form.branchTaken = false;
     if (free && free !== wanted) {
+      this.branchRenamedFrom = wanted;
       this.form.branchName = free;
       this.postField("branchName", free);
     }
@@ -1045,6 +1066,11 @@ export class PullRequestController {
     if (commit !== null && commit !== this.form.commitMessage) {
       this.form.commitMessage = commit;
       this.form.commitEdited = true;
+      const subject = cleanTitle(commit.split("\n", 1)[0]);
+      if (!this.form.titleEdited && subject && subject !== this.form.title) {
+        this.form.title = subject;
+        this.postField("title", subject);
+      }
     }
     const title = this.str(changes.title, MAX_TITLE * 2);
     if (title !== null && title !== this.form.title) {
@@ -1412,7 +1438,7 @@ export class PullRequestController {
       case "protected": return out(`${remote} protects this branch`, `Pushing straight to it isn't allowed.${local}`, [{ id: "push_new_name", label: "Push to a new branch", primary: true }, output]);
       case "too_large": return out("A file is too large for the host", `The host refuses very large files. Untick it or use Git LFS.${local}`, [{ ...output, primary: true }]);
       case "workflow_scope": return out("Git's sign-in can't change workflow files", `Pushing changes to .github/workflows needs the workflow permission. Sign in to GitHub again in VS Code, or use a token with that permission.${local}`, [{ ...output, primary: true }, { ...retry, primary: false }]);
-      case "push_hook": return out("Your pre-push hook stopped the push", `Nothing was pushed.${local}`, [{ ...output, primary: true }, { ...retry, primary: false }]);
+      case "push_hook": return out("A hook refused the push", `Your pre-push hook or a rule on ${remote} stopped it; Show Git output says which. Nothing was pushed.${local}`, [{ ...output, primary: true }, { ...retry, primary: false }]);
       case "no_access": return out(`You can't push to ${target}`, `Fork it on GitHub, add your fork as a remote, then try again.${local}`, [{ ...output, primary: true }]);
       case "auth": return out(`Git couldn't sign in to ${remote}`, `Check your git credentials, then try again.${local}`, [retry, output]);
       case "network": return out(`Couldn't reach ${remote}`, `Check your connection, then try again.${local}`, [retry, output]);

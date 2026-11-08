@@ -120,15 +120,23 @@ export class GitHubClient {
         signal: controller.signal,
       });
     } catch {
-      throw new GitHubError(controller.signal.aborted ? "timeout" : "network");
-    } finally {
       clearTimeout(timer);
+      throw new GitHubError(controller.signal.aborted ? "timeout" : "network");
     }
     let text = "";
     try {
-      text = await response.text();
+      text = await Promise.race([
+        response.text(),
+        new Promise<string>((_, reject) => {
+          if (controller.signal.aborted) reject(new Error("timeout"));
+          controller.signal.addEventListener("abort", () => reject(new Error("timeout")), { once: true });
+        }),
+      ]);
     } catch {
+      if (controller.signal.aborted) throw new GitHubError("timeout");
       text = "";
+    } finally {
+      clearTimeout(timer);
     }
     let data: unknown = null;
     if (text) {
@@ -154,7 +162,7 @@ export class GitHubClient {
     if (status === 403 && response.headers.get("x-github-sso")) {
       return new GitHubError("sso", status, ssoUrlFromHeader(response.headers.get("x-github-sso")));
     }
-    if ((status === 403 || status === 429) && (remaining === "0" || response.headers.get("retry-after") || message.includes("rate limit"))) {
+    if (status === 429 || status === 403 && (remaining === "0" || response.headers.get("retry-after") || message.includes("rate limit"))) {
       const retry = Number(response.headers.get("retry-after"));
       return new GitHubError("rate_limited", status, null, resetAt ?? (Number.isFinite(retry) && retry > 0 ? Date.now() + retry * 1000 : null));
     }

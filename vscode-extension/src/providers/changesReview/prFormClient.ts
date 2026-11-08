@@ -26,6 +26,8 @@ export function prFormClient(vscode: PrVsCodeApi, hooks: PrClientHooks): void {
   let previewOpen = false;
   let reviewers: string[] = [];
   const dirty: Record<string, boolean> = Object.create(null);
+  const fromHost: Record<string, string> = Object.create(null);
+  const fieldIds: Record<string, string> = { branchName: "prf-branch", commitMessage: "prf-commit", title: "prf-title-input", description: "prf-desc" };
   const timers: Record<string, ReturnType<typeof setTimeout>> = Object.create(null);
   let lastBaseOptions = "";
 
@@ -141,6 +143,10 @@ export function prFormClient(vscode: PrVsCodeApi, hooks: PrClientHooks): void {
     for (const id of Object.keys(kept)) {
       const el = byId(id) as HTMLInputElement | HTMLTextAreaElement | null;
       if (el && kept[id] !== undefined) el.value = kept[id] as string;
+    }
+    for (const field of Object.keys(fieldIds)) {
+      const el = byId(fieldIds[field]) as HTMLInputElement | HTMLTextAreaElement | null;
+      if (el && !el.value && !dirty[field] && fromHost[field] !== undefined) el.value = fromHost[field];
     }
     wireInputs();
   }
@@ -325,6 +331,7 @@ export function prFormClient(vscode: PrVsCodeApi, hooks: PrClientHooks): void {
       if (previous !== "form" || key !== formKey) {
         if (previous !== "form") {
           for (const field of Object.keys(dirty)) delete dirty[field];
+          for (const field of Object.keys(fromHost)) if (previous === "closed" || previous === "loading") delete fromHost[field];
           reviewers = [];
           previewOpen = false;
         }
@@ -362,9 +369,9 @@ export function prFormClient(vscode: PrVsCodeApi, hooks: PrClientHooks): void {
   }
 
   function setField(field: string, value: unknown) {
-    if (typeof value !== "string" || dirty[field]) return;
-    const ids: Record<string, string> = { branchName: "prf-branch", commitMessage: "prf-commit", title: "prf-title-input", description: "prf-desc" };
-    const el = byId(ids[field]) as HTMLInputElement | HTMLTextAreaElement | null;
+    if (typeof value !== "string" || !Object.prototype.hasOwnProperty.call(fieldIds, field) || dirty[field]) return;
+    fromHost[field] = value;
+    const el = byId(fieldIds[field]) as HTMLInputElement | HTMLTextAreaElement | null;
     if (el) el.value = value;
   }
 

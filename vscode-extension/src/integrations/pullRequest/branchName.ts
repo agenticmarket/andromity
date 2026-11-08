@@ -57,9 +57,9 @@ export function suggestBranchName(prefix: string, subject: string | undefined, f
   return isValidBranchName(name) ? name : `${DEFAULT_BRANCH_PREFIX}changes`;
 }
 
-/** `name`, or `name-2`, `name-3` … the first one `taken` says is free. Gives up after 50 tries. */
-export async function firstFreeName(name: string, taken: (candidate: string) => Promise<boolean>): Promise<string | null> {
-  for (let n = 1; n <= 50; n++) {
+/** `name`, or `name-2`, `name-3` … the first one `taken` says is free, starting at `name-<start>` when start > 1. Gives up after 50 tries. */
+export async function firstFreeName(name: string, taken: (candidate: string) => Promise<boolean>, start = 1): Promise<string | null> {
+  for (let n = start; n <= start + 49; n++) {
     const suffix = n === 1 ? "" : `-${n}`;
     const candidate = name.length + suffix.length > MAX_BRANCH_LENGTH ? name.slice(0, MAX_BRANCH_LENGTH - suffix.length).replace(/[-./]+$/, "") + suffix : name + suffix;
     if (!isValidBranchName(candidate)) return null;

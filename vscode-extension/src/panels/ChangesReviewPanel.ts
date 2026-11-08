@@ -99,8 +99,12 @@ export class ChangesReviewPanel {
       current._panel.reveal(column);
       current._rpcClient = rpcClient;
       if (!current._pr.isRunning()) {
+        const next = readTurnRef(turn);
+        const changed = next?.sessionId !== current._turn?.sessionId || next?.turnIndex !== current._turn?.turnIndex
+          || JSON.stringify(turnFiles ?? null) !== JSON.stringify(current._turnFiles ?? null);
         current._turnFiles = turnFiles;
-        current._turn = readTurnRef(turn);
+        current._turn = next;
+        if (changed) current._pr.turnChanged();
       }
       if (openPullRequest) current._openPullRequestWhenReady = true;
       if (initialFilePath) {

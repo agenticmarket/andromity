@@ -64,6 +64,18 @@ export function isLocalRemote(url: string | undefined): boolean {
     || /^[A-Za-z]:[\\/]/.test(text) || text.startsWith("\\\\");
 }
 
+/** The host name of a remote URL Andromity can't classify, for the air-gap check. */
+function hostOfUrl(raw: string): string | null {
+  const text = raw.trim();
+  try {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return new URL(text).hostname.toLowerCase() || null;
+  } catch {
+    return null;
+  }
+  const scp = /^(?:[^@/:]+@)?([^@/:]+):/.exec(text);
+  return scp && scp[1].length > 1 ? scp[1].toLowerCase() : null;
+}
+
 function chooseRemote(head: HeadInfo, names: string[]): string | null {
   if (head.upstream && names.includes(head.upstream.remote)) return head.upstream.remote;
   if (names.includes("origin")) return "origin";
@@ -117,8 +129,13 @@ export async function prepareContext(deps: FlowDeps): Promise<RepoContext> {
   const url = entry?.pushUrl || entry?.fetchUrl;
   const parsed = parseRemoteUrl(url, deps.enterpriseHosts);
   const local = isLocalRemote(url);
-  const canReachRemote = !!entry && (!deps.airGap.enabled || local
-    || (!!parsed && deps.airGap.allowedHosts.some((host) => host.toLowerCase() === parsed.host)));
+  const reachable = (raw: string | undefined) => {
+    if (!raw || isLocalRemote(raw)) return true;
+    const other = parseRemoteUrl(raw, deps.enterpriseHosts);
+    const host = other ? other.host : hostOfUrl(raw);
+    return !!host && deps.airGap.allowedHosts.some((allowed) => allowed.toLowerCase() === host);
+  };
+  const canReachRemote = !!entry && (!deps.airGap.enabled || (reachable(entry.fetchUrl) && reachable(entry.pushUrl)));
 
   const context: RepoContext = {
     head,
@@ -361,10 +378,12 @@ export function classifyGitError(step: StepId, error: unknown): FlowErrorKind {
     if (/GH006|protected branch/i.test(text)) return "protected";
     if (/GH001|large files detected|exceeds GitHub's file size limit|file size limit/i.test(text)) return "too_large";
     if (/refusing to allow an? (OAuth App|GitHub App|Personal Access Token).*workflow/i.test(text)) return "workflow_scope";
-    if (code === "PushRejected" || /\[rejected\]|non-fast-forward|fetch first|stale info/i.test(text)) return "push_rejected";
-    if (/pre-push hook|hook declined/i.test(text)) return "push_hook";
-    if (code === "PermissionDenied" || /Permission to .+ denied|permission denied to|403/i.test(text) && !/publickey/i.test(text)) return "no_access";
-    if (code === "AuthenticationFailed" || /Authentication failed|could not read Username|Permission denied \(publickey\)|terminal prompts disabled/i.test(text)) return "auth";
+    if (/hook declined|pre-push|remote rejected/i.test(text)) return "push_hook";
+    if (/\[rejected\]|non-fast-forward|fetch first|stale info/i.test(text)) return "push_rejected";
+    if (/Permission denied \(publickey|Host key verification failed/i.test(text)) return "auth";
+    if (code === "PermissionDenied" || /Permission to .+ denied|permission denied to|returned error: 403/i.test(text)) return "no_access";
+    if (code === "AuthenticationFailed" || /Authentication failed|could not read Username|terminal prompts disabled/i.test(text)) return "auth";
+    if (code === "PushRejected") return /failed to push some refs/i.test(text) && !/\[rejected\]/.test(text) ? "push_hook" : "push_rejected";
     if (code === "RemoteConnectionError" || /Could not resolve host|unable to access|Connection (timed out|refused)|Network is unreachable|Could not read from remote/i.test(text)) return "network";
   }
   if (step === "commit") return "commit_failed";
@@ -418,7 +437,13 @@ async function verifyReviewed(deps: FlowDeps, plan: RunPlan): Promise<void> {
 
 function checkPlan(plan: RunPlan): void {
   if (!isValidBranchName(plan.branch) || !isValidBranchName(plan.base)) throw new FlowError("branch", "git_failed");
-  if (plan.startFrom !== undefined && !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._/-]+$/.test(plan.startFrom)) throw new FlowError("branch", "git_failed");
+  if (plan.startFrom !== undefined) {
+    const at = plan.startFrom.indexOf("/");
+    const remote = at > 0 ? plan.startFrom.slice(0, at) : "";
+    if (!/^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/.test(remote) || remote.includes("..") || !isValidBranchName(plan.startFrom.slice(at + 1))) {
+      throw new FlowError("branch", "git_failed");
+    }
+  }
   if (!plan.files.length) throw new FlowError("stage", "nothing_committed");
   if (!plan.commitMessage.trim()) throw new FlowError("commit", "commit_failed");
   if (plan.mode !== "commit" && !plan.remote) throw new FlowError("push", "git_failed");
@@ -458,6 +483,7 @@ export async function runPlan(
       return;
     }
     if (!plan.createBranch || state.branchReady) throw new FlowError("branch", "branch_moved");
+    await verifyReviewed(deps, plan);
     if (await git.localBranchExists(plan.branch)) throw new FlowError("branch", "branch_exists");
     await git.createBranch(plan.branch, plan.startFrom);
     const after = await git.head();
@@ -550,7 +576,7 @@ export async function runPlan(
 
 /** After a push was rejected: the same commit under the first free `<branch>-N` name, checked out. */
 export async function moveToFreshBranch(deps: FlowDeps, context: RepoContext, plan: RunPlan): Promise<string> {
-  const name = await freeBranchName(deps, context, `${plan.branch}-2`);
+  const name = await firstFreeName(plan.branch, (candidate) => branchTaken(deps, context, candidate), 2);
   if (!name) throw new FlowError("push", "branch_exists");
   await deps.git.createBranch(name);
   return name;

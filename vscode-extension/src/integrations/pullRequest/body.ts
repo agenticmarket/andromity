@@ -11,7 +11,7 @@ export function plainText(value: unknown, limit: number): string {
   if (typeof value !== "string") return "";
   return value
     .replace(/\r\n?/g, "\n")
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
     .slice(0, limit);
 }
 
@@ -108,10 +108,29 @@ export interface ComposedBody {
   receiptShortened: boolean;
 }
 
+function count(text: string, pattern: RegExp): number {
+  return (text.match(pattern) || []).length;
+}
+
+/** Closes anything the description leaves open (an HTML comment, a code fence, <details>, <pre>), so text
+ *  appended after it is shown as written rather than hidden or turned into code. */
+export function closeOpenBlocks(text: string): string {
+  let out = text;
+  if (out.lastIndexOf("<!--") > out.lastIndexOf("-->")) out += " -->";
+  if (count(out, /^ {0,3}```/gm) % 2 === 1) out += "\n```";
+  if (count(out, /^ {0,3}~~~/gm) % 2 === 1) out += "\n~~~";
+  const pre = count(out, /<pre\b[^>]*>/gi) - count(out, /<\/pre>/gi);
+  if (pre > 0) out += "\n" + "</pre>".repeat(Math.min(pre, 50));
+  const details = count(out, /<details\b[^>]*>/gi) - count(out, /<\/details>/gi);
+  if (details > 0) out += "\n" + "</details>".repeat(Math.min(details, 50));
+  return out;
+}
+
 /** The user's description, then a rule, the fixed link line and the engine's receipt Markdown. */
 export function composeBody(description: string, receipt?: { markdown: string; link: ReceiptLink }): ComposedBody {
-  const text = plainText(description, MAX_DESCRIPTION).trim();
-  if (!receipt || !receipt.markdown.trim()) return { body: text, receiptShortened: false };
+  const raw = plainText(description, MAX_DESCRIPTION).trim();
+  if (!receipt || !receipt.markdown.trim()) return { body: raw, receiptShortened: false };
+  const text = closeOpenBlocks(raw);
   const head = `${text ? text + "\n\n" : ""}---\n\n${receiptLinkLine(receipt.link)}\n\n`;
   const fitted = fitReceipt(receipt.markdown.trim(), Math.max(0, BODY_BUDGET - head.length));
   return { body: head + fitted.text, receiptShortened: fitted.shortened };

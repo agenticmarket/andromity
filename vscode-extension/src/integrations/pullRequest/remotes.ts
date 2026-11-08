@@ -15,6 +15,7 @@ export interface ParsedRemote {
 }
 
 const SEGMENT = /^[A-Za-z0-9._~-]+$/;
+const AZURE_PROJECT = /^[A-Za-z0-9._~-](?:[A-Za-z0-9._~ -]*[A-Za-z0-9._~-])?$/;
 const MAX_URL = 2048;
 
 function hostKind(host: string, enterpriseHosts: readonly string[]): HostKind {
@@ -96,7 +97,8 @@ export function parseRemoteUrl(raw: unknown, enterpriseHosts: readonly string[] 
     }
   }
 
-  if (segments.length < 2 || segments.some((segment) => !SEGMENT.test(segment) || segment === "." || segment === "..")) {
+  const valid = (segment: string, index: number) => (kind === "azure" && index === 1 ? AZURE_PROJECT : SEGMENT).test(segment);
+  if (segments.length < 2 || segments.some((segment, index) => !valid(segment, index) || segment === "." || segment === "..")) {
     return null;
   }
   if ((kind === "github" || kind === "ghe" || kind === "bitbucket" || kind === "gitea") && segments.length !== 2) return null;

@@ -15,6 +15,33 @@ export function isLockfile(path: string): boolean {
   return LOCKFILES.has(base.toLowerCase());
 }
 
+const SENSITIVE_NAMES = new Set([".env", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "authorized_keys", "known_hosts", "config.toml"]);
+const SENSITIVE_DIRS = new Set([".ssh", ".git", ".aws", ".gnupg"]);
+const SENSITIVE_WORD = /(^|[._\-/])(secret|password|credential|token)s?([._\-/]|$)/i;
+const SOURCE_EXTS = new Set([".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".rs", ".c", ".cpp", ".h", ".hpp", ".java", ".cs", ".rb", ".php"]);
+
+/** A path component as Windows opens it: no stream suffix, no trailing dots or spaces, lower case. */
+function policyName(part: string): string {
+  const name = part.includes(":") ? part.split(":", 1)[0] : part;
+  const stripped = name.replace(/[. ]+$/, "");
+  return (stripped || name).toLowerCase();
+}
+
+/** The engine's sensitive-file rule (security.is_sensitive_path) by name, so the form can leave such files
+ *  out before the turn's receipt arrives, and when there is no turn at all. */
+export function looksSensitive(path: string): boolean {
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean).map(policyName);
+  const name = parts[parts.length - 1] || "";
+  if (!name) return false;
+  if (SENSITIVE_NAMES.has(name) || name.startsWith(".env.")) return true;
+  if (parts.some((part) => SENSITIVE_DIRS.has(part))) return true;
+  const dot = name.lastIndexOf(".");
+  if (dot > 0 && SOURCE_EXTS.has(name.slice(dot))) {
+    return ["secret", "secrets", "password", "passwords", "credential", "credentials"].includes(name.slice(0, dot));
+  }
+  return SENSITIVE_WORD.test(name);
+}
+
 export interface SizedFile {
   path: string;
   additions: number;
@@ -227,7 +254,7 @@ export function mentionsIn(text: string): string[] {
 /** Issues GitHub will close when this merges ("Fixes #12", "closes org/repo#3"), outside code. */
 export function closedIssuesIn(text: string): string[] {
   const out = new Set<string>();
-  const re = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+((?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[0-9]+)\b/gi;
+  const re = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+((?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[0-9]+\b|https?:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/[0-9]+)/gi;
   let match: RegExpExecArray | null;
   const plain = withoutCode(text);
   while ((match = re.exec(plain)) !== null) {

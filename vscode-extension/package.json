@@ -765,6 +765,7 @@
         },
         "andromity.pullRequest.attachReceipt": {
           "type": "boolean",
+          "scope": "application",
           "default": true,
           "description": "Attach the turn receipt to pull requests created from Changes Review. You can still untick it in the form."
         },
