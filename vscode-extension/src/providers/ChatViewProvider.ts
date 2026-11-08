@@ -1310,6 +1310,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    *  `turnFiles: null` means the caller has no turn scope (e.g. an edit row in a
    *  still-running turn), so the latest completed turn must not be substituted. */
   public openReviewWebview(filePath?: string, turnFiles?: string[] | null, turn?: TurnRef | null, openPullRequest = false) {
+    ChangesReviewPanel.setSessionLookup(() => this._currentSessionId || null);
     const useLatest = turnFiles === undefined && this._latestTurnFiles.size > 0;
     const effectiveTurnFiles = turnFiles === null
       ? undefined

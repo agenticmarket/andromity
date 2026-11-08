@@ -39,6 +39,8 @@ export interface PrHost {
   files(): PrFile[];
   turnFiles(): string[] | null;
   turn(): TurnRef | null;
+  /** The chat's current session, used to find the latest turn's receipt when no turn is known. */
+  currentSession?(): string | null;
   scope(): "turn" | "all";
   agentRunning(): boolean;
   refresh(): Promise<void>;
@@ -126,6 +128,8 @@ export class PullRequestController {
   private receipt: LoadedReceipt | null = null;
   private receiptReason: string | null = "Loading the receipt…";
   private receiptLoading = false;
+  /** The receipt was found as the chat's latest turn rather than handed over with the files. */
+  private receiptRecovered = false;
   private branchRenamedFrom: string | null = null;
   private templateText: string | null = null;
   private form: FormState = freshForm();
@@ -343,14 +347,17 @@ export class PullRequestController {
     const hadReceipt = !!this.receipt;
     this.receipt = null;
     if (hadReceipt) this.scheduleEvaluate(0);
+    this.receiptRecovered = false;
     const rpc = this.host.rpc();
-    const turn = this.host.turn();
-    if (!this.host.turnFiles() || !turn) {
+    const known = this.host.turnFiles() ? this.host.turn() : null;
+    const sessionId = known?.sessionId ?? this.host.currentSession?.() ?? null;
+    const recovering = !known;
+    if (!sessionId || !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) {
       this.receiptReason = "There's no agent turn for these changes, so there's no receipt to attach.";
       this.postView();
       return;
     }
-    if (turn.turnIndex === null) {
+    if (known && known.turnIndex === null) {
       this.receiptReason = "This turn's receipt isn't ready yet. It appears a moment after the turn ends.";
       this.postView();
       return;
@@ -366,9 +373,9 @@ export class PullRequestController {
     this.postView();
     try {
       raw = await rpc.call<unknown>("session.receipt", {
-        session_id: turn.sessionId,
+        session_id: sessionId,
         project_path: this.host.projectPath(),
-        turn_index: turn.turnIndex,
+        ...(known ? { turn_index: known.turnIndex } : {}),
       });
     } catch {
       raw = null;
@@ -377,7 +384,12 @@ export class PullRequestController {
     }
     if (generation !== this.generation) return;
     const response = readResponse(raw);
-    if (!response.success || !response.receipt || !response.markdown || response.receipt.turn_index !== turn.turnIndex) {
+    if (recovering && (!response.success || !response.receipt || !response.markdown)) {
+      this.receiptReason = "There's no agent turn for these changes, so there's no receipt to attach.";
+      this.postView();
+      return;
+    }
+    if (!response.success || !response.receipt || !response.markdown || (known && response.receipt.turn_index !== known.turnIndex)) {
       this.receiptReason = "The receipt couldn't be loaded. You can still ship without it.";
       this.trackOnce("pr_receipt_unavailable");
       this.postView();
@@ -397,6 +409,16 @@ export class PullRequestController {
       if (finding.kind === "sensitive" && rel && files.has(rel)) sensitive.add(rel);
       if (finding.kind === "runs_code" && rel) runsCode.add(rel);
       if (finding.severity === "high") high.push({ text: finding.detail, subject: finding.subject, kind: finding.kind });
+    }
+    if (recovering) {
+      const changed = new Set(this.host.files().map((file) => file.path));
+      if (![...files.keys()].some((file) => changed.has(file))) {
+        this.receiptReason = "The latest turn in this chat didn't change these files, so there's no receipt to attach.";
+        this.postView();
+        return;
+      }
+      this.receiptRecovered = true;
+      this.trackOnce("pr_receipt_recovered");
     }
     this.receipt = { receipt, markdown: response.markdown, files, sensitive, runsCode, high };
     this.receiptReason = null;
@@ -687,7 +709,7 @@ export class PullRequestController {
     const r = this.receipt?.receipt;
     const findings = r?.needs_attention.length ?? 0;
     const receiptSummary = r
-      ? `Receipt · turn ${r.turn_index + 1} · ${plural(r.summary.files_changed, "file")} changed · ${plural(r.summary.commands, "command")}${findings ? ` · ${findings} to check` : " · nothing flagged"}${r.sealed?.matches ? " · sealed" : ""}`
+      ? `Receipt · turn ${r.turn_index + 1}${this.receiptRecovered ? " (the latest turn in this chat)" : ""} · ${plural(r.summary.files_changed, "file")} changed · ${plural(r.summary.commands, "command")}${findings ? ` · ${findings} to check` : " · nothing flagged"}${r.sealed?.matches ? " · sealed" : ""}`
       : null;
     const isPublic = ctx.github.repo ? !ctx.github.repo.isPrivate : null;
     const publicNote = receiptShown && this.receipt && this.form.attachReceipt
@@ -779,7 +801,7 @@ export class PullRequestController {
       primary: { label: primaryLabel, enabled: !problem },
       secondary,
       disabledReason: problem,
-      plan: this.planSentence(mode, primaryAction, ticked.length),
+      plan: this.planSentence(mode, primaryAction, ticked.length) + this.receiptSentence(mode),
     };
   }
 
@@ -808,6 +830,15 @@ export class PullRequestController {
       default:
         return `Commits ${files} to ${branch}${from} on this computer only. Nothing is pushed.`;
     }
+  }
+
+  private receiptSentence(mode: RunMode): string {
+    if (mode === "commit") return "";
+    if (mode === "update") {
+      return this.receipt && this.form.commentReceipt ? "" : " No receipt is added.";
+    }
+    if (!this.receipt) return " No receipt is attached.";
+    return this.form.attachReceipt ? ` The receipt for turn ${this.receipt.receipt.turn_index + 1} is attached below the description.` : " The receipt is not attached.";
   }
 
   private receiptLink(commit?: string): ReceiptLink | null {
@@ -1382,6 +1413,9 @@ export class PullRequestController {
     if (result.mode === "pull_request" && result.pull && plan.target) {
       heading = `Pull request #${result.pull.number} opened`;
       url = pullUrl(plan.target, result.pull.number);
+      lines.push(this.receipt && this.form.attachReceipt
+        ? `The receipt for turn ${this.receipt.receipt.turn_index + 1} is at the end of the description.`
+        : "No receipt was attached.");
       actions.push({ id: "open_link", label: "Open on GitHub", primary: true }, { id: "copy_link", label: "Copy link" });
       if (result.reviewerProblem) {
         lines.push(result.reviewerProblem.kind === "invalid"

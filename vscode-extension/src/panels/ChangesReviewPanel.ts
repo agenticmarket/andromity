@@ -58,6 +58,11 @@ export class ChangesReviewPanel {
   private _openPullRequestWhenReady = false;
   private readonly _pr: PullRequestController;
   private static _agentRunning = false;
+  private static _sessionLookup: () => string | null = () => null;
+
+  public static setSessionLookup(lookup: () => string | null) {
+    ChangesReviewPanel._sessionLookup = lookup;
+  }
 
   public setTurnFiles(files?: string[], turn?: TurnRef | null) {
     this._turnFiles = files;
@@ -170,6 +175,7 @@ export class ChangesReviewPanel {
       })),
       turnFiles: () => this._turnFilesRel,
       turn: () => this._turn,
+      currentSession: () => ChangesReviewPanel._sessionLookup(),
       scope: () => this._scope,
       agentRunning: () => ChangesReviewPanel._agentRunning,
       refresh: () => this.loadChanges(undefined, true),
