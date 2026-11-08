@@ -127,6 +127,7 @@ export class PullRequestController {
   private receiptReason: string | null = "Loading the receipt…";
   private receiptLoading = false;
   private branchRenamedFrom: string | null = null;
+  private templateText: string | null = null;
   private form: FormState = freshForm();
   private opened = new Set<string>();
   private generation = 0;
@@ -214,7 +215,7 @@ export class PullRequestController {
     const airGap = currentAirGap();
     const github = airGap.enabled ? null : await this.githubClient("silent");
     this.deps = {
-      git: new VscodeGitPort(repo, root),
+      git: new VscodeGitPort(repo, root, typeof git.api.git?.path === "string" ? git.api.git.path : undefined),
       github,
       readFile: (rel) => this.readFile(root, rel),
       fileDiff: (rel) => this.fileDiff(rel),
@@ -261,6 +262,7 @@ export class PullRequestController {
     this.receiptReason = "Loading the receipt…";
     this.receiptLoading = false;
     this.branchRenamedFrom = null;
+    this.templateText = null;
     this.blocked = null;
     this.plan = null;
     this.runState = {};
@@ -293,6 +295,7 @@ export class PullRequestController {
     this.form.attachReceipt = settings.inspect<boolean>("pullRequest.attachReceipt")?.globalValue !== false;
     if (context.template) {
       this.form.description = plainText(context.template, MAX_DESCRIPTION);
+      this.templateText = this.form.description;
       this.form.descriptionSource = "template";
     }
   }
@@ -527,6 +530,7 @@ export class PullRequestController {
     if (!ctx) return "Reading the repository…";
     if (this.host.agentRunning()) return "Wait for the turn to finish. Files are still changing.";
     if (this.receiptLoading) return "Loading the receipt…";
+    if (!ctx.userConfigured) return "Set your git name and email first: git config --global user.name \"Your Name\" and git config --global user.email you@example.com, then reopen this form.";
     const ticked = this.tickedFiles();
     if (!ticked.length) return "Tick at least one file.";
     if (this.form.createBranch) {
@@ -649,7 +653,6 @@ export class PullRequestController {
     }
     if (ctx.github.problem === "rate_limited") notes.push({ text: "GitHub is limiting requests right now. Try again in a few minutes.", tone: "warn" });
     if (ctx.github.problem === "unavailable") notes.push({ text: "GitHub didn't answer. You can still push and open GitHub's page.", tone: "warn" });
-    if (!ctx.userConfigured) notes.push({ text: "Andromity can't see a git name and email for this repository. If committing fails, set them with git config --global user.name and user.email.", tone: "muted" });
     if (ctx.fetchFailed) notes.push({ text: `Couldn't check whether ${this.form.base} has moved.`, tone: "muted" });
     const latest = this.latestInfo();
     if (ctx.behind && !this.form.createBranch) {
@@ -934,8 +937,8 @@ export class PullRequestController {
       }
       if (describe && draft.description && !this.form.descriptionEdited) {
         const text = cleanDraft(draft.description);
-        this.form.description = this.form.descriptionSource === "template" && this.form.description.trim()
-          ? `${text}\n\n${this.form.description}` : text;
+        this.form.description = this.form.descriptionSource === "template" && this.templateText
+          ? `${text}\n\n${this.templateText}` : text;
         this.form.descriptionSource = this.form.descriptionSource === "template" ? "template" : "ai";
         this.postField("description", this.form.description);
       }
@@ -1156,7 +1159,8 @@ export class PullRequestController {
   }
 
   private async signIn(kind: "ask" | "renew" | "choose"): Promise<boolean> {
-    if (!this.deps || currentAirGap().enabled) return false;
+    if (!this.deps || currentAirGap().enabled || this.running) return false;
+    if (kind !== "renew" && this.phase !== "form") return false;
     this.track(kind === "ask" ? "pr_sign_in" : kind === "choose" ? "pr_switch_account" : "pr_sign_in_again");
     const client = await this.githubClient(kind);
     if (!client) {

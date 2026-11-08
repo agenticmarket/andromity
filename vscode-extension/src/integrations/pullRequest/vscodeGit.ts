@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFile } from "node:child_process";
 import { GitPort, HeadInfo, OperationInProgress, RemoteEntry } from "./types.js";
 
 interface ApiUri {
@@ -51,6 +52,7 @@ export interface ApiRepository {
 }
 
 export interface GitApi {
+  git?: { path?: string };
   repositories: ApiRepository[];
   openRepository?(root: vscode.Uri): Promise<ApiRepository | null>;
 }
@@ -121,7 +123,7 @@ function commonDirOf(root: string): string | null {
 
 /** GitPort over the built-in Git extension, so the user's credentials, hooks and signing apply. */
 export class VscodeGitPort implements GitPort {
-  constructor(private readonly repo: ApiRepository, public readonly root: string) {}
+  constructor(private readonly repo: ApiRepository, public readonly root: string, private readonly gitPath?: string) {}
 
   private abs(rel: string): string {
     return path.join(this.root, ...rel.split("/"));
@@ -188,7 +190,18 @@ export class VscodeGitPort implements GitPort {
         return undefined;
       }
     };
-    return (await read(this.repo.getConfig)) ?? (await read(this.repo.getGlobalConfig));
+    return (await read(this.repo.getConfig)) ?? (await read(this.repo.getGlobalConfig)) ?? (await this.effectiveConfig(key));
+  }
+
+  /** git's own answer for the repository, which also follows include and includeIf. Reads config only. */
+  private effectiveConfig(key: string): Promise<string | undefined> {
+    if (!this.gitPath || !/^[A-Za-z0-9.-]+$/.test(key)) return Promise.resolve(undefined);
+    return new Promise((resolve) => {
+      execFile(this.gitPath as string, ["config", "--get", key], { cwd: this.root, timeout: 5000, windowsHide: true }, (error, stdout) => {
+        const value = !error && typeof stdout === "string" ? stdout.trim() : "";
+        resolve(value || undefined);
+      });
+    });
   }
 
   async localBranchExists(name: string): Promise<boolean> {

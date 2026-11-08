@@ -39,7 +39,7 @@ export function extractCommitMessage(raw: string): string {
   // 2. Extract content from <commit_message>...</commit_message> tag if present
   //    The model may quote the prompt's own "<commit_message> and </commit_message>" instruction,
   //    so only a closed tag with real content counts and the last one wins.
-  const closedTags = [...text.matchAll(/<commit_message>([\s\S]*?)<\/commit_message>/gi)]
+  const closedTags = [...text.matchAll(/<commit_message>((?:(?!<commit_message>)[\s\S])*?)<\/commit_message>/gi)]
     .map(m => m[1].trim())
     .filter(m => m.length >= 5 && m.toLowerCase() !== "and");
   const openTag = text.match(/<commit_message>\s*([^<]{5,})$/i);
@@ -132,7 +132,7 @@ function isLikelyErrorOutput(text: string): boolean {
 export function extractTagged(raw: string, tag: string): string {
   if (!raw) return "";
   const text = raw.replace(/<think>[\s\S]*?<\/think>/gi, "");
-  const blocks = [...text.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "gi"))]
+  const blocks = [...text.matchAll(new RegExp(`<${tag}>((?:(?!<${tag}>)[\\s\\S])*?)</${tag}>`, "gi"))]
     .map((match) => match[1].trim())
     .filter((block) => block.length >= 5 && block.toLowerCase() !== "and");
   return blocks.length ? blocks[blocks.length - 1].replace(/^```[a-zA-Z0-9_-]*\n?/gm, "").replace(/```$/gm, "").trim() : "";
