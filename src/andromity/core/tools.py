@@ -2091,8 +2091,10 @@ CORE_TOOLS = [
             "description": (
                 "Executes a shell command (running tests, build commands, git, etc.). "
                 "IMPORTANT: This is a blocking call — the command must exit before control returns. "
-                "Do NOT use for long-running processes like dev servers (npm run dev, python manage.py runserver, etc.) "
-                "as they will block until timeout; start those with shell_bg instead."
+                "Do NOT use for long-running processes like servers (npm start, npm run dev, next start, "
+                "python manage.py runserver, etc.) as they will block until timeout; start those with shell_bg instead. "
+                "Piping a server into head or Select-Object -First does not make it exit: to see its first lines, "
+                "start it with shell_bg and read them with shell_read."
             ),
             "parameters": {
                 "type": "object",
@@ -2114,7 +2116,7 @@ CORE_TOOLS = [
                 "exits in that time, the result says so and includes its exit code and output. "
                 "Use shell_read(process_id) to check live output at any time. "
                 "Use shell_kill(process_id) to stop it. "
-                "Use this instead of shell_exec for: npm run dev, vite, webpack --watch, "
+                "Use this instead of shell_exec for: npm start, npm run dev, next start, vite, webpack --watch, "
                 "python manage.py runserver, pytest --watch, tail -f, etc."
             ),
             "parameters": {

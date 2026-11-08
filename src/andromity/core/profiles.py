@@ -242,7 +242,8 @@ def _commands(shell: str, os_name: str, is_wsl: bool) -> str:
         "# Running Commands",
         f"- Use syntax for {shell} on {os_name}. {paths}",
         "- Use `shell_exec` for commands that finish (tests, builds, git). Use `shell_bg` for anything that keeps "
-        "running (dev servers, watchers) and check on it with `shell_read`.",
+        "running (servers such as `npm start` or `npm run dev`, watchers) and check on it with `shell_read`. "
+        "Piping a server into `head` or `Select-Object -First` does not make it exit.",
         "- Commands cannot be interactive. Use non-interactive flags (`--yes`, `git --no-pager`, `CI=1`) and avoid "
         "editors, pagers and prompts (`git rebase -i`, `git add -p`).",
         "- When a command fails, read the error and find the cause before trying again. After two failed attempts at "
