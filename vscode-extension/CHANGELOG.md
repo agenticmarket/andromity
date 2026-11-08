@@ -17,6 +17,7 @@ All notable changes to the "andromity" extension will be documented in this file
 - Andromity's own git calls no longer run programs set in a repository's config.
 
 ### Security
+- **Only the gateway chooses its error cards.** A model provider could write the gateway's error format into its own error message or into a stream, and Andromity then showed the free gateway's Daily Limit or sign-in card with that card's buttons. The card type and action now come only from the gateway's own response headers, and the waitlist is offered only for the gateway's daily-limit refusal.
 - **Permission modes are checked strictly.** A mode with stray spaces or an unknown name is treated as SAFE everywhere, including for sub-agents. Before, a value such as "safe " matched none of the checks, so shell commands ran without asking. Lowering the mode also lowers sub-agents that are still running, and `/mode` in the terminal app now changes the current session's approvals.
 - File links in chat and Fingerprint are judged by where they really lead. A symlink or junction in the workspace that points outside it asks before opening and names the real file, a link to a network share outside the workspace is refused without connecting to it, and with no folder open a relative path is refused. A file that no longer exists is reported as not found, and the file that opens is the one that was checked.
 - In a folder opened by its network path (`\\server\share\...`), links to the folder's own files now open them. A network path written out in a link is still refused.

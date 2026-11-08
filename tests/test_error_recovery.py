@@ -20,6 +20,14 @@ def session(tmp_path):
     return Session(name="test-error-recovery", project_path=str(tmp_path))
 
 
+def _gateway_daily_limit(text: str) -> Exception:
+    """The gateway's daily-limit refusal as LiteLLM raises it: the message text and the gateway's typed header."""
+    err = Exception(text)
+    err.status_code = 429
+    err.litellm_response_headers = {"x-andromity-error-type": "quota_exceeded", "x-ratelimit-remaining": "0"}
+    return err
+
+
 def test_classify_midstream_service_unavailable():
     """Matches the exact user screenshot: OpenRouter/Nvidia 503 MidStreamFallbackError."""
     fake_err = Exception(
@@ -152,7 +160,7 @@ async def test_exhausted_retries_emits_friendly_error_card(monkeypatch):
 
 def test_terminal_formatting_has_zero_html():
     """Verify that terminal output for TUI/CLI contains zero raw HTML/SVG/button tags."""
-    fake_err = Exception("daily_limit_reached - free trial requests exceeded")
+    fake_err = _gateway_daily_limit("daily_limit_reached - free trial requests exceeded")
     term_text = classify_and_format_error(fake_err, provider="andromity", output_format="terminal")
 
     # Must NOT have any HTML tags
@@ -171,7 +179,7 @@ def test_terminal_formatting_has_zero_html():
 
 def test_quota_exceeded_omits_raw_litellm_error():
     """Verify that raw internal litellm/OpenAIException details are NOT leaked to the user on quota limits."""
-    fake_err = Exception("litellm.RateLimitError: RateLimitError: OpenAIException - daily_limit_reached")
+    fake_err = _gateway_daily_limit("litellm.RateLimitError: RateLimitError: OpenAIException - daily_limit_reached")
     html_out = classify_and_format_error(fake_err, provider="andromity", output_format="html")
 
     assert "Daily Limit Reached" in html_out
@@ -212,7 +220,7 @@ async def test_daily_quota_fails_fast_without_retries(monkeypatch):
     async def quota_acompletion(**kwargs):
         nonlocal call_count
         call_count += 1
-        raise Exception("daily_limit_reached - free trial requests exceeded")
+        raise _gateway_daily_limit("daily_limit_reached - free trial requests exceeded")
 
     import litellm
     monkeypatch.setattr(litellm, "acompletion", quota_acompletion)
@@ -297,7 +305,7 @@ def test_authed_quota_omits_account_button(monkeypatch):
     from andromity.config import config
     monkeypatch.setattr(config, "get_api_key", lambda p: "fake-key" if p == "andromity" else None)
 
-    fake_err = Exception("daily_limit_reached - gateway limit exceeded")
+    fake_err = _gateway_daily_limit("daily_limit_reached - gateway limit exceeded")
     html_out = classify_and_format_error(fake_err, provider="andromity", model="auto")
 
     assert "Daily Limit Reached" in html_out

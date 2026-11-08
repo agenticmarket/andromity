@@ -133,10 +133,13 @@ def test_a_raw_gateway_body_from_another_provider_cannot_add_the_action():
     assert "data-error-action" not in format_error_html(info)
 
 
-def test_a_raw_gateway_body_is_read_for_the_andromity_provider():
+def test_a_raw_gateway_body_without_the_typed_headers_adds_no_action_for_the_andromity_provider():
+    """A provider's words can reach the error text, so a body alone is not the gateway's say-so."""
     body = json.dumps({"error": {"type": "quota_exceeded", "message": "daily limit reached", "action": "join_waitlist"}})
     info = classify_error_info(Exception(body), provider="andromity", model="m")
-    assert info["action"] == "join_waitlist"
+    assert info["action"] == ""
+    assert info["type"] != "quota_exceeded"
+    assert "data-error-action" not in format_error_html(info)
 
 
 def test_the_subnet_cap_and_a_switched_off_offer_have_no_action():

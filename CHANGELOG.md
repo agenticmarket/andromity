@@ -19,6 +19,7 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 - **Reused tool-call ids.** A provider that reuses a tool-call id can no longer give a new call an earlier approval or refusal.
 
 ### Security
+- **Only the gateway chooses its error cards.** A model provider could write the gateway's error format into its own error message or into a stream, and Andromity then showed the free gateway's Daily Limit or sign-in card with that card's buttons. The card type and action now come only from the gateway's own response headers, and the waitlist is offered only for the gateway's daily-limit refusal.
 - **Permission modes are checked strictly.** A mode with stray spaces or an unknown name is treated as SAFE everywhere, including for sub-agents. Before, a value such as "safe " matched none of the checks, so shell commands ran without asking. Lowering the mode also lowers sub-agents that are still running, and `/mode` in the terminal app now changes the current session's approvals.
 - VS Code: file links in chat and Fingerprint are judged by where they really lead. Symlinks and junctions out of the workspace ask first and name the real file, links to network shares outside the workspace are refused without connecting to them, and relative paths need an open folder. In a folder opened by its network path, links to the folder's own files now open.
 
