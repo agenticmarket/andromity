@@ -91,7 +91,7 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       <div class="branch-pill">
         <span id="branch-label">HEAD</span>
       </div>
-      <span class="target-badge">↔ Working Tree</span>
+      <span class="target-badge" id="target-badge">↔ Working Tree</span>
 
       <div class="scope-toggles" id="scope-toggles" style="display: none;">
         <button id="btn-scope-turn" class="scope-btn active" title="Show files changed in current agent turn">Turn (<span id="turn-files-count">0</span>)</button>

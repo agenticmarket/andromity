@@ -10,6 +10,32 @@ import { PullRequestController, TurnRef } from "./pullRequestController.js";
 
 import { GitStatusResult, DiffNumstatResult, ReviewFile } from "../providers/changesReview/types.js";
 
+interface TurnViewFile {
+  path: string;
+  name: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  now: "uncommitted" | "committed" | "changed" | "unknown";
+}
+
+function readTurnFiles(value: unknown): TurnViewFile[] | null {
+  if (!Array.isArray(value)) return null;
+  const files: TurnViewFile[] = [];
+  for (const entry of value.slice(0, 500)) {
+    const p = entry?.path;
+    if (typeof p !== "string" || !p || p.length > 4096 || p.includes("\0")) continue;
+    const count = (n: unknown) => (typeof n === "number" && Number.isSafeInteger(n) && n >= 0 ? n : 0);
+    const now = ["uncommitted", "committed", "changed"].includes(entry?.now) ? entry.now : "unknown";
+    files.push({
+      path: p, name: path.posix.basename(p), status: typeof entry?.status === "string" ? entry.status.slice(0, 1) || "M" : "M",
+      additions: count(entry?.additions), deletions: count(entry?.deletions), binary: entry?.binary === true, now,
+    });
+  }
+  return files;
+}
+
 function readTurnRef(value: unknown): TurnRef | null {
   const ref = value as { sessionId?: unknown; turnIndex?: unknown } | null;
   if (!ref || typeof ref.sessionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(ref.sessionId)) return null;
@@ -57,6 +83,9 @@ export class ChangesReviewPanel {
   private _isGit = false;
   private _gitAvailable: boolean | undefined;
   private _openPullRequestWhenReady = false;
+  /** What the panel's turn changed, from its own snapshots; null when unknown. */
+  private _turnView: { turnIndex: number; files: TurnViewFile[] } | null = null;
+  private _turnSeq = 0;
   private readonly _pr: PullRequestController;
   private static _agentRunning = false;
   private static _sessionLookup: () => string | null = () => null;
@@ -69,6 +98,7 @@ export class ChangesReviewPanel {
     this._turnFiles = files;
     if (turn !== undefined) this._turn = readTurnRef(turn);
     this._pr?.turnChanged();
+    void this._loadTurnChanges();
   }
 
   /** The latest turn's number arrives with its receipt, just after the turn ends. */
@@ -76,6 +106,7 @@ export class ChangesReviewPanel {
     if (this._turn && this._turn.sessionId === sessionId && this._turn.turnIndex === null && Number.isSafeInteger(turnIndex) && turnIndex >= 0) {
       this._turn = { sessionId, turnIndex };
       this._pr.turnChanged();
+      void this._loadTurnChanges();
     }
   }
 
@@ -195,6 +226,10 @@ export class ChangesReviewPanel {
         switch (message.type) {
           case "webview_ready":
             await this.loadChanges(this._initialFilePath);
+            break;
+
+          case "get_turn_file_diff":
+            if (typeof message.filePath === "string") await this._loadTurnFileDiff(message.filePath);
             break;
 
           case "get_file_diff":
@@ -400,6 +435,7 @@ export class ChangesReviewPanel {
       });
       await this._postButton();
       this._pr.filesChanged();
+      void this._loadTurnChanges();
       if (this._openPullRequestWhenReady && files.length) {
         this._openPullRequestWhenReady = false;
         this._postMessage({ type: "pr_request_open" });
@@ -431,9 +467,56 @@ export class ChangesReviewPanel {
     }
   }
 
+  /** The turn's own file list, read from its before and after snapshots, so it outlives commits and pushes. */
+  private async _loadTurnChanges() {
+    const seq = ++this._turnSeq;
+    const turn = this._turn;
+    const rpc = this._rpcClient;
+    if (!turn || turn.turnIndex === null || !rpc || this._isDisposed) {
+      if (this._turnView) {
+        this._turnView = null;
+        this._postMessage({ type: "set_turn_changes", turnView: null });
+      }
+      return;
+    }
+    let files: TurnViewFile[] | null = null;
+    try {
+      const res = await rpc.call<{ success?: boolean; files?: unknown }>("git.turn_changes", {
+        session_id: turn.sessionId, project_path: this._projectPath, turn_index: turn.turnIndex,
+      });
+      files = res?.success ? readTurnFiles(res.files) : null;
+    } catch {
+      files = null;
+    }
+    if (seq !== this._turnSeq || this._isDisposed) return;
+    this._turnView = files ? { turnIndex: turn.turnIndex, files } : null;
+    this._postMessage({ type: "set_turn_changes", turnView: this._turnView });
+  }
+
+  private async _loadTurnFileDiff(filePath: string) {
+    const view = this._turnView;
+    const turn = this._turn;
+    if (!view || !turn || turn.turnIndex !== view.turnIndex || !view.files.some((file) => file.path === filePath) || !this._rpcClient) return;
+    this._pr.markOpened(filePath);
+    let res: { diff?: unknown; notice?: unknown } | null = null;
+    try {
+      res = await this._rpcClient.call<{ diff?: unknown; notice?: unknown }>("git.turn_file_diff", {
+        session_id: turn.sessionId, project_path: this._projectPath, turn_index: view.turnIndex, path: filePath,
+      });
+    } catch {
+      res = { diff: "", notice: "This turn's diff couldn't be read. Try again." };
+    }
+    if (this._isDisposed || this._turnView !== view) return;
+    this._postMessage({
+      type: "set_turn_file_diff", filePath,
+      diff: typeof res?.diff === "string" ? res.diff : "",
+      notice: typeof res?.notice === "string" ? res.notice : "",
+    });
+  }
+
   private async _openFileInEditor(filePath: string) {
     const ws = this._repositoryRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!ws || !this._knownFiles.has(filePath)) return;
+    if (!ws || !(this._knownFiles.has(filePath) || this._turnView?.files.some((file) => file.path === filePath))) return;
     try {
       const absPath = path.isAbsolute(filePath) ? filePath : path.join(ws, filePath);
       const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(absPath));
