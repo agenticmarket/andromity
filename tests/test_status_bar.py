@@ -226,6 +226,60 @@ if __name__ == "__main__":
         os.chdir(old)
 
 
+def test_click_effort_segment_custom_provider_cycle():
+    """Custom provider with declared reasoning_efforts cycles through those efforts."""
+    config.save_provider({
+        "id": "anymodel",
+        "display_name": "AnyModel Custom",
+        "base_url": "https://api.anymodel.com/v1",
+        "model": "cx/gpt-6-luna",
+        "type": "openai",
+        "reasoning_efforts": ["low", "high", "xhigh"],
+    })
+    sb = StatusBar()
+    sb._provider = "anymodel"
+    sb._model = "cx/gpt-6-luna"
+    sb._effort = "auto"
+    sb._refresh_text = lambda: None
+    sb.show_hint = lambda text, duration=2.0: None
+
+    # Cycle: auto -> low -> high -> xhigh -> auto
+    sb._cycle_effort()
+    assert sb._effort == "low"
+    assert "reason:low" in sb._seg_effort()
+    sb._cycle_effort()
+    assert sb._effort == "high"
+    assert "reason:high" in sb._seg_effort()
+    sb._cycle_effort()
+    assert sb._effort == "xhigh"
+    assert "reason:xhigh" in sb._seg_effort()
+    sb._cycle_effort()
+    assert sb._effort == "auto"
+    assert "reason:auto" in sb._seg_effort()
+
+
+def test_click_effort_segment_custom_provider_missing_efforts_locked():
+    """Custom provider without declared reasoning_efforts stays locked and shows unavailable hint."""
+    config.save_provider({
+        "id": "custom-plain",
+        "display_name": "Plain Custom",
+        "base_url": "https://api.plain.com/v1",
+        "model": "cx/plain-model",
+        "type": "openai",
+    })
+    hints = []
+    sb = StatusBar()
+    sb._provider = "custom-plain"
+    sb._model = "cx/plain-model"
+    sb._effort = "auto"
+    sb._refresh_text = lambda: None
+    sb.show_hint = lambda text, duration=2.0: hints.append(text)
+
+    sb._cycle_effort()
+    assert sb._effort == "auto"
+    assert hints and "Thinking controls unavailable" in hints[0]
+
+
 def test_status_bar_shows_full_model_name_when_it_fits():
     """Theme-colour markup must not count toward the width reserved for the model name."""
     async def _run():

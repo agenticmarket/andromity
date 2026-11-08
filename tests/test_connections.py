@@ -132,3 +132,50 @@ def test_opencode_never_falls_back_to_another_credential(monkeypatch):
     request = connections.provider_request("opencode", "some-model")
     assert request["api_key"] == "oc-own-key"
     assert request["extra_headers"] == {"User-Agent": "Andromity"}
+
+
+def test_custom_connection_reasoning_efforts_missing_and_defaults():
+    saved = connections.validate_connection({
+        "id": "custom", "model": "gpt-6-luna", "base_url": "https://api.anymodel.com/v1",
+    })
+    assert "reasoning_efforts" not in saved
+
+
+@pytest.mark.parametrize("bad_efforts", [
+    ["low", "invalid_effort"],
+    ["super_high"],
+    ["turbo"],
+    [123],
+    [""],
+    12345,
+])
+def test_custom_connection_reasoning_efforts_rejects_bad_values(bad_efforts):
+    with pytest.raises(ValueError, match="Unknown reasoning effort|must be a list|must be non-empty strings"):
+        connections.validate_connection({
+            "id": "custom", "model": "gpt-6-luna", "base_url": "https://api.anymodel.com/v1",
+            "reasoning_efforts": bad_efforts,
+        })
+
+
+def test_custom_connection_reasoning_efforts_accepts_and_normalizes_known_efforts():
+    saved = connections.validate_connection({
+        "id": "custom", "model": "gpt-6-luna", "base_url": "https://api.anymodel.com/v1",
+        "reasoning_efforts": ["LOW", "none", "Medium", "high", "xhigh"],
+    })
+    assert saved["reasoning_efforts"] == ["low", "off", "medium", "high", "xhigh"]
+
+    # String input from comma-separated field in UI
+    saved_str = connections.validate_connection({
+        "id": "custom", "model": "gpt-6-luna", "base_url": "https://api.anymodel.com/v1",
+        "reasoning_efforts": "low, medium, high, xhigh",
+    })
+    assert saved_str["reasoning_efforts"] == ["low", "medium", "high", "xhigh"]
+
+
+def test_custom_connection_provider_info_includes_reasoning_efforts(monkeypatch):
+    monkeypatch.setattr(connections.config, "list_providers", lambda: [
+        {"name": "custom", "type": "openai", "model": "gpt-6-luna", "reasoning_efforts": ["low", "high"]},
+    ])
+    info = connections.provider_info()
+    custom_info = next(p for p in info if p["id"] == "custom")
+    assert custom_info["reasoning_efforts"] == ["low", "high"]

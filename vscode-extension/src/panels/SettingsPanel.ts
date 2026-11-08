@@ -3625,6 +3625,13 @@ export class SettingsPanel {
             <div class="cron-form-col"><label for="connection-type">LiteLLM provider type</label><input id="connection-type" value="openai" placeholder="openai"></div>
             <div class="cron-form-col"><label for="connection-version">API version · optional</label><input id="connection-version"></div>
           </div>
+          <div class="cron-form-row">
+            <div class="cron-form-col">
+              <label for="connection-reasoning-efforts">Supported reasoning efforts · optional</label>
+              <input id="connection-reasoning-efforts" placeholder="low, medium, high, xhigh">
+              <p class="setting-desc">Comma-separated effort names supported by this endpoint. Leave blank for provider default.</p>
+            </div>
+          </div>
           <p class="setting-desc">OpenAI-compatible is the default. Other adapters can use the runtime's standard environment credentials.</p>
         </details>
         <div style="display:flex; justify-content:flex-end; gap:8px;">
@@ -4904,7 +4911,8 @@ SOFTWARE.</pre>
         const value = (id) => document.getElementById(id).value.trim();
         const connection = { id: value("connection-id"), display_name: value("connection-name"),
           base_url: value("connection-url"), model: value("connection-model"),
-          type: value("connection-type") || "openai", api_version: value("connection-version") };
+          type: value("connection-type") || "openai", api_version: value("connection-version"),
+          reasoning_efforts: value("connection-reasoning-efforts") };
         if (value("connection-key")) connection.api_key = value("connection-key");
         vscode.postMessage({ type: "save_provider", connection });
       } else if (action === "test-provider") {
@@ -5742,9 +5750,11 @@ SOFTWARE.</pre>
 
     function editProvider(id) {
       const provider = allProviders.find(p => p.id === id) || {};
+      const efforts = Array.isArray(provider.reasoning_efforts) ? provider.reasoning_efforts.join(", ") : (provider.reasoning_efforts || "");
       const fields = { "connection-id": provider.id || "", "connection-name": provider.name || "",
         "connection-url": provider.base_url || "", "connection-model": provider.model || "",
-        "connection-type": provider.type || "openai", "connection-version": provider.api_version || "", "connection-key": "" };
+        "connection-type": provider.type || "openai", "connection-version": provider.api_version || "",
+        "connection-reasoning-efforts": efforts, "connection-key": "" };
       Object.keys(fields).forEach(key => document.getElementById(key).value = fields[key]);
       document.getElementById("connection-id").disabled = Boolean(id);
       document.getElementById("connection-editor").style.display = "block";

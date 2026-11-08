@@ -9731,7 +9731,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             syncKeyRequiredNote();
           } else if (msg.key === 'provider') {
             currentProvider = msg.value;
-            currentModelReasoningCapability = null;
+            if (msg.reasoningCapability) {
+              currentModelReasoningCapability = { ...msg.reasoningCapability, _modelId: currentModel, _providerId: currentProvider };
+            } else {
+              currentModelReasoningCapability = null;
+            }
             updateReasoningBadge();
             updateModelBadge();
             syncKeyRequiredNote();

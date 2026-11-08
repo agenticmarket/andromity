@@ -25,6 +25,38 @@ class ReasoningMode(str, Enum):
     ROUTER = "router"
 
 
+KNOWN_EFFORTS: frozenset[str] = frozenset({
+    "none", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "on",
+})
+
+
+def validate_reasoning_efforts(raw: Any) -> List[str]:
+    """Validate and normalize a list of reasoning effort names.
+
+    Accepts only known effort names (e.g. low, medium, high, xhigh) and rejects anything else with ValueError.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items = [p.strip() for p in raw.split(",") if p.strip()]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        raise ValueError("reasoning_efforts must be a list of effort names.")
+
+    result: List[str] = []
+    for item in items:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError("Reasoning effort names must be non-empty strings.")
+        val = item.strip().lower()
+        if val not in KNOWN_EFFORTS and val != "auto":
+            raise ValueError(f"Unknown reasoning effort '{item}'. Supported efforts: {', '.join(sorted(KNOWN_EFFORTS))}.")
+        val = "off" if val == "none" else val
+        if val != "auto" and val not in result:
+            result.append(val)
+    return result
+
+
 @dataclass
 class ReasoningCapability:
     mode: ReasoningMode
@@ -89,6 +121,11 @@ def _from_metadata(provider: str, metadata: Dict[str, Any]) -> Optional[Reasonin
             if reasoning.get("mandatory") is not True:
                 values.append("off")
             request_format = "openrouter_toggle"
+        elif provider not in ("openrouter", "anthropic", "google", "openai"):
+            from andromity.config import config
+            saved = config.get_provider_config(provider) or {}
+            adapter = str(saved.get("type") or metadata.get("type") or "openai").strip().lower()
+            request_format = "openai" if adapter in ("openai", "custom") else adapter
         return _cap(_efforts(values), "provider metadata", request_format,
                     str(reasoning.get("default_effort", "auto")).lower(),
                     reasoning.get("mandatory") is True,
@@ -150,6 +187,23 @@ def get_model_reasoning_capability(provider_key: str, model_id: str,
         cached = _DISCOVERED.get((provider, model))
         if cached and time.monotonic() - cached[0] < _TTL:
             return cached[1]
+    from andromity.config import config
+    saved = config.get_provider_config(provider)
+    if saved and isinstance(saved.get("reasoning_efforts"), list):
+        efforts = _efforts(saved["reasoning_efforts"])
+        efforts = [e for e in efforts if e in KNOWN_EFFORTS or e == "off"]
+        if efforts:
+            adapter = str(saved.get("type") or "openai").strip().lower()
+            req_format = "openai" if adapter in ("openai", "custom") else adapter
+            cap = _cap(
+                efforts,
+                source="connection configuration",
+                request_format=req_format,
+                default=str(saved.get("default_effort", "auto")).lower(),
+            )
+            with _LOCK:
+                _DISCOVERED[(provider, model)] = (time.monotonic(), cap)
+            return cap
     return ReasoningCapability(ReasoningMode.UNKNOWN,
                                description="Effort controls unavailable; using the provider default.")
 

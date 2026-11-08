@@ -131,7 +131,15 @@ def provider_catalog() -> dict:
             info["base_url"] = saved["base_url"]
         models = list(info.get("models", []))
         if saved.get("model") and not any(m["id"] == saved["model"] for m in models):
-            models.insert(0, normalize_endpoint_model({"id": saved["model"], "description": "Configured model"}, name))
+            model_item: dict[str, Any] = {"id": saved["model"], "description": "Configured model"}
+            if saved.get("reasoning_efforts"):
+                model_item["reasoning"] = {"supported_efforts": list(saved["reasoning_efforts"])}
+            models.insert(0, normalize_endpoint_model(model_item, name))
+        elif saved.get("reasoning_efforts"):
+            efforts_list = list(saved["reasoning_efforts"])
+            for m in models:
+                if "reasoning" not in m:
+                    m["reasoning"] = {"supported_efforts": efforts_list}
         info["models"] = models
         result[name] = info
     return result
