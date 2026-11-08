@@ -11,6 +11,7 @@ All notable changes to the "andromity" extension will be documented in this file
 - **Safer auto-approval.** Command checks were rebuilt against the published GuardFall bypasses, and "always allow this command" follows the same stricter rule.
 
 ### Fixed
+- **Commands no longer hang when something they start keeps running.** A server or other program started by a command could outlive the shell and keep its output open, and the command then never returned: not at its timeout, and not when you pressed Stop. On Windows each command now runs in a job object, so everything it starts can be stopped even after its parent exits. When the shell finishes but something it started still holds the output, Andromity waits two seconds, stops everything the command started, and tells the agent to start servers with `shell_bg`. A command that times out now returns the output it had so far, and a timeout sent as text or out of range is read safely.
 - Andromity's own git calls no longer run programs set in a repository's config.
 
 ### Security
