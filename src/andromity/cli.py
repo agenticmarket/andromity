@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from contextlib import aclosing
 import click
 
 
@@ -292,47 +293,48 @@ async def _finish_cli_turn(session, record):
 
 async def _stream_cli_events(agent, prompt, pending_calls):
     from andromity.core.events import TextDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, ToolResult
-    async for event in agent.run(prompt):
-        if isinstance(event, TextDelta):
-            print(event.text, end="", flush=True)
-        elif isinstance(event, ToolCallStart):
-            pending_calls[event.tool_id] = {"name": event.tool_name, "args": ""}
-        elif isinstance(event, ToolCallDelta):
-            if event.tool_id in pending_calls:
-                pending_calls[event.tool_id]["args"] += event.args_json_chunk
-        elif isinstance(event, ToolCallEnd):
-            call_info = pending_calls.get(event.tool_id, {})
-            name = call_info.get("name", "tool")
-            args_str = call_info.get("args", "")
-            formatted_args = ""
-            try:
-                import json
-                parsed = json.loads(args_str)
-                parts = []
-                for k, v in parsed.items():
-                    if isinstance(v, str):
-                        val_str = v.replace("\n", "\\n")
-                        if len(val_str) > 60:
-                            val_str = val_str[:57] + "..."
-                        parts.append(f'{k}="{val_str}"')
-                    elif isinstance(v, (int, float, bool)):
-                        parts.append(f'{k}={v}')
-                    elif isinstance(v, list):
-                        parts.append(f'{k}=[{len(v)} items]')
-                    else:
-                        parts.append(f'{k}=...')
-                formatted_args = ", ".join(parts)
-            except Exception:
-                formatted_args = args_str[:60]
-            print(f"\n[Tool: {name}({formatted_args})]", end=" ", flush=True)
-        elif isinstance(event, ToolResult):
-            status = "Success" if event.success else "Failed"
-            dur = f"{event.duration_ms:.0f}ms"
-            preview = ""
-            if not event.success and event.result:
-                first_line = event.result.strip().split("\n")[0]
-                preview = f" - {first_line[:80]}"
-            print(f"-> [{status}, {dur}{preview}]", end=" ", flush=True)
+    async with aclosing(agent.run(prompt)) as events:
+        async for event in events:
+            if isinstance(event, TextDelta):
+                print(event.text, end="", flush=True)
+            elif isinstance(event, ToolCallStart):
+                pending_calls[event.tool_id] = {"name": event.tool_name, "args": ""}
+            elif isinstance(event, ToolCallDelta):
+                if event.tool_id in pending_calls:
+                    pending_calls[event.tool_id]["args"] += event.args_json_chunk
+            elif isinstance(event, ToolCallEnd):
+                call_info = pending_calls.get(event.tool_id, {})
+                name = call_info.get("name", "tool")
+                args_str = call_info.get("args", "")
+                formatted_args = ""
+                try:
+                    import json
+                    parsed = json.loads(args_str)
+                    parts = []
+                    for k, v in parsed.items():
+                        if isinstance(v, str):
+                            val_str = v.replace("\n", "\\n")
+                            if len(val_str) > 60:
+                                val_str = val_str[:57] + "..."
+                            parts.append(f'{k}="{val_str}"')
+                        elif isinstance(v, (int, float, bool)):
+                            parts.append(f'{k}={v}')
+                        elif isinstance(v, list):
+                            parts.append(f'{k}=[{len(v)} items]')
+                        else:
+                            parts.append(f'{k}=...')
+                    formatted_args = ", ".join(parts)
+                except Exception:
+                    formatted_args = args_str[:60]
+                print(f"\n[Tool: {name}({formatted_args})]", end=" ", flush=True)
+            elif isinstance(event, ToolResult):
+                status = "Success" if event.success else "Failed"
+                dur = f"{event.duration_ms:.0f}ms"
+                preview = ""
+                if not event.success and event.result:
+                    first_line = event.result.strip().split("\n")[0]
+                    preview = f" - {first_line[:80]}"
+                print(f"-> [{status}, {dur}{preview}]", end=" ", flush=True)
 
 
 if __name__ == "__main__":

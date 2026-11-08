@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 import errno
 import functools
+import inspect
 import ipaddress
 import json
 import math
@@ -110,37 +111,112 @@ def _is_local_base_url(base_url: Optional[str]) -> bool:
         return False
 
 
-async def _first_token_guard(stream: Any, timeout: float, idle_chunk_timeout: float = 60.0):
-    """Pass stream chunks through unchanged, raising ProviderStalledError if the first chunk
-    or any subsequent chunk stalls for longer than timeout / idle_chunk_timeout seconds."""
-    aiter = stream.__aiter__()
+STREAM_CLOSE_TIMEOUT = 0.5
+ABANDONED_CLOSE_LIMIT = 30.0
+_closing_tasks: set[asyncio.Task] = set()
+_UNSET = object()
+
+
+async def _call_close(close: Any) -> None:
     try:
-        first = await asyncio.wait_for(aiter.__anext__(), timeout=timeout)
-    except asyncio.TimeoutError:
-        try:
-            aclose = getattr(stream, "aclose", None)
-            if aclose:
-                await aclose()
-        except Exception:
-            pass
-        raise ProviderStalledError(timeout)
-    except StopAsyncIteration:
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+    except Exception as exc:
+        log.debug("Closing the provider stream failed: %s", exc)
+
+
+def _start_close(close: Any, context: contextvars.Context) -> asyncio.Task:
+    loop = asyncio.get_running_loop()
+    task = loop.create_task(_call_close(close), context=context)
+    limit = loop.call_later(ABANDONED_CLOSE_LIMIT, task.cancel)
+    _closing_tasks.add(task)
+
+    def finished(done: asyncio.Task) -> None:
+        limit.cancel()
+        _closing_tasks.discard(done)
+
+    task.add_done_callback(finished)
+    return task
+
+
+def _adopt(context: contextvars.Context) -> None:
+    for var, value in context.items():
+        if var.get(_UNSET) is not value:
+            var.set(value)
+
+
+async def _close_stream(*targets: Any) -> None:
+    """Close each target with aclose() or close(), each in its own task, so one stuck close can't
+    block another and a Stop interrupts only the wait. The wait ends after STREAM_CLOSE_TIMEOUT; a
+    close still running is left to finish (and cancelled after ABANDONED_CLOSE_LIMIT). Context
+    variables the closes set reach the caller only when every close finished within the wait."""
+    closers = [close for close in (getattr(t, "aclose", None) or getattr(t, "close", None) for t in targets)
+               if callable(close)]
+    if not closers:
         return
-    yield first
-    while True:
-        try:
-            chunk = await asyncio.wait_for(aiter.__anext__(), timeout=idle_chunk_timeout)
-        except asyncio.TimeoutError:
+    context = contextvars.copy_context()
+    closing = [_start_close(close, context) for close in closers]
+    try:
+        _, pending = await asyncio.wait(closing, timeout=STREAM_CLOSE_TIMEOUT)
+    finally:
+        if all(task.done() for task in closing):
+            _adopt(context)
+    if pending:
+        log.warning("The provider stream did not close within %.1fs; left it closing in the background.",
+                    STREAM_CLOSE_TIMEOUT)
+
+
+async def _guarded_chunks(stream: Any, timeout: Optional[float], idle_chunk_timeout: Optional[float]):
+    iterator = None
+    try:
+        iterator = stream.__aiter__()
+        wait = timeout
+        while True:
             try:
-                aclose = getattr(stream, "aclose", None)
-                if aclose:
-                    await aclose()
-            except Exception:
-                pass
-            raise ProviderStalledError(idle_chunk_timeout)
-        except StopAsyncIteration:
-            break
-        yield chunk
+                if wait is not None and wait <= 0:
+                    raise TimeoutError
+                async with asyncio.timeout(wait):
+                    chunk = await iterator.__anext__()
+            except TimeoutError:
+                if wait is None:
+                    raise
+                raise ProviderStalledError(wait)
+            except StopAsyncIteration:
+                return
+            wait = idle_chunk_timeout
+            yield chunk
+    finally:
+        await _close_stream(iterator if iterator is not stream else None, stream)
+
+
+class _GuardedStream:
+    def __init__(self, stream: Any, timeout: Optional[float], idle_chunk_timeout: Optional[float]):
+        self._stream = stream
+        self._chunks = _guarded_chunks(stream, timeout, idle_chunk_timeout)
+        self._started = False
+
+    def __aiter__(self) -> "_GuardedStream":
+        return self
+
+    async def __anext__(self) -> Any:
+        self._started = True
+        return await self._chunks.__anext__()
+
+    async def aclose(self) -> None:
+        started, self._started = self._started, True
+        await self._chunks.aclose()
+        if not started:
+            await _close_stream(self._stream)
+
+
+def _first_token_guard(stream: Any, timeout: Optional[float],
+                       idle_chunk_timeout: Optional[float] = 60.0) -> _GuardedStream:
+    """Pass stream chunks through unchanged, raising ProviderStalledError if the first chunk
+    or any subsequent chunk stalls for longer than timeout / idle_chunk_timeout seconds.
+    The wrapped stream is closed once however the guard ends: exhausted, stalled, failed,
+    cancelled, or closed by its consumer, even before its first read."""
+    return _GuardedStream(stream, timeout, idle_chunk_timeout)
 
 
 def _ensure_litellm_stub():
@@ -527,16 +603,14 @@ async def stream_completion(
             yield Done(usage=usage)
             return
 
+        except GeneratorExit:
+            if response_stream is not None:
+                await response_stream.aclose()
+            raise
         except asyncio.CancelledError:
             log.info("stream_completion cancelled by user — closing provider stream")
-            if response_stream:
-                try:
-                    if hasattr(response_stream, 'aclose'):
-                        await response_stream.aclose()
-                    elif hasattr(response_stream, 'close'):
-                        response_stream.close()
-                except Exception:
-                    pass
+            if response_stream is not None:
+                await response_stream.aclose()
             for tid in list(open_tools.values()):
                 try:
                     yield ToolCallEnd(tool_id=tid)
@@ -544,14 +618,8 @@ async def stream_completion(
                     pass
             raise
         except (ProviderStalledError, litellm.RateLimitError, Exception) as e:
-            if response_stream:
-                try:
-                    if hasattr(response_stream, 'aclose'):
-                        await response_stream.aclose()
-                    elif hasattr(response_stream, 'close'):
-                        response_stream.close()
-                except Exception:
-                    pass
+            if response_stream is not None:
+                await response_stream.aclose()
 
             msg = str(e).lower()[:_MESSAGE_LIMIT]
             status = _http_status(_exception_chain(e))

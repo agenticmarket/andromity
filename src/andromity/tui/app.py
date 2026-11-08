@@ -2,6 +2,7 @@ import asyncio
 import re
 import threading
 import time
+from contextlib import aclosing
 from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -1489,95 +1490,96 @@ class AndromityApp(App):
         receipt_record = start_turn_record(self.session, snapshot_hash) if snapshot_hash else None
 
         try:
-            async for event in self.agent.run(prompt, images=images or None):
-                if isinstance(event, InputApplied):
-                    chat.end_assistant_message()
-                    chat.add_user_message(event.prompt, image_count=len(event.image_uris or []))
-                    chat.start_assistant_message()
-                    first_text_seen = False
-                elif isinstance(event, ImagesSkipped):
-                    notice = images_skipped_notice(event.count)
-                    if event.prompt_added:
-                        chat.add_reply_notice(notice)
-                    else:
-                        chat.add_inline_notice(notice)
-                        self._restore_attachments(event.images or [])
+            async with aclosing(self.agent.run(prompt, images=images or None)) as events:
+                async for event in events:
+                    if isinstance(event, InputApplied):
+                        chat.end_assistant_message()
+                        chat.add_user_message(event.prompt, image_count=len(event.image_uris or []))
+                        chat.start_assistant_message()
                         first_text_seen = False
-                elif isinstance(event, ThinkingDelta):
-                    if not hasattr(chat, "_thinking") or not getattr(chat, "_thinking", None):
-                        chat.start_thinking_message()
-                    chat.append_thinking(event.text)
-                    estimated_tokens += len(event.text) // 4
-                elif isinstance(event, TextDelta):
-                    if not first_text_seen:
-                        first_text_seen = True
-                        chat.stop_thinking_message()
-                    chat.append_text(event.text)
-                    estimated_tokens += len(event.text) // 4
-                elif isinstance(event, NextStepSuggested):
-                    next_step = event
-                elif isinstance(event, ToolCallStart) and event.tool_name == "suggest_next_step":
-                    next_step_tool_ids.add(event.tool_id)
-                elif getattr(event, "tool_id", None) in next_step_tool_ids:
-                    pass
-                elif isinstance(event, ToolCallStart):
-                    tools_used.add(event.tool_name)
-                    tool_calls_count += 1
-                    log.debug("TOOL START: %s", event.tool_name)
-                    if self._debug_mode:
-                        chat.add_system_message(f"[dim]▶ tool: {event.tool_name}[/]")
-                    chat.show_tool_start(event.tool_name, event.tool_id)
-                elif isinstance(event, ToolCallDelta):
-                    chat.append_tool_args(event.tool_id, event.args_json_chunk)
-                elif isinstance(event, ToolCallEnd):
-                    log.debug("TOOL END: %s", event.tool_id)
-                    chat.show_tool_end(event.tool_id)
-                elif isinstance(event, ToolResult):
-                    log.debug("TOOL RESULT: %s", event.tool_id)
-                    chat.show_tool_result(event.tool_id, event.result)
-                    
-                    # Look up this tool's own args from its indicator — with
-                    # parallel tool calls, active_tool_name/args only hold the
-                    # last tool that started.
-                    try:
-                        from andromity.tui.panels.chat import ToolIndicator
-                        for ind in chat.query(ToolIndicator):
-                            if ind.tool_id == event.tool_id:
-                                if ind.tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec"):
-                                    import json
-                                    try:
-                                        args = json.loads(ind._args_json)
-                                        target_path = args.get("path") or args.get("target_path") or args.get("target_file")
-                                        if target_path:
-                                            abs_path = Path(target_path).absolute()
-                                            # Track if this write_file created a genuinely new file
-                                            # (didn't exist before the tool ran — needs tree rebuild)
-                                            if ind.tool_name == "write_file" and not abs_path.exists():
-                                                new_files_created = True
-                                            if ind.tool_name == "delete_file":
-                                                new_files_created = True
-                                            self.query_one(FileTreePanel).highlight_recent_change(abs_path)
-                                    except Exception:
-                                        pass
-                                break
-                    except Exception:
+                    elif isinstance(event, ImagesSkipped):
+                        notice = images_skipped_notice(event.count)
+                        if event.prompt_added:
+                            chat.add_reply_notice(notice)
+                        else:
+                            chat.add_inline_notice(notice)
+                            self._restore_attachments(event.images or [])
+                            first_text_seen = False
+                    elif isinstance(event, ThinkingDelta):
+                        if not hasattr(chat, "_thinking") or not getattr(chat, "_thinking", None):
+                            chat.start_thinking_message()
+                        chat.append_thinking(event.text)
+                        estimated_tokens += len(event.text) // 4
+                    elif isinstance(event, TextDelta):
+                        if not first_text_seen:
+                            first_text_seen = True
+                            chat.stop_thinking_message()
+                        chat.append_text(event.text)
+                        estimated_tokens += len(event.text) // 4
+                    elif isinstance(event, NextStepSuggested):
+                        next_step = event
+                    elif isinstance(event, ToolCallStart) and event.tool_name == "suggest_next_step":
+                        next_step_tool_ids.add(event.tool_id)
+                    elif getattr(event, "tool_id", None) in next_step_tool_ids:
                         pass
-                elif isinstance(event, SubAgentProgress):
-                    chat.show_subagent_progress(event)
-                elif isinstance(event, PlanApprovalRequired):
-                    log.info("Plan approval required. Pausing agent loop.")
-                    self._plan_approval_future = asyncio.Future()
-                    await self._inputs().interaction(self._plan_approval_future, False, self.agent.steering_adds_input)
-                    self._plan_approval_future = None
-                elif isinstance(event, Done):
-                    if event.outcome != "success":
-                        self._inputs().pause()
-                    log.info("DONE usage=%s", event.usage)
-                    self._update_status()
-                    estimated_tokens = 0
+                    elif isinstance(event, ToolCallStart):
+                        tools_used.add(event.tool_name)
+                        tool_calls_count += 1
+                        log.debug("TOOL START: %s", event.tool_name)
+                        if self._debug_mode:
+                            chat.add_system_message(f"[dim]▶ tool: {event.tool_name}[/]")
+                        chat.show_tool_start(event.tool_name, event.tool_id)
+                    elif isinstance(event, ToolCallDelta):
+                        chat.append_tool_args(event.tool_id, event.args_json_chunk)
+                    elif isinstance(event, ToolCallEnd):
+                        log.debug("TOOL END: %s", event.tool_id)
+                        chat.show_tool_end(event.tool_id)
+                    elif isinstance(event, ToolResult):
+                        log.debug("TOOL RESULT: %s", event.tool_id)
+                        chat.show_tool_result(event.tool_id, event.result)
+                    
+                        # Look up this tool's own args from its indicator — with
+                        # parallel tool calls, active_tool_name/args only hold the
+                        # last tool that started.
+                        try:
+                            from andromity.tui.panels.chat import ToolIndicator
+                            for ind in chat.query(ToolIndicator):
+                                if ind.tool_id == event.tool_id:
+                                    if ind.tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec"):
+                                        import json
+                                        try:
+                                            args = json.loads(ind._args_json)
+                                            target_path = args.get("path") or args.get("target_path") or args.get("target_file")
+                                            if target_path:
+                                                abs_path = Path(target_path).absolute()
+                                                # Track if this write_file created a genuinely new file
+                                                # (didn't exist before the tool ran — needs tree rebuild)
+                                                if ind.tool_name == "write_file" and not abs_path.exists():
+                                                    new_files_created = True
+                                                if ind.tool_name == "delete_file":
+                                                    new_files_created = True
+                                                self.query_one(FileTreePanel).highlight_recent_change(abs_path)
+                                        except Exception:
+                                            pass
+                                    break
+                        except Exception:
+                            pass
+                    elif isinstance(event, SubAgentProgress):
+                        chat.show_subagent_progress(event)
+                    elif isinstance(event, PlanApprovalRequired):
+                        log.info("Plan approval required. Pausing agent loop.")
+                        self._plan_approval_future = asyncio.Future()
+                        await self._inputs().interaction(self._plan_approval_future, False, self.agent.steering_adds_input)
+                        self._plan_approval_future = None
+                    elif isinstance(event, Done):
+                        if event.outcome != "success":
+                            self._inputs().pause()
+                        log.info("DONE usage=%s", event.usage)
+                        self._update_status()
+                        estimated_tokens = 0
                 
-                # Token count is updated at Done (real usage from API).
-                # No mid-stream status rebuilds needed.
+                    # Token count is updated at Done (real usage from API).
+                    # No mid-stream status rebuilds needed.
 
         except asyncio.CancelledError:
             next_step = None
