@@ -115,13 +115,28 @@ function count(text: string, pattern: RegExp): number {
 /** Closes anything the description leaves open (an HTML comment, a code fence, <details>, <pre>), so text
  *  appended after it is shown as written rather than hidden or turned into code. */
 export function closeOpenBlocks(text: string): string {
+  let fence: { char: string; length: number } | null = null;
+  const outside: string[] = [];
+  for (const line of text.split("\n")) {
+    if (fence) {
+      const close = /^ {0,3}(`+|~+)[ \t]*$/.exec(line);
+      if (close && close[1][0] === fence.char && close[1].length >= fence.length) fence = null;
+      continue;
+    }
+    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (open && !(open[1][0] === "`" && open[2].includes("`"))) {
+      fence = { char: open[1][0], length: open[1].length };
+      continue;
+    }
+    outside.push(line);
+  }
   let out = text;
-  if (out.lastIndexOf("<!--") > out.lastIndexOf("-->")) out += " -->";
-  if (count(out, /^ {0,3}```/gm) % 2 === 1) out += "\n```";
-  if (count(out, /^ {0,3}~~~/gm) % 2 === 1) out += "\n~~~";
-  const pre = count(out, /<pre\b[^>]*>/gi) - count(out, /<\/pre>/gi);
+  if (fence) out += "\n" + fence.char.repeat(fence.length);
+  const prose = outside.join("\n");
+  if (prose.lastIndexOf("<!--") > prose.lastIndexOf("-->")) out += "\n-->";
+  const pre = count(prose, /<pre\b[^>]*>/gi) - count(prose, /<\/pre>/gi);
   if (pre > 0) out += "\n" + "</pre>".repeat(Math.min(pre, 50));
-  const details = count(out, /<details\b[^>]*>/gi) - count(out, /<\/details>/gi);
+  const details = count(prose, /<details\b[^>]*>/gi) - count(prose, /<\/details>/gi);
   if (details > 0) out += "\n" + "</details>".repeat(Math.min(details, 50));
   return out;
 }

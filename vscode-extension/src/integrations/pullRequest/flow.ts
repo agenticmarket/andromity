@@ -375,15 +375,15 @@ export function classifyGitError(step: StepId, error: unknown): FlowErrorKind {
   if (code === "DirtyWorkTree" || /would be overwritten by checkout|Please commit your changes or stash them/i.test(text)) return "would_overwrite";
   if (code === "BranchAlreadyExists" || /already exists/i.test(text) && step === "branch") return "branch_exists";
   if (step === "push") {
-    if (/GH006|protected branch/i.test(text)) return "protected";
-    if (/GH001|large files detected|exceeds GitHub's file size limit|file size limit/i.test(text)) return "too_large";
-    if (/refusing to allow an? (OAuth App|GitHub App|Personal Access Token).*workflow/i.test(text)) return "workflow_scope";
-    if (/hook declined|pre-push|remote rejected/i.test(text)) return "push_hook";
-    if (/\[rejected\]|non-fast-forward|fetch first|stale info/i.test(text)) return "push_rejected";
+    if (/\bGH006:|Protected branch update failed/i.test(text)) return "protected";
+    if (/\bGH001:|Large files detected|exceeds GitHub's file size limit/i.test(text)) return "too_large";
+    if (/refusing to allow an? (OAuth App|GitHub App|Personal Access Token) to create or update workflow/i.test(text)) return "workflow_scope";
+    if (/^\s*!\s*\[remote rejected\]/m.test(text)) return "push_hook";
+    if (/^\s*!\s*\[rejected\]/m.test(text) || /\((?:non-fast-forward|fetch first|stale info)\)/.test(text)) return "push_rejected";
     if (/Permission denied \(publickey|Host key verification failed/i.test(text)) return "auth";
-    if (code === "PermissionDenied" || /Permission to .+ denied|permission denied to|returned error: 403/i.test(text)) return "no_access";
-    if (code === "AuthenticationFailed" || /Authentication failed|could not read Username|terminal prompts disabled/i.test(text)) return "auth";
-    if (code === "PushRejected") return /failed to push some refs/i.test(text) && !/\[rejected\]/.test(text) ? "push_hook" : "push_rejected";
+    if (code === "PermissionDenied" || /^remote: Permission to \S+ denied|returned error: 403/im.test(text)) return "no_access";
+    if (code === "AuthenticationFailed" || /Authentication failed for|could not read Username|terminal prompts disabled/i.test(text)) return "auth";
+    if (code === "PushRejected") return /failed to push some refs/i.test(text) ? "push_hook" : "push_rejected";
     if (code === "RemoteConnectionError" || /Could not resolve host|unable to access|Connection (timed out|refused)|Network is unreachable|Could not read from remote/i.test(text)) return "network";
   }
   if (step === "commit") return "commit_failed";

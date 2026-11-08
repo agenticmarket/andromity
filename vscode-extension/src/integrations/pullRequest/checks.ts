@@ -30,7 +30,7 @@ function policyName(part: string): string {
 /** The engine's sensitive-file rule (security.is_sensitive_path) by name, so the form can leave such files
  *  out before the turn's receipt arrives, and when there is no turn at all. */
 export function looksSensitive(path: string): boolean {
-  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean).map(policyName);
+  const parts = path.trim().replace(/\\/g, "/").split("/").filter(Boolean).map(policyName);
   const name = parts[parts.length - 1] || "";
   if (!name) return false;
   if (SENSITIVE_NAMES.has(name) || name.startsWith(".env.")) return true;

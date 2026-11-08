@@ -337,6 +337,9 @@ export class PullRequestController {
   }
 
   private async loadReceipt(generation: number): Promise<void> {
+    const hadReceipt = !!this.receipt;
+    this.receipt = null;
+    if (hadReceipt) this.scheduleEvaluate(0);
     const rpc = this.host.rpc();
     const turn = this.host.turn();
     if (!this.host.turnFiles() || !turn) {
@@ -456,9 +459,12 @@ export class PullRequestController {
     if (this.receipt?.high.some((finding) => finding.kind === "git_internals")) {
       notes.push("Committing and pushing will run this repository's git hooks.");
     }
-    if ([...ticked].some((file) => this.isSensitive(file))) {
-      notes.push("A sensitive file is ticked. Pushing it can publish secrets.");
+    const flagged = new Set((this.receipt?.high ?? []).filter((finding) => finding.kind === "sensitive").map((finding) => finding.subject ? this.toRepoPath(finding.subject) : null));
+    const tickedSensitive = [...ticked].filter((file) => this.isSensitive(file));
+    for (const file of tickedSensitive) {
+      if (!flagged.has(file)) items.push({ label: "High", text: "A sensitive file is ticked", subject: file });
     }
+    if (tickedSensitive.length) notes.push("A sensitive file is ticked. Pushing it can publish secrets.");
     const placeText: Record<string, string> = { commit_message: "in the commit message", title: "in the title", description: "in the description" };
     for (const hit of [...(this.selection?.secrets ?? []), ...this.textSecrets()]) {
       items.push(hit.place === "file"
