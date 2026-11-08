@@ -307,7 +307,7 @@ describe("receipt commands", () => {
   it("folds a multi-line command to its first line and keeps every line, escaped, one click away", () => {
     const script = "$b = 1\\u000a<script>alert(1)</script>\\u000arm -rf build";
     const html = renderReceipt(receipt({ commands: [ran(script)] }), ME);
-    assert.match(html, /<summary><code class="rc-command">\$b = 1<\/code><span class="rc-cmd-more">\+2 lines<\/span><\/summary>/);
+    assert.match(html, /<summary><code class="rc-command">\$b = 1<\/code><span class="rc-cmd-more"><span class="rc-cmd-closed">\+2 lines<\/span><span class="rc-cmd-open">hide<\/span><\/span><\/summary>/);
     assert.match(html, /rc-command-full">\$b = 1\n&lt;script&gt;alert\(1\)&lt;\/script&gt;\nrm -rf build<\/code>/);
     assert.doesNotMatch(html, /<script>alert/);
   });
@@ -315,7 +315,7 @@ describe("receipt commands", () => {
   it("shortens a long single line and shows all of it on request", () => {
     const long = "x".repeat(200);
     const html = renderReceipt(receipt({ commands: [ran(long)] }), ME);
-    assert.match(html, new RegExp(`<summary><code class="rc-command">${"x".repeat(160)}…</code><span class="rc-cmd-more">show all</span>`));
+    assert.match(html, new RegExp(`<summary><code class="rc-command">${"x".repeat(160)}…</code><span class="rc-cmd-more"><span class="rc-cmd-closed">show all</span><span class="rc-cmd-open">hide</span></span></summary>`));
     assert.match(html, new RegExp(`rc-command-full">${long}</code>`));
     assert.match(renderReceipt(receipt({ commands: [ran("ls -la")] }), ME), /<code class="rc-command">ls -la<\/code>/);
   });
@@ -323,7 +323,7 @@ describe("receipt commands", () => {
   it("folds checks the same way", () => {
     const html = renderReceipt(receipt({ checks: [{ command: "npm test\\u000anpm run lint", result: "passed",
       exit_code: null, failed_first: false, runs: 1 }] }), ME);
-    assert.match(html, /<summary><code class="rc-command">npm test<\/code><span class="rc-cmd-more">\+1 line<\/span>/);
+    assert.match(html, /<summary><code class="rc-command">npm test<\/code><span class="rc-cmd-more"><span class="rc-cmd-closed">\+1 line<\/span><span class="rc-cmd-open">hide<\/span><\/span><\/summary>/);
   });
 });
 

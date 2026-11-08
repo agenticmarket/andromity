@@ -35,6 +35,11 @@
     "version": {
       "const": 1
     },
+    "command_chars": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "How many characters of each command this receipt keeps. Absent from receipts of turns sealed before commands were kept in full, whose commands are cut to 300 characters."
+    },
     "session_id": {
       "type": "string"
     },
@@ -227,7 +232,7 @@
         "properties": {
           "command": {
             "type": "string",
-            "maxLength": 300,
+            "maxLength": 2000,
             "description": "Redacted and shortened."
           },
           "outcome": {

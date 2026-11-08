@@ -809,13 +809,24 @@ def test_a_model_chosen_subagent_role_cannot_speak_for_andromity(project):
     assert "(you)" not in render_text(receipt, {"name": "Shubham", "email": "s@example.com"})
 
 
-def test_a_long_command_still_shows_its_destructive_part(project):
+@pytest.mark.parametrize("command, cut", [
+    ("echo " + "a" * 400 + " && rm -rf ~/projects", False),
+    ("echo " + "\n" * 800 + " && rm -rf ~/projects", True),
+    ("echo " + "a" * 5000 + " && rm -rf ~/projects", True),
+], ids=["shown-in-full", "cut-by-escapes", "cut-by-length"])
+def test_a_long_command_still_shows_its_destructive_part(project, command, cut):
     s = Session(session_id="h-long-destructive", project_path=str(project))
     t = Turn(s, project)
-    t.call("c1", "shell_exec", "done", command="echo " + "a" * 400 + " && rm -rf ~/projects")
+    t.call("c1", "shell_exec", "done", command=command)
     t.finish()
     finding = next(f for f in build_receipt(s)["needs_attention"] if f["kind"] == "destructive")
-    assert finding["subject"].endswith("[destructive part: rm -rf ~/projects]")
+    assert finding["detail"] == "Destructive command, ran without asking"
+    assert "part" not in finding
+    if cut:
+        assert finding["subject"].endswith("... [destructive part: rm -rf ~/projects]")
+        assert len(finding["subject"]) <= 2000 + len(" [destructive part: rm -rf ~/projects]")
+    else:
+        assert finding["subject"] == command
 
 
 def test_a_keyed_turn_whose_messages_are_gone_says_so(project):
