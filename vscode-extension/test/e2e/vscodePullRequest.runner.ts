@@ -221,6 +221,25 @@ export async function run(): Promise<void> {
       await backToMain();
     }
 
+    // I. Identity in the global config only (the founder's setup), read through the real vscode.git getConfig/getGlobalConfig.
+    {
+      const local = { name: await port.config("user.name"), email: await port.config("user.email") };
+      gitOk(cfg.work, env, ["config", "--local", "--unset", "user.name"]);
+      gitOk(cfg.work, env, ["config", "--local", "--unset", "user.email"]);
+      gitOk(cfg.work, env, ["config", "--global", "user.name", "Global Ada"]);
+      gitOk(cfg.work, env, ["config", "--global", "user.email", "global@example.invalid"]);
+      const rawLocal = await repo.getConfig("user.name").catch((e: unknown) => `threw ${e}`);
+      const rawGlobal = typeof repo.getGlobalConfig === "function" ? await repo.getGlobalConfig("user.name").catch((e: unknown) => `threw ${e}`) : "missing";
+      const seen = { name: await port.config("user.name"), email: await port.config("user.email") };
+      const ctx = await prepareContext(deps);
+      record("global-only identity is seen through vscode.git (getConfig is local-only, getGlobalConfig global)", seen.name === "Global Ada"
+        && seen.email === "global@example.invalid" && ctx.userConfigured && rawLocal === "" && rawGlobal === "Global Ada", { local, rawLocal, rawGlobal, seen, userConfigured: ctx.userConfigured });
+      const j = await attempt("andromity/vscode-global-identity", "orders/totals.py", "mine J\n");
+      const author = j.result ? gitOk(cfg.work, env, ["log", "-1", "--format=%an <%ae>", j.result.commit]) : null;
+      record("commit through vscode.git with the global identity", author === "Global Ada <global@example.invalid>", { kind: j.error?.kind ?? j.raw, author });
+      await backToMain();
+    }
+
     const tokenOutsideAuth = api.requests.some((r) => r.url.includes(TOKEN) || JSON.stringify({ ...r.headers, authorization: "" }).includes(TOKEN));
     record("token only in the Authorization header, only to 127.0.0.1", !tokenOutsideAuth && api.base.startsWith("http://127.0.0.1:"), { requests: api.requests.length });
   } catch (error) {

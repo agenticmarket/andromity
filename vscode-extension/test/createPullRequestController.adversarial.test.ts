@@ -21,12 +21,16 @@ const AWS = "AKIA" + "POIUYTREWQLKJHGF";
 
 // ── fake GitHub behind global fetch ─────────────────────────────
 let api = new FakeGitHub("test", "orders");
+/** Per-test hook in front of the fake API: answer a request yourself, delay it, or return undefined to pass through. */
+let fetchOverride: ((url: string, init: any) => Promise<unknown> | unknown) | null = null;
 const fetchLog: string[] = [];
 const originalFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init: any) => {
   const url = String(input);
   fetchLog.push(url);
   if (new URL(url).origin !== "https://api.github.com") throw new Error(`blocked fetch to ${url}`);
+  const custom = fetchOverride ? await fetchOverride(url, init) : undefined;
+  if (custom) return custom as any;
   return api.fetch(url, init) as any;
 }) as typeof fetch;
 process.on("exit", () => { globalThis.fetch = originalFetch; });
@@ -50,6 +54,7 @@ interface Harness {
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
+  fetchOverride = null;
   for (const fn of cleanups.splice(0).reverse()) fn();
 });
 
@@ -571,5 +576,159 @@ describe("controller: attacking the fixes in 2358148", { timeout: 90_000 }, () =
     for (const prompt of h.prompts) {
       assert.ok(!prompt.includes(SECRET_IN_ENV) && !prompt.includes(AWS), "a secret went to the model");
     }
+  });
+});
+
+// ── Round 3: git identity, description drafting, two GitHub accounts (commit b8e1b57) ──────────
+const TOKEN_B = "gho_second_account_token_ZYXWVUTSRQPONM";
+function reply(status: number, body: unknown) {
+  return { status, headers: { get: () => null }, text: async () => JSON.stringify(body) };
+}
+/** Account A (TOKEN) can't see the private repository; account B (TOKEN_B) can. */
+function twoAccounts(opts: { slowUser?: number } = {}) {
+  fetchOverride = async (url: string, init: any) => {
+    const u = new URL(url);
+    const auth = init?.headers?.Authorization;
+    if (u.pathname === "/user") {
+      if (opts.slowUser) await new Promise((r) => setTimeout(r, opts.slowUser));
+      return reply(200, { login: auth === `Bearer ${TOKEN_B}` ? "ada-work" : "ada" });
+    }
+    if (auth !== `Bearer ${TOKEN_B}` && u.pathname.startsWith("/repos/test/orders")) return reply(404, { message: "Not Found" });
+    return undefined;
+  };
+}
+
+describe("round 3: git identity (DESIGN 4.1)", { timeout: 90_000 }, () => {
+  it("identity only in the global ~/.gitconfig: no block, no warning, and the commit carries it", async () => {
+    const h = await harness({ findings: [] });
+    gitOk(h.sb.work, h.sb.env, ["config", "--local", "--unset", "user.name"]);
+    gitOk(h.sb.work, h.sb.env, ["config", "--local", "--unset", "user.email"]);
+    gitOk(h.sb.work, h.sb.env, ["config", "--global", "user.name", "Global Ada"]);
+    gitOk(h.sb.work, h.sb.env, ["config", "--global", "user.email", "global@example.invalid"]);
+    await openReady(h);
+    assert.ok(!form(h).notes.some((n: any) => /git name and email/.test(n.text)), "the form says it can't see the identity although it is set globally");
+    await h.ctrl.handle({ type: "pr_submit", action: "commit_only" });
+    assert.equal(lastView(h).phase, "done", JSON.stringify(lastView(h).failed ?? lastView(h).form?.disabledReason));
+    assert.equal(gitOk(h.sb.work, h.sb.env, ["log", "-1", "--format=%an <%ae>"]), "Global Ada <global@example.invalid>");
+  });
+
+  it("no identity anywhere: refused before anything is touched (4.1 'checks first, with no side effects')", async () => {
+    const h = await harness({ findings: [] });
+    gitOk(h.sb.work, h.sb.env, ["config", "--local", "--unset", "user.name"]);
+    gitOk(h.sb.work, h.sb.env, ["config", "--local", "--unset", "user.email"]);
+    await openReady(h);
+    await h.ctrl.handle({ type: "pr_submit", action: "commit_only" });
+    const view = lastView(h);
+    if (view.phase === "failed") assert.equal(view.failed.heading, "Set your git name and email first");
+    assert.deepEqual(gitMutations(h), [], `a branch was created and files staged before the missing identity stopped the commit (phase ${view.phase})`);
+  });
+});
+
+describe("round 3: Draft with AI for the description (DESIGN 3.4, 3.5)", { timeout: 90_000 }, () => {
+  it("fills the description and leaves the commit message, title and branch alone", async () => {
+    const h = await harness({ findings: [], draftText: "<commit_message>feat: first draft</commit_message>\n<pr_description>First description.</pr_description>" });
+    await openReady(h);
+    const before = { ...(h.ctrl as any).form };
+    assert.equal(before.description, "First description.", "the initial draft didn't fill the description");
+    const call = h.rpcCalls.filter((c) => c.method === "agent.quickPrompt").at(-1)!;
+    assert.equal(call.params.raw, true, "the engine only returns the full text (with <pr_description>) in raw mode");
+    await h.ctrl.handle({ type: "pr_update", changes: { description: "" } });
+    const postsBefore = h.posts.length;
+    await h.ctrl.handle({ type: "pr_draft_description" });
+    await waitFor(() => !form(h).drafting && (h.ctrl as any).form.description !== "", "the description draft");
+    await new Promise((r) => setTimeout(r, 400));
+    const after = (h.ctrl as any).form;
+    assert.equal(after.description, "First description.");
+    assert.equal(after.commitMessage, before.commitMessage);
+    assert.equal(after.title, before.title);
+    assert.equal(after.branchName, before.branchName);
+    const fields = h.posts.slice(postsBefore).filter((m) => m.type === "pr_field").map((m) => m.field);
+    assert.deepEqual(fields, ["description"]);
+  });
+
+  it("with a pull request template, pressing Draft with AI twice doesn't stack drafts on the template (3.5)", async () => {
+    const h = await harness({ findings: [], draftText: "<commit_message>feat: x</commit_message>\n<pr_description>Drafted summary.</pr_description>" });
+    fs.mkdirSync(path.join(h.sb.work, ".github"), { recursive: true });
+    fs.writeFileSync(path.join(h.sb.work, ".github", "pull_request_template.md"), "## Checklist\n- [ ] Tests\n");
+    gitOk(h.sb.work, h.sb.env, ["add", ".github"]);
+    gitOk(h.sb.work, h.sb.env, ["commit", "-qm", "template"]);
+    await openReady(h);
+    assert.match((h.ctrl as any).form.description, /^## Checklist/);
+    for (let i = 0; i < 2; i++) {
+      await h.ctrl.handle({ type: "pr_draft_description" });
+      await waitFor(() => !form(h).drafting && /Drafted summary/.test((h.ctrl as any).form.description), "a draft");
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    const description: string = (h.ctrl as any).form.description;
+    assert.equal(description.split("Drafted summary.").length - 1, 1, `drafts stacked:\n${description}`);
+    assert.equal(description.split("## Checklist").length - 1, 1, "the template was duplicated");
+  });
+
+  it("a model that writes no description: the note says so and the description stays as it was", async () => {
+    const h = await harness({ findings: [], draftText: "<commit_message>feat: only a commit</commit_message>" });
+    await openReady(h);
+    await h.ctrl.handle({ type: "pr_update", changes: { description: "Mine." } });
+    await h.ctrl.handle({ type: "pr_draft_description" });
+    await waitFor(() => !form(h).drafting && !!form(h).draftNote, "the note");
+    assert.equal((h.ctrl as any).form.description, "Mine.");
+    assert.match(form(h).draftNote, /didn't write a description/);
+  });
+});
+
+describe("round 3: two GitHub accounts (DESIGN 5 'Not signed in', 'No push access')", { timeout: 90_000 }, () => {
+  it("names the account that can't see the repository, and Use another account switches to the one that can", async () => {
+    twoAccounts();
+    const h = await harness({ findings: [] });
+    state.sessionOnPrompt = { accessToken: TOKEN_B, account: { label: "ada-work", id: "2" }, scopes: ["repo"] };
+    await openReady(h);
+    assert.equal(form(h).primary.label, "Push and open pull request page");
+    const note = form(h).notes.find((n: any) => /can't find/.test(n.text));
+    assert.ok(note && note.text.includes("@ada") && note.text.includes("test/orders") && /Use another account/.test(note.text), JSON.stringify(form(h).notes));
+    assert.deepEqual(form(h).account, { kind: "signed_in", login: "ada", switchable: true });
+    await h.ctrl.handle({ type: "pr_switch_account" });
+    const request = state.sessionRequests.at(-1)!;
+    assert.equal(request.options.clearSessionPreference, true);
+    assert.equal(request.options.createIfNone, true);
+    await waitFor(() => form(h).primary.label === "Create pull request", "the form to use the second account");
+    assert.equal(form(h).account.login, "ada-work");
+    await waitFor(() => form(h).primary.enabled, `the button (${form(h).disabledReason})`);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    assert.equal(lastView(h).phase, "done", JSON.stringify(lastView(h).failed));
+    const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
+    assert.equal(create.headers.Authorization, `Bearer ${TOKEN_B}`);
+    assert.ok(!JSON.stringify(h.posts).includes(TOKEN_B), "the second account's token reached the webview");
+  });
+
+  it("the account is named even when GitHub answers /user after the repository's 404", async () => {
+    twoAccounts({ slowUser: 300 });
+    const h = await harness({ findings: [] });
+    await openReady(h);
+    const note = form(h).notes.find((n: any) => /can't find/.test(n.text));
+    assert.ok(note && note.text.includes("@ada"), `the note doesn't say which account was used: ${note?.text}`);
+  });
+
+  it("cancelling the account picker changes nothing", async () => {
+    twoAccounts();
+    const h = await harness({ findings: [] });
+    state.sessionOnPrompt = null;
+    await openReady(h);
+    const before = JSON.stringify(form(h));
+    await h.ctrl.handle({ type: "pr_switch_account" });
+    assert.equal(JSON.stringify(form(h)), before);
+    assert.deepEqual(gitMutations(h), []);
+  });
+
+  it("a switch-account message while a run is in flight doesn't change the account the run uses", async () => {
+    const h = await harness({ findings: [] });
+    writeHook(path.join(h.sb.work, ".git"), "pre-push", "sleep 2");
+    state.sessionOnPrompt = { accessToken: TOKEN_B, account: { label: "other", id: "2" }, scopes: ["repo"] };
+    await openReady(h);
+    const run = h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    await waitFor(() => lastView(h)?.phase === "running" && lastView(h).run.steps.some((s: any) => s.id === "push" && s.status === "running"), "the push to start");
+    await h.ctrl.handle({ type: "pr_switch_account" });
+    await run;
+    const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"));
+    assert.ok(create, JSON.stringify(lastView(h)));
+    assert.equal(create.headers.Authorization, `Bearer ${TOKEN}`, "the pull request was opened with an account the form never checked");
   });
 });

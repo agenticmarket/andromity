@@ -420,10 +420,21 @@ export class CliApiRepository {
     this.state.indexChanges = changes;
   }
 
+  /** Like vscode.git 1.145: `git config --get --local <key>`, "" when unset (includes are not followed). */
   async getConfig(key: string): Promise<string> {
     this.calls.push({ name: "getConfig", args: [key] });
     try {
-      return (await this.git(["config", "--get", key])).stdout;
+      return (await this.git(["config", "--get", "--local", key])).stdout.trim();
+    } catch {
+      return "";
+    }
+  }
+
+  /** Like vscode.git 1.145: `git config --get --global <key>`. */
+  async getGlobalConfig(key: string): Promise<string> {
+    this.calls.push({ name: "getGlobalConfig", args: [key] });
+    try {
+      return (await this.git(["config", "--get", "--global", key])).stdout.trim();
     } catch {
       return "";
     }
