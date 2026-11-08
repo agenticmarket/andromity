@@ -52,7 +52,7 @@ function plural(n: number, one: string, many: string): string {
 export interface ReceiptLink {
   turnIndex: number;
   /** No turn was handed over, so the turn was found by its changes ("exact": its line counts are still in
-   *  these files) or only by file names ("names": the files changed again since). */
+   *  these files) or only by file names ("names": the files also have other changes). */
   matched?: "exact" | "names";
   commitSha?: string;
   /** Files the turn changed that this pull request leaves out. */
@@ -65,7 +65,7 @@ export interface ReceiptLink {
 export function receiptLinkLine(link: ReceiptLink): string {
   const sha = link.commitSha && /^[0-9a-f]{7,64}$/.test(link.commitSha) ? `, committed as ${mdCode(link.commitSha.slice(0, 7))}` : "";
   const how = link.matched === "exact" ? ", found by matching the changed files"
-    : link.matched === "names" ? ", found by file name; these files changed again after that turn" : "";
+    : link.matched === "names" ? ", found by file name; these files also have changes this receipt does not cover" : "";
   const parts = [`Receipt for Andromity turn ${Math.trunc(link.turnIndex) + 1}${how}${sha}.`];
   if (link.leftOut.length) {
     parts.push(`This pull request leaves out ${plural(link.leftOut.length, "file", "files")} the turn changed: ${pathList(link.leftOut)}.`);

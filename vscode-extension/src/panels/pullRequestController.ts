@@ -763,7 +763,7 @@ export class PullRequestController {
     const r = this.receipt?.receipt;
     const findings = r?.needs_attention.length ?? 0;
     const receiptSummary = r
-      ? `Receipt · turn ${r.turn_index + 1}${this.receiptRecovered ? (this.receiptMatch === "exact" ? " (found by matching these changes)" : " (found by file name; these files changed again since)") : ""} · ${plural(r.summary.files_changed, "file")} changed · ${plural(r.summary.commands, "command")}${findings ? ` · ${findings} to check` : " · nothing flagged"}${r.sealed?.matches ? " · sealed" : ""}`
+      ? `Receipt · turn ${r.turn_index + 1}${this.receiptRecovered ? (this.receiptMatch === "exact" ? " (found by matching these changes)" : " (found by file name; these files also have other changes)") : ""} · ${plural(r.summary.files_changed, "file")} changed · ${plural(r.summary.commands, "command")}${findings ? ` · ${findings} to check` : " · nothing flagged"}${r.sealed?.matches ? " · sealed" : ""}`
       : null;
     const isPublic = ctx.github.repo ? !ctx.github.repo.isPrivate : null;
     const publicNote = receiptShown && this.receipt && this.form.attachReceipt
