@@ -26,6 +26,8 @@ export interface VscodeStubState {
   opened: string[];
   commands: { command: string; args: unknown[] }[];
   updates: { section: string; key: string; value: unknown; target: unknown }[];
+  /** Answers for the next showInformationMessage/showWarningMessage/showQuickPick calls, in order. */
+  answers: unknown[];
 }
 
 export const state: VscodeStubState = {
@@ -42,6 +44,7 @@ export const state: VscodeStubState = {
   opened: [],
   commands: [],
   updates: [],
+  answers: [],
 };
 
 export function resetState(): void {
@@ -57,6 +60,8 @@ export function resetState(): void {
   state.opened = [];
   state.commands = [];
   state.updates = [];
+  state.answers = [];
+  documents.length = 0;
 }
 
 function configuration(section: string) {
@@ -96,30 +101,45 @@ class Uri {
   }
 }
 
+/** Untitled documents opened through workspace.openTextDocument, editable by tests. */
+export const documents: { uri: Uri; text: string; isClosed: boolean; getText(): string }[] = [];
+
 export const vscodeStub = {
   workspace: {
     getConfiguration: (section = "") => configuration(section),
     workspaceFolders: [] as { uri: { fsPath: string } }[],
     textDocuments: [] as unknown[],
+    isTrusted: true,
     getWorkspaceFolder: () => undefined,
     onDidChangeConfiguration: () => ({ dispose() {} }),
+    openTextDocument: async (options: { content?: string; language?: string }) => {
+      const doc = { uri: Uri.parse(`untitled:Review-${documents.length + 1}`), text: options?.content ?? "", isClosed: false, getText() { return this.text; } };
+      documents.push(doc);
+      return doc;
+    },
   },
+  languages: { getDiagnostics: () => [] },
+  DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
   window: {
     showInformationMessage: async (text: string, ..._items: unknown[]) => {
       state.infos.push(text);
-      return undefined;
+      return state.answers.shift() as any;
     },
     showWarningMessage: async (text: string, ..._items: unknown[]) => {
       state.warnings.push(text);
-      return undefined;
+      return state.answers.shift() as any;
     },
     showErrorMessage: async (text: string, ..._items: unknown[]) => {
       state.errors.push(text);
       return undefined;
     },
-    activeTextEditor: undefined,
+    activeTextEditor: undefined as any,
+    showTextDocument: async (document: unknown) => ({ document }),
+    showQuickPick: async (items: any[]) => { const a = state.answers.shift(); return typeof a === "function" ? (a as any)(items) : a; },
   },
   env: {
+    isTelemetryEnabled: false,
+    shell: "",
     clipboard: { writeText: async (text: string) => { state.clipboard.push(text); } },
     openExternal: async (uri: Uri) => {
       state.opened.push(uri.toString());

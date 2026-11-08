@@ -84,14 +84,11 @@ export function makeSandbox(name = "orders"): Sandbox {
   return {
     dir, bare, work, name, remoteUrl, env,
     cleanup: () => {
-      for (let i = 0; i < 5; i++) {
-        try {
-          fs.rmSync(dir, { recursive: true, force: true });
-          return;
-        } catch {
-          const until = Date.now() + 200;
-          while (Date.now() < until) { /* wait for Windows to release handles */ }
-        }
+      // Windows can hold git's handles for a moment after a child process exits.
+      try {
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 });
+      } catch {
+        /* reported by the suite's temp-folder check, not here */
       }
     },
   };

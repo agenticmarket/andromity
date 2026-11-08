@@ -1026,3 +1026,59 @@ describe("round 5: the recovery walk (DESIGN 3.5)", { timeout: 120_000 }, () => 
     assert.ok(!/changed again after that turn/.test(line), `the pull request states as fact something the code doesn't know: ${line}`);
   });
 });
+
+// ── Guards against working on andromity-snapshots (uncommitted work on top of 7ee2c23) ──────────
+describe("snapshot branch: the form refuses to ship from it", { timeout: 120_000 }, () => {
+  it("on andromity-snapshots: blocked with Switch branch; the button only opens VS Code's picker; nothing touched", async () => {
+    const h = await harness({ findings: [] });
+    gitOk(h.sb.work, h.sb.env, ["checkout", "-q", "-b", "andromity-snapshots"]);
+    await h.ctrl.handle({ type: "pr_open" });
+    await waitFor(() => lastView(h)?.phase === "blocked", "the blocked view");
+    assert.match(lastView(h).blocked.title, /andromity-snapshots/);
+    assert.ok(lastView(h).blocked.actions.some((a: any) => a.id === "switch_branch"));
+    for (const message of [{ type: "pr_submit", action: "primary" }, { type: "pr_submit", action: "commit_only" }, { type: "pr_update", changes: { createBranch: true } }]) {
+      await h.ctrl.handle(message);
+    }
+    await h.ctrl.handle({ type: "pr_action", action: "switch_branch" });
+    assert.deepEqual(state.commands.map((c) => c.command), ["git.checkout"]);
+    assert.deepEqual(gitMutations(h), []);
+    assert.equal(gitOk(h.sb.work, h.sb.env, ["rev-parse", "--abbrev-ref", "HEAD"]), "andromity-snapshots", "something switched branches");
+  });
+
+  it("Switch branch does nothing outside the blocked view", async () => {
+    const h = await harness({ findings: [] });
+    await openReady(h);
+    await h.ctrl.handle({ type: "pr_action", action: "switch_branch" });
+    assert.deepEqual(state.commands.filter((c) => c.command === "git.checkout"), []);
+  });
+
+  it("on the snapshot branch checked out as Andromity-Snapshots (same ref on Windows/macOS): blocked too", async () => {
+    const h = await harness({ findings: [] });
+    gitOk(h.sb.work, h.sb.env, ["branch", "andromity-snapshots"]);
+    const switched = gitSync(h.sb.work, h.sb.env, ["checkout", "-q", "Andromity-Snapshots"]);
+    if (switched.status !== 0) return; // case-sensitive file system: a different, missing branch
+    await h.ctrl.handle({ type: "pr_open" });
+    await waitFor(() => lastView(h)?.phase === "blocked" || lastView(h)?.phase === "form", "the form");
+    assert.equal(lastView(h).phase, "blocked", "the form opened on the snapshot branch because its name differs only in case");
+  });
+
+  it("a typed branch name equal to it in any case is refused with the reason", async () => {
+    const h = await harness({ findings: [] });
+    await openReady(h);
+    for (const name of ["andromity-snapshots", "ANDROMITY-SNAPSHOTS", "Andromity-Snapshots"]) {
+      await h.ctrl.handle({ type: "pr_update", changes: { branchName: name } });
+      assert.match(form(h).disabledReason, /reserved for Andromity's undo snapshots/, name);
+      await h.ctrl.handle({ type: "pr_submit", action: "commit_only" });
+    }
+    assert.deepEqual(gitMutations(h), []);
+    await h.ctrl.handle({ type: "pr_update", changes: { branchName: "andromity-snapshots2" } });
+    assert.ok(!/reserved/.test(form(h).disabledReason ?? ""));
+  });
+
+  it("the base list never offers the snapshot branch (a pushed andromity-snapshots on GitHub)", async () => {
+    const h = await harness({ findings: [] });
+    api.routes["GET /repos/test/orders/branches"] = { status: 200, body: [{ name: "main" }, { name: "andromity-snapshots" }] };
+    await openReady(h);
+    assert.ok(!form(h).baseOptions.includes("andromity-snapshots"), "offered as a base; choosing it ends in 'Git couldn't finish this step'");
+  });
+});

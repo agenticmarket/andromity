@@ -19,7 +19,9 @@ def test_content_cannot_close_the_envelope_early():
     assert wrapped.count("</external_content>") == 1
     assert wrapped.count("<external_content") == 1
     assert wrapped.endswith("\n</external_content>")
-    assert "</external-content>" in wrapped and "<external-content" in wrapped
+    # Defused tags no longer start with "<", so they can't be read as an envelope tag at all.
+    assert "[/external-content>" in wrapped and "[external-content" in wrapped
+    assert "</external-content" not in wrapped and "<external-content" not in wrapped
 
 
 def test_mcp_output_names_its_server_and_strips_odd_characters():
