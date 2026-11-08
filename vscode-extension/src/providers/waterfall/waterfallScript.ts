@@ -850,6 +850,19 @@ export function getWaterfallScript(sessionId: string): string {
       requestAnimationFrame(animLoop);
 
       // Event Routing
+      // A turn is running when the engine says its runtime is; older engines only report a status.
+      function sessionIsRunning(sData) {
+        if (sData && sData.runtime) return sData.runtime.is_running === true;
+        return !!sData && (sData.status === 'running' || sData.status === 'compacting');
+      }
+
+      // Engine timestamps are epoch seconds; anything else, or a time well in the future, is unknown (0).
+      function engineTsMs(ts) {
+        const now = Date.now();
+        if (typeof ts !== 'number' || !Number.isFinite(ts) || ts < 1e9 || ts * 1000 > now + 60000) return 0;
+        return Math.min(now, ts * 1000);
+      }
+
       window.addEventListener('message', (event) => {
         const msg = event.data;
         if (!msg || !msg.type) return;
@@ -1137,7 +1150,7 @@ export function getWaterfallScript(sessionId: string): string {
             let span = state.spans.get(msg.tool_id);
             if (!span) {
               const turn = state.turns.get(state.currentTurnId) || ensureTurn(state.currentTurnId);
-              const dur = msg.duration_ms || 400;
+              const dur = typeof msg.duration_ms === 'number' && msg.duration_ms > 0 ? msg.duration_ms : 0;
               const end = msg.ts ? msg.ts * 1000 : Date.now();
               const isSub = (msg.tool_name === 'spawn_subagent');
               span = {
@@ -1158,6 +1171,19 @@ export function getWaterfallScript(sessionId: string): string {
               renderSpanRow(span);
             } else if (span.status === 'done') {
               if (!span.result && msg.result) span.result = msg.result;
+              if (span.estimated && typeof msg.duration_ms === 'number' && msg.duration_ms > 0) {
+                const realEnd = engineTsMs(msg.ts);
+                span.durationMs = msg.duration_ms;
+                if (realEnd) {
+                  span.endTime = realEnd;
+                  span.startTime = realEnd - msg.duration_ms;
+                } else {
+                  span.endTime = span.startTime + msg.duration_ms;
+                }
+                span.estimated = false;
+                updateTimingBars(span.turnId);
+                updateSummaryStats();
+              }
               break;
             } else {
               const isBgProc = (span.name === 'shell_bg' || msg.tool_name === 'shell_bg');
@@ -1668,6 +1694,13 @@ export function getWaterfallScript(sessionId: string): string {
           case 'session_history': {
             const sData = msg.session;
             if (!sData) break;
+            const sessionRunning = sessionIsRunning(sData);
+            const liveToolStarts = new Map();
+            if (sessionRunning && sData.runtime && Array.isArray(sData.runtime.tools)) {
+              for (const tool of sData.runtime.tools) {
+                if (tool && tool.tool_id) liveToolStarts.set(tool.tool_id, engineTsMs(tool.ts));
+              }
+            }
 
             // Idempotent history load (fixes reload vs close/reopen split):
             // the panel now always sends session.get first, possibly twice
@@ -1793,7 +1826,6 @@ export function getWaterfallScript(sessionId: string): string {
                     let maxToolEnd = toolBatchStart;
 
                     m.tool_calls.forEach((tc, tcIdx) => {
-                      if (tc.id) state.committedToolCallIds.add(tc.id);
                       const tName = tc.function ? tc.function.name : (tc.name || 'tool');
                       const tArgs = tc.function ? tc.function.arguments : (tc.arguments || '');
                       const tSpanId = tc.id || ('tool_' + currentTurn.id + '_' + tcIdx);
@@ -1801,6 +1833,9 @@ export function getWaterfallScript(sessionId: string): string {
 
                       // Look for the matching tool result message in subsequent messages
                       const toolResultMsg = messages.slice(i + 1).find(tm => tm.role === 'tool' && tm.tool_call_id === tc.id);
+                      const stillRunning = !toolResultMsg && liveToolStarts.has(tc.id) &&
+                        !messages.slice(i + 1).some(tm => tm.role === 'user');
+                      if (tc.id && !stillRunning) state.committedToolCallIds.add(tc.id);
                       let toolResultContent = toolResultMsg ? (toolResultMsg.content || '') : '';
                       let toolDur = 400;
 
@@ -1849,9 +1884,10 @@ export function getWaterfallScript(sessionId: string): string {
                         } catch (e) {}
                       }
 
-                      const tStart = toolBatchStart;
-                      const tEnd = toolBatchStart + toolDur;
-                      if (tEnd > maxToolEnd) maxToolEnd = tEnd;
+                      const tStart = stillRunning ? (liveToolStarts.get(tc.id) || toolBatchStart) : toolBatchStart;
+                      const tEnd = stillRunning ? null : toolBatchStart + toolDur;
+                      if (tEnd && tEnd > maxToolEnd) maxToolEnd = tEnd;
+                      if (stillRunning) state.isRunning = true;
 
                       const tSpan = {
                         id: tSpanId,
@@ -1860,8 +1896,9 @@ export function getWaterfallScript(sessionId: string): string {
                         name: isSub ? (subRole ? 'Subagent: ' + subRole : 'Subagent') : tName,
                         startTime: tStart,
                         endTime: tEnd,
-                        durationMs: toolDur,
-                        status: 'done',
+                        durationMs: stillRunning ? 0 : toolDur,
+                        status: stillRunning ? 'running' : 'done',
+                        estimated: !stillRunning && !toolResultMsg,
                         args: tArgs,
                         result: toolResultContent,
                         toolSteps: subToolSteps
@@ -1882,7 +1919,7 @@ export function getWaterfallScript(sessionId: string): string {
                 }
               }
 
-              const isSessionRunning = sData.status === 'running';
+              const isSessionRunning = sessionRunning;
               for (const turn of state.turns.values()) {
                 const isLatestTurn = (turn.id === state.currentTurnId);
                 if (isLatestTurn && isSessionRunning) {
@@ -1918,7 +1955,7 @@ export function getWaterfallScript(sessionId: string): string {
 
               state.historyTokenBase = Math.max(0, (sData.token_total || 0) - liveSpanTokens());
               syncTokenTotals();
-              state.isRunning = sData.status === 'running';
+              state.isRunning = sessionRunning;
 
               // Watermark: number of user-turns materialised from history.
               // Duplicate session_history payloads skip everything at/below it.
