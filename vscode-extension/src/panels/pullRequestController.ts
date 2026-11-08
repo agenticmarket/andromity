@@ -21,6 +21,7 @@ import {
 } from "../integrations/pullRequest/flow.js";
 import { VscodeGitPort, loadGitApi, repositoryAt } from "../integrations/pullRequest/vscodeGit.js";
 import { PrFile } from "../integrations/pullRequest/types.js";
+import { SNAPSHOT_BRANCH } from "../integrations/snapshotBranchWarning.js";
 import {
   PrAction, PrCheckItem, PrDoneView, PrFailedView, PrFileRow, PrFormView, PrPhase, PrStep, PrTag, PrView,
 } from "../providers/changesReview/prView.js";
@@ -241,6 +242,12 @@ export class PullRequestController {
     }
     if (generation !== this.generation) return;
     this.context = context;
+    if (context.head.branch?.toLowerCase() === SNAPSHOT_BRANCH) {
+      this.block(`You're on ${SNAPSHOT_BRANCH}`, `That's where Andromity keeps undo snapshots, not a branch for your work, so nothing can be shipped from it. Switch to your own branch or main with VS Code's branch picker, then open this form again. Files the agent made there are kept in the snapshot commits.`, [
+        { id: "switch_branch", label: "Switch branch", primary: true }, { id: "close", label: "Close" }]);
+      this.track("pr_blocked_snapshot_branch");
+      return;
+    }
     if (context.inProgress) {
       this.block(`Finish the ${context.inProgress} first`, `A ${context.inProgress} is in progress in this repository. Finish or abort it in Source Control, then try again.`, [{ id: "close", label: "Close" }]);
       this.track("pr_blocked_in_progress");
@@ -611,6 +618,7 @@ export class PullRequestController {
     if (!ticked.length) return "Tick at least one file.";
     if (this.form.createBranch) {
       if (!isValidBranchName(this.form.branchName)) return "Choose a branch name with letters, numbers, dots, dashes, underscores and slashes.";
+      if (this.form.branchName.toLowerCase() === SNAPSHOT_BRANCH) return `${SNAPSHOT_BRANCH} is reserved for Andromity's undo snapshots. Choose another name.`;
       if (this.form.branchTaken) return `A branch named ${this.form.branchName} already exists. Choose another name.`;
     } else if (this.mustCreate()) {
       return "This goes on a new branch. Name it above.";
@@ -1579,6 +1587,9 @@ export class PullRequestController {
         return;
       case "show_output":
         void vscode.commands.executeCommand("git.showOutput");
+        return;
+      case "switch_branch":
+        if (this.phase === "blocked") void vscode.commands.executeCommand("git.checkout");
         return;
       case "publish":
         this.track("pr_publish");

@@ -10,6 +10,31 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("andromity.git_ops")
 SNAPSHOT_BRANCH = "andromity-snapshots"
+# Where snapshots go while someone has the snapshot branch checked out: moving that branch would commit
+# their working files onto the branch they are working on.
+CHECKED_OUT_SNAPSHOT_REF = "refs/andromity/snapshots"
+
+
+def snapshot_branch_checked_out(repo: "Repo") -> bool:
+    """True when this or any other worktree of the repository has the snapshot branch checked out, under any
+    capitalisation (Windows and macOS open the same ref for every case)."""
+    wanted = f"refs/heads/{SNAPSHOT_BRANCH}"
+    git = safe_git_command(repo)
+    try:
+        if repo.git.execute([*git, "symbolic-ref", "-q", "HEAD"]).strip().lower() == wanted:
+            return True
+    except Exception:
+        pass
+    try:
+        listing = repo.git.execute([*git, "worktree", "list", "--porcelain"])
+    except Exception:
+        return False
+    return any(line.strip().lower() == f"branch {wanted}" for line in listing.splitlines())
+
+
+def snapshot_ref(repo: "Repo") -> str:
+    """The ref new snapshots are recorded on: the snapshot branch, unless it is checked out."""
+    return CHECKED_OUT_SNAPSHOT_REF if snapshot_branch_checked_out(repo) else f"refs/heads/{SNAPSHOT_BRANCH}"
 # An empty core.fsmonitor disables it on every git version; "false" is read as a program name before 2.36.
 NO_REPO_PROGRAMS = ("-c", "core.fsmonitor=", "-c", f"core.hooksPath={os.devnull}")
 _FILTER_PROGRAMS = ("clean", "smudge", "process")
@@ -187,9 +212,14 @@ def create_pre_edit_snapshot(
         work_dir = Path(repo.working_tree_dir)
         scope = Path(repo_or_path).resolve() if isinstance(repo_or_path, (str, Path)) else work_dir.resolve()
 
-        # Base commit: use latest snapshot on shadow branch if present, else HEAD
+        snap_ref = snapshot_ref(repo)
+        if snap_ref == CHECKED_OUT_SNAPSHOT_REF:
+            log.warning("%s is checked out; keeping this snapshot under %s so the checked-out branch doesn't move",
+                        SNAPSHOT_BRANCH, CHECKED_OUT_SNAPSHOT_REF)
+
+        # Base commit: use latest snapshot if present, else HEAD
         try:
-            snap_base = repo.git.rev_parse(f"refs/heads/{SNAPSHOT_BRANCH}").strip()
+            snap_base = repo.git.rev_parse(snap_ref).strip()
         except (GitCommandError, Exception):
             snap_base = head_commit
 
@@ -237,18 +267,12 @@ def create_pre_edit_snapshot(
                 pass
 
         # ── Create a real commit object on the shadow branch ────────────────
-        # Ensure shadow branch exists.
         git = safe_git_command(repo)
-        try:
-            repo.git.rev_parse(SNAPSHOT_BRANCH)
-        except GitCommandError:
-            repo.git.execute([*git, "update-ref", f"refs/heads/{SNAPSHOT_BRANCH}", head_commit])
-
         snap_hash = repo.git.execute(
             [*git, "commit-tree", tree_hash, "-p", snap_base, "-m", "andromity: pre-turn snapshot"]
         ).strip()
 
-        repo.git.execute([*git, "update-ref", f"refs/heads/{SNAPSHOT_BRANCH}", snap_hash])
+        repo.git.execute([*git, "update-ref", snap_ref, snap_hash])
         return snap_hash
 
     except Exception as e:
@@ -383,12 +407,13 @@ def checkpoint_changed_files(repo: "Repo", record: dict, project_path: str) -> l
 
 def list_snapshots(repo: Repo, limit: int = 20) -> List[dict]:
     from git.exc import GitCommandError
+    ref = snapshot_ref(repo)
     try:
-        repo.git.rev_parse(SNAPSHOT_BRANCH)
+        repo.git.rev_parse(ref)
     except (GitCommandError, Exception):
         return []
     try:
-        log_output = repo.git.log(SNAPSHOT_BRANCH, f"-{limit}", "--format=%H|%ai|%s")
+        log_output = repo.git.log(ref, f"-{limit}", "--format=%H|%ai|%s")
         snapshots = []
         for line in log_output.strip().split("\n"):
             if not line.strip():

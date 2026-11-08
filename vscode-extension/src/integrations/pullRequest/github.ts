@@ -44,7 +44,25 @@ export interface PullInfo {
   title: string;
 }
 
+export interface PullSummary {
+  number: number;
+  title: string;
+  author: string;
+  draft: boolean;
+  headRef: string;
+  baseRef: string;
+}
+
+export interface PullDetail extends PullSummary {
+  body: string;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+}
+
 export const GITHUB_API = "https://api.github.com";
+/** Diffs longer than this are cut for the review; the review is told so. */
+export const MAX_REVIEW_DIFF = 300_000;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 const NAME = /^[A-Za-z0-9._-]{1,100}$/;
@@ -85,6 +103,24 @@ function readRepo(raw: unknown): RepoInfo | null {
   };
 }
 
+function count(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function readPullSummary(raw: unknown): PullSummary | null {
+  const value = obj(raw);
+  const number = value?.number;
+  const title = str(value?.title, 1024);
+  const author = str(obj(value?.user)?.login, 100);
+  const headRef = str(obj(value?.head)?.ref, 255);
+  const baseRef = str(obj(value?.base)?.ref, 255);
+  if (typeof number !== "number" || !Number.isSafeInteger(number) || number <= 0 || title === null || !author || !LOGIN.test(author.replace(/\[bot\]$/, ""))
+    || headRef === null || baseRef === null) {
+    return null;
+  }
+  return { number, title, author, draft: value?.draft === true, headRef, baseRef };
+}
+
 function readPull(raw: unknown): PullInfo | null {
   const value = obj(raw);
   const number = value?.number;
@@ -102,7 +138,7 @@ export class GitHubClient {
     private readonly timeoutMs = DEFAULT_TIMEOUT_MS,
   ) {}
 
-  private async request(method: string, path: string, body?: unknown): Promise<{ status: number; data: unknown }> {
+  private async request(method: string, path: string, body?: unknown, accept = "application/vnd.github+json"): Promise<{ status: number; data: unknown; text: string }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     let response: HttpResponse;
@@ -110,7 +146,7 @@ export class GitHubClient {
       response = await this.fetchImpl(`${this.apiBase}${path}`, {
         method,
         headers: {
-          Accept: "application/vnd.github+json",
+          Accept: accept,
           Authorization: `Bearer ${this.token}`,
           "X-GitHub-Api-Version": "2022-11-28",
           "User-Agent": "Andromity-VSCode",
@@ -139,14 +175,21 @@ export class GitHubClient {
       clearTimeout(timer);
     }
     let data: unknown = null;
-    if (text) {
+    if (text && accept === "application/vnd.github+json") {
       try {
         data = JSON.parse(text);
       } catch {
         data = null;
       }
     }
-    if (response.status >= 200 && response.status < 300) return { status: response.status, data };
+    if (response.status >= 200 && response.status < 300) return { status: response.status, data, text };
+    if (text && data === null) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = null;
+      }
+    }
     throw this.errorFor(response, data);
   }
 
@@ -243,6 +286,75 @@ export class GitHubClient {
       reviewers,
       team_reviewers: teams,
     });
+  }
+
+  async openPulls(owner: string, repo: string): Promise<PullSummary[]> {
+    const { data } = await this.request("GET", `/repos/${seg(owner)}/${seg(repo)}/pulls?state=open&per_page=50&sort=updated&direction=desc`);
+    if (!Array.isArray(data)) return [];
+    return data.map(readPullSummary).filter((pull): pull is PullSummary => !!pull).slice(0, 50);
+  }
+
+  async pullDetail(owner: string, repo: string, number: number): Promise<PullDetail> {
+    const { data } = await this.request("GET", `/repos/${seg(owner)}/${seg(repo)}/pulls/${number}`);
+    const summary = readPullSummary(data);
+    if (!summary || summary.number !== number) throw new GitHubError("server");
+    const value = obj(data);
+    return {
+      ...summary,
+      body: str(value?.body, 65_536) ?? "",
+      additions: count(value?.additions),
+      deletions: count(value?.deletions),
+      changedFiles: count(value?.changed_files),
+    };
+  }
+
+  /** The pull request's unified diff, cut at MAX_REVIEW_DIFF characters. A pull request too large for GitHub's
+   *  diff (it answers 406) is rebuilt from its files list, where very large files come without a patch. */
+  async pullDiff(owner: string, repo: string, number: number): Promise<{ diff: string; cut: boolean }> {
+    let text: string;
+    try {
+      text = (await this.request("GET", `/repos/${seg(owner)}/${seg(repo)}/pulls/${number}`, undefined, "application/vnd.github.diff")).text;
+    } catch (error) {
+      if (!(error instanceof GitHubError) || error.status !== 406) throw error;
+      return this.diffFromFiles(owner, repo, number);
+    }
+    return { diff: text.slice(0, MAX_REVIEW_DIFF), cut: text.length > MAX_REVIEW_DIFF };
+  }
+
+  private async diffFromFiles(owner: string, repo: string, number: number): Promise<{ diff: string; cut: boolean }> {
+    const parts: string[] = [];
+    let length = 0;
+    let cut = false;
+    for (let page = 1; page <= 30; page++) {
+      const { data } = await this.request("GET", `/repos/${seg(owner)}/${seg(repo)}/pulls/${number}/files?per_page=100&page=${page}`);
+      if (!Array.isArray(data)) {
+        if (page === 1) throw new GitHubError("server");
+        cut = true;
+        break;
+      }
+      if (!data.length) break;
+      for (const entry of data) {
+        const name = str(obj(entry)?.filename, 4096);
+        if (!name) continue;
+        const patch = str(obj(entry)?.patch, MAX_REVIEW_DIFF);
+        const part = `diff --git a/${name} b/${name}\n${patch ? `--- a/${name}\n+++ b/${name}\n${patch}` : "(no patch: the file is too large or binary)"}\n`;
+        if (length + part.length > MAX_REVIEW_DIFF) {
+          cut = true;
+          break;
+        }
+        parts.push(part);
+        length += part.length;
+      }
+      if (cut || data.length < 100) break;
+      if (page === 30) cut = true;
+    }
+    if (!parts.length) throw new GitHubError("server");
+    return { diff: parts.join(""), cut };
+  }
+
+  /** A review that only comments: it never approves or requests changes. */
+  async postReviewComment(owner: string, repo: string, number: number, body: string): Promise<void> {
+    await this.request("POST", `/repos/${seg(owner)}/${seg(repo)}/pulls/${number}/reviews`, { event: "COMMENT", body });
   }
 
   async comment(owner: string, repo: string, number: number, body: string): Promise<void> {

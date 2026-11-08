@@ -5,6 +5,7 @@ import { HEAD_SCHEME } from "../integrations/DiffManager.js";
 import { getReviewHtml } from "../providers/changesReview/reviewHtml.js";
 import { currentAirGap } from "../airgapState.js";
 import { loadGitApi } from "../integrations/pullRequest/vscodeGit.js";
+import { SNAPSHOT_BRANCH, warnIfOnSnapshotBranch } from "../integrations/snapshotBranchWarning.js";
 import { PullRequestController, TurnRef } from "./pullRequestController.js";
 
 import { GitStatusResult, DiffNumstatResult, ReviewFile } from "../providers/changesReview/types.js";
@@ -386,6 +387,7 @@ export class ChangesReviewPanel {
       this._files = files;
       this._turnFilesRel = turnFiles;
       this._isGit = true;
+      if (statusRes.branch?.toLowerCase() === SNAPSHOT_BRANCH) void warnIfOnSnapshotBranch();
       this._postMessage({
         type: "set_changes",
         branch: statusRes.branch || "HEAD",

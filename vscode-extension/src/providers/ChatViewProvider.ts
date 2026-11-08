@@ -22,6 +22,8 @@ import { ReceiptPanel } from "../panels/ReceiptPanel.js";
 import { BackgroundTaskPanel } from "../panels/BackgroundTaskPanel.js";
 import { ChangesReviewPanel } from "../panels/ChangesReviewPanel.js";
 import type { TurnRef } from "../panels/pullRequestController.js";
+import { warnIfOnSnapshotBranch } from "../integrations/snapshotBranchWarning.js";
+import { reviewTargetFromLabel, type ReviewHost, type ReviewTarget } from "../integrations/pullRequest/reviewPullRequest.js";
 import { PythonBridge } from "../server/PythonBridge.js";
 import { RpcClient } from "../server/RpcClient.js";
 import { handleInputMessage } from "../server/inputBridge.js";
@@ -123,6 +125,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _latestTurnFiles: Set<string> = new Set<string>();
   /** The session and turn number of _latestTurnFiles; the number arrives with the turn's receipt. */
   private _latestTurn: TurnRef | null = null;
+  /** GitHub text waiting to go with one prompt in the review's own new chat, keyed by that chat. */
+  private _pendingExternal = new Map<string, { prompt: string; external: { source: string; text: string }; target: ReviewTarget }[]>();
+  /** Chats that review a pull request. */
+  private _reviewSessions = new Map<string, ReviewTarget>();
   private _hydration = new SessionHydration();
 
   public async undoSession(sessionId: string, turnIndex?: number, turnsToUndo?: number): Promise<SessionUndoResult | undefined> {
@@ -1333,6 +1339,48 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       : null;
   }
 
+  /** What the pull request review commands need from the chat. */
+  public reviewHost(): ReviewHost {
+    return {
+      startExternalTask: async (prompt, external, taskName, target) => {
+        if (!this._rpcClient) throw new Error("Andromity's engine isn't running.");
+        const created = await this._rpcClient.call<SessionInfo>("session.create", {
+          name: taskName,
+          project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+        });
+        if (!created?.id) throw new Error("The review chat couldn't be created.");
+        this._sessionNames.set(created.id, created.name || taskName);
+        const queue = this._pendingExternal.get(created.id) ?? [];
+        queue.push({ prompt, external, target });
+        this._pendingExternal.set(created.id, queue);
+        void this.fetchAndPostSessions();
+        await this.sendPromptFromExternal(prompt, undefined, { taskName, targetSessionId: created.id, forkSessionIfBusy: false });
+      },
+      reviewIn: async (sessionId) => {
+        const sid = sessionId || this._currentSessionId;
+        if (!sid) return null;
+        const known = this._reviewSessions.get(sid);
+        if (known) return { sessionId: sid, target: known };
+        if (!this._rpcClient) return null;
+        const data = await this._rpcClient.call<any>("session.get", { session_id: sid }).catch(() => null);
+        const target = reviewTargetFromLabel(data?.external_review);
+        if (!target) return null;
+        this._reviewSessions.set(sid, target);
+        return { sessionId: sid, target };
+      },
+      lastAnswer: async (sessionId) => {
+        if (!this._rpcClient) return null;
+        const data = await this._rpcClient.call<any>("session.get", { session_id: sessionId }).catch(() => null);
+        const messages: any[] = Array.isArray(data?.messages) ? data.messages : [];
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const message = messages[i];
+          if (message?.role === "assistant" && typeof message.content === "string" && message.content.trim()) return message.content;
+        }
+        return null;
+      },
+    };
+  }
+
   /** Opens Changes Review on the latest turn with the Create pull request form. */
   public createPullRequest() {
     this.openReviewWebview(undefined, undefined, undefined, true);
@@ -1500,6 +1548,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       this._latestTurnFiles.clear();
       this._latestTurn = null;
+      void warnIfOnSnapshotBranch();
       void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
       ChangesReviewPanel.setAgentRunning(true);
       this._postToWebview({ type: "agent_started", ...params });
@@ -1727,6 +1776,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       this._postToWebview({ type: "agent_done", ...params, turn_files: turnFiles });
+      const review = sid ? this._reviewSessions?.get(sid) : undefined;
+      if (review && params?.outcome === "success") {
+        void vscode.window.showInformationMessage(`The review of #${review.number} is ready in the chat.`, "Edit and post").then((choice) => {
+          if (choice) void vscode.commands.executeCommand("andromity.postPullRequestReview", sid);
+        });
+      }
       // Scheduled runs report through their own cron notification instead.
       if (this.isSoundEnabled("done") && !params?.scheduled) {
         this._postToWebview({ type: "play_sound", kind: "done" });
@@ -2586,6 +2641,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "send_prompt": {
         let promptText = message.prompt || "";
+        const pendingSid = message.sessionId || this._currentSessionId;
+        const pendingQueue = this._pendingExternal?.get(pendingSid);
+        const pendingAt = pendingQueue ? pendingQueue.findIndex((entry) => entry.prompt === promptText) : -1;
+        const pendingExternal = pendingQueue && pendingAt >= 0 ? pendingQueue[pendingAt] : undefined;
         console.log('[Andromity ext] send_prompt recv:', promptText.slice(0,120), 'sess', this._currentSessionId, 'hasClient', !!this._rpcClient);
         try {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -2632,9 +2691,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }).catch(() => {});
           }
 
+          if (pendingExternal && activeSid !== pendingSid) {
+            throw new Error("The review's chat changed before its prompt was sent. Start the review again.");
+          }
+          if (pendingExternal && pendingQueue) {
+            pendingQueue.splice(pendingAt, 1);
+            if (!pendingQueue.length) this._pendingExternal?.delete(pendingSid);
+            this._reviewSessions?.set(pendingSid, pendingExternal.target);
+          }
           await this._rpcClient.call("agent.prompt", {
             session_id: activeSid,
             prompt: promptText,
+            ...(pendingExternal ? { external_context: pendingExternal.external } : {}),
             project_path: workspaceFolder,
             profile: message.profile || this._currentProfile,
             model: cleanModel,

@@ -45,6 +45,10 @@ Model and provider names are the identifiers you configured (for example `anthro
 | `pr_fail_<step>`, `pr_err_<kind>`, `pr_cancelled_running` | Which step failed and a fixed category, such as `pr_err_push_rejected` |
 | `pr_draft_ok`, `pr_draft_failed`, `pr_checks_changed`, `pr_sign_in`, `pr_sign_in_again`, `pr_sign_in_declined`, `pr_retry`, `pr_push_new_name`, `pr_switch_back`, `pr_open_link`, `pr_copy_link`, `pr_open_page`, `pr_publish`, `pr_reviewers_failed` | Drafting results and the buttons used after a step |
 
+### Pull request reviews
+
+**Review Pull Request** sends `feature_use` names starting with `pra_`: `pra_review_started`, `pra_review_posted`, `pra_review_no_prs`, `pra_review_diff_cut`, `pra_review_failed` and `pra_review_post_failed`. Like the `pr_` names, none carries a repository, pull request, author, review text or error text.
+
 ## Feedback you send
 
 **Send Feedback** in VS Code opens a box where you can write a note to the Andromity team. A note is sent only when you submit it, and only with the client, OS family and Andromity version. The worker also stores the country Cloudflare reports for the connection. A note is **not** linked to your telemetry ID, and the worker does not store your IP address. Anything that looks like an API key is removed before it is stored. If you include your email address so we can reply, we use it only for that.

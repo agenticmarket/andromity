@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { GitHubClient, GitHubError, PullInfo, RepoInfo } from "./github.js";
 import { ParsedRemote, newPullRequestUrl, parseRemoteUrl } from "./remotes.js";
-import { isValidBranchName, firstFreeName } from "./branchName.js";
+import { SNAPSHOT_BRANCH, isValidBranchName, firstFreeName } from "./branchName.js";
 import { MAX_SCAN_BYTES, SecretHit, SizeSummary, looksBinary, secretsInDiff, secretsInFile, sizeOf } from "./checks.js";
 import { AirGapView, GitPort, HeadInfo, OperationInProgress, PrFile } from "./types.js";
 
@@ -173,7 +173,8 @@ export async function prepareContext(deps: FlowDeps): Promise<RepoContext> {
         context.github.headOwner = repo.owner;
         context.github.target = repo.parent ? { owner: repo.parent.owner, repo: repo.parent.repo } : { owner: repo.owner, repo: repo.repo };
         context.base = repo.parent ? repo.parent.defaultBranch : repo.defaultBranch;
-        context.baseOptions = await deps.github.branches(context.github.target.owner, context.github.target.repo).catch(() => []);
+        context.baseOptions = (await deps.github.branches(context.github.target.owner, context.github.target.repo).catch(() => [] as string[]))
+          .filter((name) => name.toLowerCase() !== SNAPSHOT_BRANCH);
       } catch (error) {
         context.github.problem = githubProblemOf(error);
         context.github.ssoUrl = error instanceof GitHubError ? error.ssoUrl : null;
@@ -441,6 +442,7 @@ async function verifyReviewed(deps: FlowDeps, plan: RunPlan): Promise<void> {
 
 function checkPlan(plan: RunPlan): void {
   if (!isValidBranchName(plan.branch) || !isValidBranchName(plan.base)) throw new FlowError("branch", "git_failed");
+  if ([plan.branch, plan.base].some((name) => name.toLowerCase() === SNAPSHOT_BRANCH)) throw new FlowError("branch", "git_failed");
   if (plan.startFrom !== undefined) {
     const at = plan.startFrom.indexOf("/");
     const remote = at > 0 ? plan.startFrom.slice(0, at) : "";

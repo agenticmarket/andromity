@@ -1,4 +1,6 @@
 export const DEFAULT_BRANCH_PREFIX = "andromity/";
+/** Andromity keeps undo snapshots on this branch; nobody should work on it or ship from it. */
+export const SNAPSHOT_BRANCH = "andromity-snapshots";
 export const MAX_BRANCH_LENGTH = 100;
 const SLUG_LENGTH = 48;
 

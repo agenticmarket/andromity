@@ -36,6 +36,10 @@ READ_ONLY_TOOLS = {
     # Session & multi-agent coordination read-only tools
     "session_list", "session_read_messages", "session_inbox", "shared_state_get", "read_handoff",
 }
+REVIEW_UNATTENDED_TOOLS = {
+    "read_file", "view_file", "find_files", "grep_search", "list_dir",
+    "write_plan", "update_plan_step", "suggest_next_step", "ask_question", "ask_questions",
+}
 SESSION_DRIVING_TOOLS = {
     "session_send_message", "session_ask_question", "session_broadcast",
     "shared_state_set", "write_handoff",
@@ -913,6 +917,7 @@ class JsonRpcHandler:
             "watching_for": getattr(session, "watching_for", None),
             "scheduled_run": self._scheduled_run_info(session),
             "started_from": deepcopy(getattr(session, "started_from", None)),
+            "external_review": getattr(session, "external_review", None),
             "background_runs": deepcopy(getattr(session, "background_runs", None) or []),
             "receipt_turns": receipt_turns(session) if config.is_trusted(session.project_path) else [],
         }
@@ -1818,6 +1823,18 @@ class JsonRpcHandler:
         # Respect per-session mode passed from client, falling back to server default
         from andromity.core.subagent_orchestrator import normalize_mode, restrict_session_subagents
         mode = normalize_mode(params.get("mode") or config.get("default", "permission_mode", "safe"))
+        from andromity.core.tools import carries_external_content, read_external_context, wrap_external_text
+        external = read_external_context(params.get("external_context"))
+        if external and not getattr(session, "external_review", None):
+            session.external_review = external[0]
+        elif not getattr(session, "external_review", None) and carries_external_content(session.messages):
+            session.external_review = "github:"
+        review_locked = bool(getattr(session, "external_review", None))
+        if review_locked:
+            mode, profile = "safe", "reviewer"
+            session.profile = profile
+        if external:
+            prompt = f"{prompt}\n\n{wrap_external_text(*external)}"
         session.permission_mode = mode
         if not params.get("is_auto_wake"):
             # A woken turn is capped by content nobody typed; only the user's own choice lowers running sub-agents.
@@ -1853,6 +1870,11 @@ class JsonRpcHandler:
 
             # 3. Read-only tools bypass approval UNLESS accessing sensitive credentials/keys
             if is_sensitive:
+                needs_approval = True
+            elif review_locked:
+                # A chat holding someone else's text: only reading this folder and planning run without a person.
+                if t_lower in REVIEW_UNATTENDED_TOOLS:
+                    return True
                 needs_approval = True
             elif t_lower in READ_ONLY_TOOLS:
                 return True
@@ -3240,6 +3262,46 @@ class JsonRpcHandler:
             if repo:
                 await asyncio.to_thread(repo.close)
 
+
+    async def _turn_session_repo(self, params: Dict[str, Any]):
+        """The session and repository for a turn-changes request, or a plain reason they can't be used."""
+        session_id = params.get("session_id")
+        turn = params.get("turn_index")
+        if not isinstance(session_id, str) or not session_id or isinstance(turn, bool) or not isinstance(turn, int) or turn < 0:
+            return None, None, "Choose a turn from this chat."
+        session = self._active_sessions.get(session_id) or await asyncio.to_thread(Session.load_by_id, session_id, params.get("project_path"))
+        if session is None:
+            return None, None, "That chat was not found. It may have been deleted."
+        if not config.is_trusted(session.project_path):
+            return None, None, "Trust this workspace to review its turns."
+        repo = get_repo(Path(session.project_path))
+        if repo is None:
+            return None, None, "This folder isn't a git repository, so turns have no snapshots."
+        return session, repo, None
+
+    async def rpc_git_turn_changes(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from andromity.core.turn_changes import TurnChangesUnavailable, turn_changes
+        session, repo, problem = await self._turn_session_repo(params)
+        if problem:
+            return {"success": False, "error": problem}
+        try:
+            return {"success": True, **await asyncio.to_thread(turn_changes, session, params["turn_index"], repo)}
+        except TurnChangesUnavailable as exc:
+            return {"success": False, "error": str(exc)}
+        except Exception:
+            return {"success": False, "error": "This turn's changes couldn't be read. Try again."}
+
+    async def rpc_git_turn_file_diff(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from andromity.core.turn_changes import TurnChangesUnavailable, turn_file_diff
+        session, repo, problem = await self._turn_session_repo(params)
+        if problem:
+            return {"success": False, "diff": "", "notice": problem}
+        try:
+            return {"success": True, **await asyncio.to_thread(turn_file_diff, session, params["turn_index"], params.get("path"), repo)}
+        except TurnChangesUnavailable as exc:
+            return {"success": False, "diff": "", "notice": str(exc)}
+        except Exception:
+            return {"success": False, "diff": "", "notice": "This turn's diff couldn't be read. Try again."}
 
     async def rpc_git_file_diff(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.git_review import file_diff

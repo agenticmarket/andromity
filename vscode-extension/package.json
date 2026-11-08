@@ -292,6 +292,22 @@
         "icon": "$(git-pull-request)"
       },
       {
+        "command": "andromity.reviewPullRequest",
+        "title": "Review Pull Request…",
+        "category": "Andromity",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "andromity.postPullRequestReview",
+        "title": "Edit Review to Post",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.postReviewDocument",
+        "title": "Post Review Document to Pull Request",
+        "category": "Andromity"
+      },
+      {
         "command": "andromity.openSessionInTab",
         "title": "Open Session in Editor Tab (Pop Out)",
         "category": "Andromity",

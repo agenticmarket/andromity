@@ -21,6 +21,7 @@ import { WaitlistController } from "./engagement/waitlistController.js";
 import { AttentionKind, BackgroundSessions, describeToolActivity } from "./backgroundSessions.js";
 import { confirmTurnOnAirGap, currentAirGap } from "./airgapState.js";
 import { airGapStatusLine } from "./airgap.js";
+import { openReviewForPosting, postActiveReview, reviewPullRequest } from "./integrations/pullRequest/reviewPullRequest.js";
 
 let pythonBridge: PythonBridge | null = null;
 let statusBarItem: vscode.StatusBarItem;
@@ -812,6 +813,18 @@ export async function activate(context: vscode.ExtensionContext) {
 
     registerTrackedCommand("andromity.createPullRequest", () => {
       chatProvider.createPullRequest();
+    }),
+
+    registerTrackedCommand("andromity.reviewPullRequest", async () => {
+      await reviewPullRequest(chatProvider.reviewHost());
+    }),
+
+    registerTrackedCommand("andromity.postPullRequestReview", async (sessionId?: unknown) => {
+      await openReviewForPosting(chatProvider.reviewHost(), typeof sessionId === "string" ? sessionId : undefined);
+    }),
+
+    registerTrackedCommand("andromity.postReviewDocument", async () => {
+      await postActiveReview();
     }),
 
     registerTrackedCommand("andromity.refreshSessions", () => {
