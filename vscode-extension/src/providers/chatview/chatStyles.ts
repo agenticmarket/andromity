@@ -8432,34 +8432,115 @@ ${STATUS_SHIMMER_STYLES}
       margin-bottom: 4px;
     }
 
-    /* Suggested next step (shown under the reply when a turn ends) */
+    /* Suggested next step: an unsent draft of the user's next message, under the reply when a turn ends */
     .next-step-card {
+      margin: 12px 0 4px;
+      padding: 6px 6px 7px 14px;
+      border: 1px dashed var(--vscode-input-border, rgba(var(--tint), 0.2));
+      border-radius: 10px;
+      background: rgba(var(--tint), 0.015);
+    }
+    .next-step-head {
       display: flex;
       align-items: center;
-      flex-wrap: wrap;
-      gap: 8px 12px;
-      margin: 8px 0 4px;
-      padding: 8px 8px 8px 12px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--chat-surface, var(--card-bg));
-    }
-    .next-step-text {
-      flex: 1 1 160px;
+      gap: 6px;
       min-width: 0;
     }
     .next-step-label {
-      font-size: 10.5px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex: 1;
+      min-width: 0;
+      font-size: 11px;
       color: var(--muted);
-      margin-bottom: 1px;
+    }
+    .next-step-icon,
+    .next-step-kicker,
+    .next-step-sep {
+      flex: none;
     }
     .next-step-title {
-      font-size: 12.5px;
-      font-weight: 500;
-      color: var(--fg);
+      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .next-step-card.has-choices .next-step-label {
+      align-items: flex-start;
+    }
+    .next-step-card.has-choices .next-step-icon {
+      margin-top: 3px;
+    }
+    .next-step-card.has-choices .next-step-title {
+      color: var(--fg);
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .next-step-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin: 6px 0;
+    }
+    .next-step-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-family: inherit;
+      font-size: 11.5px;
+      line-height: 18px;
+      padding: 0 9px;
+      border-radius: 10px;
+      border: 1px solid var(--vscode-input-border, rgba(var(--tint), 0.2));
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .next-step-option:hover {
+      color: var(--fg);
+    }
+    .next-step-option[aria-pressed="true"] {
+      color: var(--fg);
+      border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+      background: color-mix(in srgb, var(--accent) 16%, transparent);
+    }
+    .next-step-prompt {
+      margin-top: 3px;
+      padding-right: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--fg);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+      overflow: hidden;
+    }
+    .next-step-prompt.expanded {
+      display: block;
+      max-height: 240px;
+      overflow-y: auto;
+    }
+    .next-step-foot {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .next-step-more {
+      padding: 0;
+      border: 0;
+      background: none;
+      font-family: inherit;
+      font-size: 11.5px;
+      color: var(--vscode-textLink-foreground, var(--accent));
+      cursor: pointer;
+    }
+    .next-step-more:hover {
+      text-decoration: underline;
     }
     .secret-warning {
       margin: 0 0 8px;
@@ -8517,42 +8598,12 @@ ${STATUS_SHIMMER_STYLES}
       outline: 1px solid var(--vscode-focusBorder);
       outline-offset: 2px;
     }
-    .next-step-request {
-      margin-top: 4px;
-      font-size: 11px;
-      color: var(--vscode-descriptionForeground, var(--muted));
-    }
-    .next-step-request summary {
-      cursor: pointer;
-      width: fit-content;
-      list-style-position: inside;
-    }
-    .next-step-request summary:focus-visible {
-      outline: 1px solid var(--vscode-focusBorder);
-      outline-offset: 2px;
-    }
-    .next-step-request-body {
-      margin-top: 4px;
-      padding: 6px 8px;
-      max-height: 140px;
-      overflow-y: auto;
-      border-radius: 4px;
-      background: rgba(var(--tint), 0.04);
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      color: var(--fg);
-    }
-    .next-step-request-item + .next-step-request-item {
-      margin-top: 6px;
-    }
-    .next-step-request-name {
-      display: block;
-      font-weight: 600;
-    }
     .next-step-actions {
       display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
       margin-left: auto;
     }
     .next-step-btn {
@@ -8579,37 +8630,24 @@ ${STATUS_SHIMMER_STYLES}
     .next-step-btn.primary:hover {
       background: var(--vscode-button-hoverBackground, var(--accent));
     }
-    .next-step-card.has-choices {
-      position: relative;
-      flex-direction: column;
-      align-items: stretch;
-      gap: 8px;
-      padding: 9px 10px 10px 12px;
+    .next-step-card .next-step-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
     }
-    .next-step-card.has-choices .next-step-text {
-      flex: none;
-      padding-right: 22px;
+    .next-step-btn.ghost {
+      background: transparent;
+      border-color: transparent;
+      color: var(--muted);
+      padding: 3px 7px;
     }
-    .next-step-card.has-choices .next-step-title {
-      white-space: normal;
-      overflow-wrap: anywhere;
-    }
-    .next-step-card.has-choices .next-step-actions {
-      flex-wrap: wrap;
-      margin-left: 0;
-    }
-    .next-step-card.has-choices .next-step-dismiss {
-      position: absolute;
-      top: 6px;
-      right: 6px;
-    }
-    .next-step-new-tag {
-      margin-left: 6px;
-      font-size: 10px;
-      font-weight: 400;
-      opacity: 0.75;
+    .next-step-btn.ghost:hover {
+      background: var(--surface-hover);
+      color: var(--fg);
     }
     .next-step-btn:focus-visible,
+    .next-step-option:focus-visible,
+    .next-step-more:focus-visible,
     .next-step-dismiss:focus-visible {
       outline: 1px solid var(--vscode-focusBorder, var(--accent));
       outline-offset: 1px;

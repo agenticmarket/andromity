@@ -125,7 +125,7 @@ describe("Next-step choices", () => {
       document: {
         getElementById: (id: string) => (id === "prompt-input" ? input : id === "next-step-card" && card && !card.removed ? card : null),
         createElement: () => {
-          const el: any = { id: "", className: "", innerHTML: "", setAttribute() {}, remove() { el.removed = true; } };
+          const el: any = { id: "", className: "", innerHTML: "", setAttribute() {}, querySelector: () => null, remove() { el.removed = true; } };
           el.classList = { add: (c: string) => { el.className += " " + c; } };
           return el;
         },
@@ -146,15 +146,16 @@ describe("Next-step choices", () => {
     ],
   };
 
-  it("shows the question with one button per option, the recommended one first", () => {
+  it("shows the question with one option per button, the recommended one picked first", () => {
     const rt = cardRuntime();
     rt.sandbox.raw = CHOICE;
     rt.run("receiveNextStep('s1', raw)");
     const html = rt.card().innerHTML;
     assert.ok(html.includes(">Which fix first?<"));
-    assert.ok(html.includes('class="next-step-btn primary" data-action="next-step-run" data-opt-idx="0"') && html.includes(">Fix parser<"));
-    assert.ok(html.includes('data-opt-idx="1"') && html.includes('<span class="next-step-new-tag">new session</span>'));
-    assert.ok(!html.includes(">Do it<"), "a choice names its options instead");
+    assert.ok(html.includes('data-action="next-step-select" data-opt-idx="0" aria-pressed="true">Fix parser<'));
+    assert.ok(html.includes('data-action="next-step-select" data-opt-idx="1" aria-pressed="false">Fix tests<') && html.includes(", runs in a new session<"));
+    assert.ok(html.includes(">Fix the parser null check<"), "the picked option's exact prompt is shown");
+    assert.ok(html.includes('class="next-step-btn primary" data-action="next-step-run" data-opt-idx="0">Send<'));
     assert.ok(rt.card().className.includes("has-choices"));
   });
 
@@ -175,7 +176,7 @@ describe("Next-step choices", () => {
     const rt = cardRuntime();
     rt.sandbox.raw = { title: "Add tests", prompt: "Add tests for parse()" };
     rt.run("receiveNextStep('s1', raw)");
-    assert.ok(rt.card().innerHTML.includes('data-action="next-step-run">Do it<'));
+    assert.ok(rt.card().innerHTML.includes('data-action="next-step-run" data-opt-idx="0">Send<'));
     assert.equal(rt.run("normalizeNextStep({ options: [{ title: 'A', prompt: 'a' }, { title: '', prompt: 'x' }] }).options.length"), 1);
     assert.equal(rt.run("normalizeNextStep({ options: [{ title: 'A', prompt: 'a' }], question: 'Q?' }).question"), "", "one option needs no question");
     assert.ok(script.includes("runNextStep(target.getAttribute('data-opt-idx'));"));
