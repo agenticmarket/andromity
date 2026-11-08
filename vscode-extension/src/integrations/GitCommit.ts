@@ -128,6 +128,88 @@ function isLikelyErrorOutput(text: string): boolean {
   );
 }
 
+/** The last closed `<tag>…</tag>` block with real content, without reasoning blocks. */
+export function extractTagged(raw: string, tag: string): string {
+  if (!raw) return "";
+  const text = raw.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  const blocks = [...text.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "gi"))]
+    .map((match) => match[1].trim())
+    .filter((block) => block.length >= 5 && block.toLowerCase() !== "and");
+  return blocks.length ? blocks[blocks.length - 1].replace(/^```[a-zA-Z0-9_-]*\n?/gm, "").replace(/```$/gm, "").trim() : "";
+}
+
+function commitPrompt(fileListSummary: string, diff: string, withDescription: boolean): string {
+  if (!withDescription) {
+    return `Write a concise professional commit message for git following Conventional Commits (type(scope): subject <= 72 chars, plus optional bullet points for key changes) for the following git diff.
+${fileListSummary}
+STRICT FORMAT RULES:
+1. Wrap your final commit message in a <commit_message> opening tag and a matching closing tag.
+2. Put ONLY the commit message between those tags — no markdown code fences, no backticks, no quotes, no explanations.
+3. Any thinking, analysis, reasoning, or draft notes MUST remain OUTSIDE the <commit_message> tags.
+
+Example of correct output:
+<commit_message>
+feat(portfolio): add portfolio and project implementations
+
+- Add Pantry Pilot, Snake Rush, and ReconcileKit
+- Add project tests, configuration, and documentation
+</commit_message>
+
+Diff:
+${diff.slice(0, 8000)}`;
+  }
+  return `Write two things for the following git diff.
+First, a concise professional commit message following Conventional Commits (type(scope): subject <= 72 chars, plus optional bullet points for key changes).
+Second, a short pull request description of WHAT changed: one plain sentence, then at most five bullet points. Describe only what the diff changes. Do not explain why, do not mention issues, people, reviewers or co-authors, and do not add headings, links or HTML.
+${fileListSummary}
+STRICT FORMAT RULES:
+1. Wrap the commit message in a <commit_message> opening tag and a matching closing tag.
+2. Wrap the description in a <pr_description> opening tag and a matching closing tag.
+3. Put nothing else inside the tags: no code fences, no quotes, no explanations. Any reasoning stays outside the tags.
+
+Diff:
+${diff.slice(0, 8000)}`;
+}
+
+export class DraftError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DraftError";
+  }
+}
+
+/** Asks the user's selected model, through the engine, for a commit message and optionally a description
+ *  of what changed. Throws DraftError with a plain reason. */
+export async function draftCommitAndDescription(
+  rpcClient: RpcClient,
+  input: { diff: string; files: string[]; projectPath?: string; withDescription: boolean },
+  log: (msg: string) => void = () => {},
+): Promise<{ commitMessage: string; description: string }> {
+  if (!input.diff.trim()) throw new DraftError("There is no diff to describe.");
+  const files = input.files.slice(0, 40).map((file) => `- ${file}`).join("\n");
+  const summary = input.files.length ? `Changed files (${input.files.length}):\n${files}\n\n` : "";
+  const chat = ChatViewProvider.currentProvider;
+  let raw = "";
+  try {
+    const res = await rpcClient.call<any>("agent.quickPrompt", {
+      prompt: commitPrompt(summary, input.diff, input.withDescription),
+      project_path: input.projectPath,
+      model: chat?.getCurrentModel(),
+      provider: chat?.getCurrentProvider(),
+    }, input.withDescription ? 60000 : 35000);
+    raw = typeof res === "string" ? res : res?.message || res?.result || res?.commitMessage || "";
+  } catch (e: any) {
+    log(`[GitCommit] draft request failed: ${e?.message || e}`);
+    throw new DraftError("The model didn't answer. Check your model in Andromity's settings.");
+  }
+  const commitMessage = extractCommitMessage(raw);
+  if (!commitMessage || commitMessage.trim().length < 5 || isLikelyErrorOutput(commitMessage)) {
+    throw new DraftError("The model's answer wasn't a usable commit message.");
+  }
+  const description = input.withDescription ? extractTagged(raw, "pr_description") : "";
+  return { commitMessage: commitMessage.replace(/<\/?pr_description>[\s\S]*$/i, "").trim(), description };
+}
+
 /**
  * Generate AI commit message via Andromity daemon.
  * Uses vscode.git API to get diff, then asks daemon for Conventional Commit.
@@ -208,24 +290,7 @@ export async function generateCommitMessage(
         const activeModel = chat?.getCurrentModel();
         const activeProvider = chat?.getCurrentProvider();
 
-        const prompt =
-`Write a concise professional commit message for git following Conventional Commits (type(scope): subject <= 72 chars, plus optional bullet points for key changes) for the following git diff.
-${fileListSummary}
-STRICT FORMAT RULES:
-1. Wrap your final commit message in a <commit_message> opening tag and a matching closing tag.
-2. Put ONLY the commit message between those tags — no markdown code fences, no backticks, no quotes, no explanations.
-3. Any thinking, analysis, reasoning, or draft notes MUST remain OUTSIDE the <commit_message> tags.
-
-Example of correct output:
-<commit_message>
-feat(portfolio): add portfolio and project implementations
-
-- Add Pantry Pilot, Snake Rush, and ReconcileKit
-- Add project tests, configuration, and documentation
-</commit_message>
-
-Diff:
-${diff.slice(0, 8000)}`;
+        const prompt = commitPrompt(fileListSummary, diff, false);
 
         // Use daemon quickPrompt with the user's active model & provider scoped to repoPath
         let commitMessage = "";

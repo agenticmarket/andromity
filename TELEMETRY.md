@@ -29,6 +29,22 @@ Every event includes the random ID, the client (`vscode`, `tui`, `cli` or `serve
 
 Model and provider names are the identifiers you configured (for example `anthropic` and `claude-sonnet-4-6`). Values are length-limited and stripped to safe characters before sending, and anything that looks like an API key is removed.
 
+### Pull requests from Changes Review
+
+**Create pull request** in VS Code sends `feature_use` events whose names start with `pr_`, so we can see how far people get and which options they use. Each is a fixed name; none carries a repository, host name, branch, title, description, file name, reviewer, pull request number, link, secret or error text.
+
+| Names | Sent when |
+|---|---|
+| `pr_form_opened`, `pr_form_closed`, `pr_submitted` | The form opens, closes without shipping, or is submitted |
+| `pr_created`, `pr_updated`, `pr_host_page_opened`, `pr_pushed`, `pr_committed_only` | How it ended: a pull request opened, an existing one updated, another host's page opened, pushed only, or committed only |
+| `pr_time_under_1m`, `pr_time_1_to_5m`, `pr_time_over_5m` | Time from opening the form to the pull request, in one of three buckets |
+| `pr_host_github`, `pr_host_gitlab`, `pr_host_bitbucket`, `pr_host_azure`, `pr_host_gitea`, `pr_host_ghe`, `pr_host_other`, `pr_host_local`, `pr_host_none` | The kind of remote when the form opens |
+| `pr_mode_*`, `pr_scope_turn`, `pr_scope_all`, `pr_opt_*` | What was chosen at submit, for example a new branch, starting from the latest main, attaching the receipt or not, a draft, reviewers, a template, or whether the drafted description was edited |
+| `pr_check_*` | A check came up: high findings, a secret, a large change, staged files outside the selection, a sensitive file left out |
+| `pr_github_*`, `pr_blocked_*`, `pr_receipt_unavailable` | Sign-in state, why the form couldn't start, or that no receipt could be attached |
+| `pr_fail_<step>`, `pr_err_<kind>`, `pr_cancelled_running` | Which step failed and a fixed category, such as `pr_err_push_rejected` |
+| `pr_draft_ok`, `pr_draft_failed`, `pr_checks_changed`, `pr_sign_in`, `pr_sign_in_again`, `pr_sign_in_declined`, `pr_retry`, `pr_push_new_name`, `pr_switch_back`, `pr_open_link`, `pr_copy_link`, `pr_open_page`, `pr_publish`, `pr_reviewers_failed` | Drafting results and the buttons used after a step |
+
 ## Feedback you send
 
 **Send Feedback** in VS Code opens a box where you can write a note to the Andromity team. A note is sent only when you submit it, and only with the client, OS family and Andromity version. The worker also stores the country Cloudflare reports for the connection. A note is **not** linked to your telemetry ID, and the worker does not store your IP address. Anything that looks like an API key is removed before it is stored. If you include your email address so we can reply, we use it only for that.

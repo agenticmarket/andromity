@@ -2,6 +2,8 @@
  * Client-side script for the Andromity Changes Review Webview.
  * Handles tree rendering, interactive diff parsing, folding, and postMessage RPC.
  */
+import { prFormClient } from "./prFormClient.js";
+
 export function getReviewClientScript(): string {
   return `
   (function () {
@@ -907,6 +909,12 @@ export function getReviewClientScript(): string {
 
     updateViewButtons();
     searchInput.value = state.searchQuery;
+
+    (${prFormClient.toString()})(vscode, {
+      escapeHtml: escapeHtml,
+      scope: function () { return state.turnFiles && state.scope === 'turn' ? 'turn' : 'all'; },
+      selectFile: function (filePath) { if (state.files.some(function (f) { return f.path === filePath; })) selectFile(filePath); },
+    });
 
     // Notify extension host that webview is ready
     vscode.postMessage({ type: 'webview_ready' });

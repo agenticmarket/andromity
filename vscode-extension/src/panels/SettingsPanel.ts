@@ -20,6 +20,7 @@ import type { WaitlistController } from "../engagement/waitlistController.js";
 import { DOCS, INTEGRATIONS_URL } from "../docsLinks.js";
 import { CONNECTOR_ICONS } from "./connectorIcons.js";
 import { CONNECTOR_GUIDE_SLUGS } from "./connectorGuides.js";
+import { applyGitSetting, getGitSettingsPane, gitSettingsClient, gitSettingsState, signInToGitHub } from "./settings/gitSettings.js";
 
 // Hub actions recorded as anonymous feature use (the action name only, never the values).
 const HUB_FEATURES: Record<string, string> = {
@@ -993,6 +994,26 @@ export class SettingsPanel {
         });
         break;
       }
+
+      case "git_settings_get":
+        this._panel.webview.postMessage({ type: "git_settings", state: await gitSettingsState() });
+        break;
+
+      case "git_settings_set": {
+        const error = await applyGitSetting(message.key, message.value);
+        if (error) {
+          this._panel.webview.postMessage({ type: "git_settings_error", key: message.key, error });
+        } else {
+          if (typeof message.key === "string") recordFeatureUse("pref_git_" + message.key.replace(/^pullRequest\./, "pr_"));
+          this._panel.webview.postMessage({ type: "git_settings", state: await gitSettingsState() });
+        }
+        break;
+      }
+
+      case "git_sign_in":
+        await signInToGitHub();
+        this._panel.webview.postMessage({ type: "git_settings", state: await gitSettingsState() });
+        break;
 
       case "toggle_coauthor": {
         const config = vscode.workspace.getConfiguration("andromity");
@@ -3310,6 +3331,8 @@ export class SettingsPanel {
     .usage-share-controls select { background:var(--input-bg, #111); color:inherit; border:1px solid var(--card-border); border-radius:5px; padding:7px; max-width:100%; }
     .usage-share-preview-wrap { padding:16px; background:rgba(0,0,0,.15); border-radius:8px; text-align:center; }
     #usage-share-preview { max-width:100%; max-height:420px; object-fit:contain; border-radius:8px; }
+    .setting-group-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); margin: 18px 0 8px; }
+    .git-setting-error { color: var(--vscode-errorForeground); }
   </style>
 </head>
 <body>
@@ -3359,6 +3382,10 @@ export class SettingsPanel {
       <button class="nav-tab" data-tab="trust" id="tab-btn-trust" data-tooltip="Trust & Security" aria-label="Trust & Security">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
         <span class="nav-tab-label">Trust & Security</span>
+      </button>
+      <button class="nav-tab" data-tab="git" id="tab-btn-git" data-tooltip="Git & Pull Requests" aria-label="Git & Pull Requests">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><line x1="6" y1="9" x2="6" y2="21"></line></svg>
+        <span class="nav-tab-label">Git & Pull Requests</span>
       </button>
       <button class="nav-tab" data-tab="general" id="tab-btn-general" data-tooltip="Preferences" aria-label="Preferences">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
@@ -4034,17 +4061,10 @@ export class SettingsPanel {
           </div>
         </div>
 
-        <div class="settings-card">
-          <label class="checkbox-row">
-            <input type="checkbox" id="setting-coauthor">
-            <div>
-              <div class="setting-label">Git Co-Author Attribution</div>
-              <div class="setting-desc">Append <code>Co-authored-by: Andromity &lt;333054755+andromity-bot@users.noreply.github.com&gt;</code> trailer to AI-generated commit messages and to commits the agent creates.</div>
-            </div>
-          </label>
-        </div>
       </div>
     </div>
+
+    ${getGitSettingsPane(DOCS.preferences)}
 
     <!-- ── TAB: PERSONALISATION ───────────────────────────────────── -->
     <div class="tab-pane" id="pane-personalisation">
@@ -5928,6 +5948,7 @@ SOFTWARE.</pre>
     }
 
     ${getUsageScript()}
+    (${gitSettingsClient.toString()})(vscode);
 
     function renderUsageChart(sessions, range) {
       const container = document.getElementById("usage-bar-chart-container");

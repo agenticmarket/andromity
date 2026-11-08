@@ -21,6 +21,7 @@ import { FingerprintPanel } from "../panels/FingerprintPanel.js";
 import { ReceiptPanel } from "../panels/ReceiptPanel.js";
 import { BackgroundTaskPanel } from "../panels/BackgroundTaskPanel.js";
 import { ChangesReviewPanel } from "../panels/ChangesReviewPanel.js";
+import type { TurnRef } from "../panels/pullRequestController.js";
 import { PythonBridge } from "../server/PythonBridge.js";
 import { RpcClient } from "../server/RpcClient.js";
 import { handleInputMessage } from "../server/inputBridge.js";
@@ -120,6 +121,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _workspaceIndex: Promise<{ files: string[]; dirs: string[] }> | null = null;
   private _workspaceIndexTimer: NodeJS.Timeout | null = null;
   private _latestTurnFiles: Set<string> = new Set<string>();
+  /** The session and turn number of _latestTurnFiles; the number arrives with the turn's receipt. */
+  private _latestTurn: TurnRef | null = null;
   private _hydration = new SessionHydration();
 
   public async undoSession(sessionId: string, turnIndex?: number, turnsToUndo?: number): Promise<SessionUndoResult | undefined> {
@@ -543,6 +546,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._isExecuting = false;
     this._runningSessions.clear();
     void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+    ChangesReviewPanel.setAgentRunning(false);
   }
 
   public isSessionRunning(sessionId?: string): boolean {
@@ -1305,15 +1309,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Open the dedicated Changes Review Webview tab.
    *  `turnFiles: null` means the caller has no turn scope (e.g. an edit row in a
    *  still-running turn), so the latest completed turn must not be substituted. */
-  public openReviewWebview(filePath?: string, turnFiles?: string[] | null) {
+  public openReviewWebview(filePath?: string, turnFiles?: string[] | null, turn?: TurnRef | null, openPullRequest = false) {
+    const useLatest = turnFiles === undefined && this._latestTurnFiles.size > 0;
     const effectiveTurnFiles = turnFiles === null
       ? undefined
-      : (turnFiles ?? (this._latestTurnFiles.size > 0 ? Array.from(this._latestTurnFiles) : undefined));
+      : (turnFiles ?? (useLatest ? Array.from(this._latestTurnFiles) : undefined));
+    const effectiveTurn = useLatest ? this._latestTurn : turn ?? null;
+    const scoped = !!effectiveTurn || openPullRequest;
     if (this._diffManager) {
-      this._diffManager.openReviewWebview(filePath, effectiveTurnFiles);
+      if (scoped) this._diffManager.openReviewWebview(filePath, effectiveTurnFiles, effectiveTurn, openPullRequest);
+      else this._diffManager.openReviewWebview(filePath, effectiveTurnFiles);
     } else if (this._context) {
-      ChangesReviewPanel.createOrShow(this._extensionUri, this._rpcClient, filePath, effectiveTurnFiles);
+      if (scoped) ChangesReviewPanel.createOrShow(this._extensionUri, this._rpcClient, filePath, effectiveTurnFiles, effectiveTurn, openPullRequest);
+      else ChangesReviewPanel.createOrShow(this._extensionUri, this._rpcClient, filePath, effectiveTurnFiles);
     }
+  }
+
+  /** The turn an answer's files belong to, when the chat knows its number. */
+  public turnRefFrom(message: any, sessionId = this._currentSessionId): TurnRef | null {
+    return sessionId && Array.isArray(message?.turnFiles) && Number.isSafeInteger(message?.turnIndex) && message.turnIndex >= 0
+      ? { sessionId, turnIndex: message.turnIndex }
+      : null;
+  }
+
+  /** Opens Changes Review on the latest turn with the Create pull request form. */
+  public createPullRequest() {
+    this.openReviewWebview(undefined, undefined, undefined, true);
   }
 
   /** Refresh config and models from daemon without wiping chat messages */
@@ -1477,7 +1498,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._isExecuting = true;
       }
       this._latestTurnFiles.clear();
+      this._latestTurn = null;
       void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
+      ChangesReviewPanel.setAgentRunning(true);
       this._postToWebview({ type: "agent_started", ...params });
       if (sid && this._context) {
         const config = vscode.workspace.getConfiguration("andromity");
@@ -1670,6 +1693,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("receipt/ready", (params: any) => {
       this._postToWebview({ type: "receipt_ready", ...params });
+      const latest = this._latestTurn;
+      if (latest && latest.turnIndex === null && params?.session_id === latest.sessionId && Number.isSafeInteger(params?.turn_index)) {
+        this._latestTurn = { sessionId: latest.sessionId, turnIndex: params.turn_index };
+        ChangesReviewPanel.currentPanel?.updateTurnIndex(latest.sessionId, params.turn_index);
+      }
     });
 
     bind("agent/done", (params: any) => {
@@ -1685,13 +1713,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       if (this._runningSessions.size === 0) {
         void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+        ChangesReviewPanel.setAgentRunning(false);
       }
 
       const turnFiles: string[] | undefined = params?.turn_files;
       if (Array.isArray(turnFiles)) {
         this._latestTurnFiles = new Set(turnFiles);
+        this._latestTurn = sid ? { sessionId: sid, turnIndex: null } : null;
         if (ChangesReviewPanel.currentPanel) {
-          ChangesReviewPanel.currentPanel.setTurnFiles(turnFiles);
+          ChangesReviewPanel.currentPanel.setTurnFiles(turnFiles, this._latestTurn);
         }
       }
 
@@ -1725,6 +1755,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       if (this._runningSessions.size === 0) {
         void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+        ChangesReviewPanel.setAgentRunning(false);
       }
       this._postToWebview({ type: "agent_cancelled", ...params });
     });
@@ -1739,6 +1770,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       if (this._runningSessions.size === 0) {
         void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+        ChangesReviewPanel.setAgentRunning(false);
       }
       this._postToWebview({ type: "agent_error", ...params });
     });
@@ -2479,7 +2511,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     if (message.type === "open_diff" || message.type === "open_review_tab" || message.type === "open_changes_review") {
-      this.openReviewWebview(message.filePath, message.turnFiles);
+      this.openReviewWebview(message.filePath, message.turnFiles, this.turnRefFrom(message));
       return;
     }
 
@@ -2584,6 +2616,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               this._isExecuting = true;
             }
             void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
+            ChangesReviewPanel.setAgentRunning(true);
           }
           void this._rpcClient.call("telemetry.recordFeature", {
             feature: "prompt_sent",
@@ -2648,6 +2681,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               }
               if (this._runningSessions.size === 0) {
                 void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+                ChangesReviewPanel.setAgentRunning(false);
               }
             }
             this._postToWebview({ type: "agent_error", error: msg });
@@ -3171,6 +3205,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
           if (this._runningSessions.size === 0) {
             void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+            ChangesReviewPanel.setAgentRunning(false);
           }
         }
         try {
@@ -3246,7 +3281,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "open_review_tab":
       case "open_changes_review": {
         recordFeatureUse("changes_review_opened", { sessionId: this._currentSessionId, oncePerSession: true });
-        this.openReviewWebview(message.filePath, message.turnFiles);
+        this.openReviewWebview(message.filePath, message.turnFiles, this.turnRefFrom(message));
         break;
       }
 
@@ -3669,7 +3704,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "open_diff": {
         void this._rpcClient?.call("telemetry.recordFeature", { feature: "open_diff", session_id: this._currentSessionId }).catch(() => {});
-        this.openReviewWebview(message.filePath, message.turnFiles);
+        this.openReviewWebview(message.filePath, message.turnFiles, this.turnRefFrom(message));
         break;
       }
 

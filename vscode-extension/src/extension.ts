@@ -810,6 +810,10 @@ export async function activate(context: vscode.ExtensionContext) {
       chatProvider.openReviewWebview(typeof filePath === "string" ? filePath : undefined);
     }),
 
+    registerTrackedCommand("andromity.createPullRequest", () => {
+      chatProvider.createPullRequest();
+    }),
+
     registerTrackedCommand("andromity.refreshSessions", () => {
       void chatProvider.fetchAndPostSessions();
     }),

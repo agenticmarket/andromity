@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { getNonce } from "../webviewSecurity.js";
 import { getReviewStyles } from "./reviewStyles.js";
 import { getReviewClientScript } from "./reviewClientScript.js";
+import { getPrStyles } from "./prStyles.js";
 
 export { getNonce };
 
@@ -66,12 +67,26 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
     .codicon-check-all::before       { content: "\\ebb1"; }
     .codicon-git-branch::before      { content: "\\ec6f"; }
     .codicon-loading::before         { content: "\\eb19"; }
+    .codicon-git-pull-request::before { content: "\\ea64"; }
+    .codicon-close::before { content: "\\ea76"; }
+    .codicon-error::before { content: "\\ea87"; }
+    .codicon-warning::before { content: "\\ea6c"; }
+    .codicon-info::before { content: "\\ea74"; }
+    .codicon-sparkle::before { content: "\\ec10"; }
+    .codicon-circle-large-outline::before { content: "\\ebb5"; }
+    .codicon-pass-filled::before { content: "\\ebb3"; }
+    .codicon-globe::before { content: "\\eb01"; }
+    .codicon-lock::before { content: "\\ea75"; }
+    .codicon-account::before { content: "\\eb99"; }
+    .codicon-repo::before { content: "\\ea62"; }
+    .codicon-shield::before { content: "\\eb53"; }
     ${styles}
+    ${getPrStyles()}
   </style>
 </head>
 <body>
   <!-- Top Header Bar -->
-  <header class="review-header">
+  <header class="review-header" id="review-header">
     <div class="header-left">
       <div class="branch-pill">
         <span id="branch-label">HEAD</span>
@@ -96,6 +111,7 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
     </div>
 
     <div class="header-right">
+      <button class="action-btn primary pr-open-btn" id="pr-open-btn" type="button" aria-haspopup="dialog" aria-expanded="false" hidden></button>
       <button class="action-btn" id="refresh-btn" title="Refresh Git changes">
         <span class="codicon codicon-refresh"></span> Refresh
       </button>
@@ -135,6 +151,8 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       </div>
     </section>
   </main>
+
+  <aside class="pr-sheet" id="pr-sheet" role="dialog" aria-label="Create pull request" hidden></aside>
 
   <script nonce="${nonce}">
     ${script}

@@ -286,6 +286,12 @@
         "icon": "$(diff-multiple)"
       },
       {
+        "command": "andromity.createPullRequest",
+        "title": "Create Pull Request",
+        "category": "Andromity",
+        "icon": "$(git-pull-request)"
+      },
+      {
         "command": "andromity.openSessionInTab",
         "title": "Open Session in Editor Tab (Pop Out)",
         "category": "Andromity",
@@ -750,6 +756,28 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically append 'Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>' to AI-generated commit messages and to commits the agent creates."
+        },
+        "andromity.pullRequest.branchPrefix": {
+          "type": "string",
+          "default": "andromity/",
+          "maxLength": 40,
+          "description": "Prefix for branch names suggested by Create pull request in Changes Review. Leave empty for no prefix."
+        },
+        "andromity.pullRequest.attachReceipt": {
+          "type": "boolean",
+          "default": true,
+          "description": "Attach the turn receipt to pull requests created from Changes Review. You can still untick it in the form."
+        },
+        "andromity.pullRequest.draftWithAI": {
+          "type": "boolean",
+          "default": true,
+          "description": "Draft the pull request description with your selected model. Turn off for projects that do not accept AI-written pull request text. The commit message is still drafted."
+        },
+        "andromity.pullRequest.sizeWarningLines": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "description": "Warn in Create pull request when the ticked files change more lines than this (lockfiles not counted). 0 turns the warning off."
         },
         "andromity.includeAssistedBy": {
           "type": "boolean",

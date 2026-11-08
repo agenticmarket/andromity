@@ -539,7 +539,7 @@ export class SessionTabPanel {
     }
 
     if (message.type === "open_diff" || message.type === "open_review_tab" || message.type === "open_changes_review") {
-      this._viewProvider.openReviewWebview(message.filePath, message.turnFiles);
+      this._viewProvider.openReviewWebview(message.filePath, message.turnFiles, this._viewProvider.turnRefFrom(message, this._sessionId));
       return;
     }
 

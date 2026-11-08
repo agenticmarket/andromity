@@ -3,8 +3,18 @@ import * as path from "path";
 import { RpcClient } from "../server/RpcClient.js";
 import { HEAD_SCHEME } from "../integrations/DiffManager.js";
 import { getReviewHtml } from "../providers/changesReview/reviewHtml.js";
+import { currentAirGap } from "../airgapState.js";
+import { loadGitApi } from "../integrations/pullRequest/vscodeGit.js";
+import { PullRequestController, TurnRef } from "./pullRequestController.js";
 
 import { GitStatusResult, DiffNumstatResult, ReviewFile } from "../providers/changesReview/types.js";
+
+function readTurnRef(value: unknown): TurnRef | null {
+  const ref = value as { sessionId?: unknown; turnIndex?: unknown } | null;
+  if (!ref || typeof ref.sessionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(ref.sessionId)) return null;
+  const index = ref.turnIndex;
+  return { sessionId: ref.sessionId, turnIndex: typeof index === "number" && Number.isSafeInteger(index) && index >= 0 ? index : null };
+}
 
 /** Waits for a burst of file events (an agent writing many files, an install) to settle. */
 export const AUTO_REFRESH_DELAY_MS = 500;
@@ -39,25 +49,60 @@ export class ChangesReviewPanel {
   private _autoRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   /** Files changed while the panel was hidden; refresh once it is shown again. */
   private _stale = false;
+  private _files: ReviewFile[] = [];
+  private _turnFilesRel: string[] | null = null;
+  private _turn: TurnRef | null = null;
+  private _scope: "turn" | "all" = "turn";
+  private _isGit = false;
+  private _gitAvailable: boolean | undefined;
+  private _openPullRequestWhenReady = false;
+  private readonly _pr: PullRequestController;
+  private static _agentRunning = false;
 
-  public setTurnFiles(files?: string[]) {
+  public setTurnFiles(files?: string[], turn?: TurnRef | null) {
     this._turnFiles = files;
+    if (turn !== undefined) this._turn = readTurnRef(turn);
+    this._pr?.turnChanged();
+  }
+
+  /** The latest turn's number arrives with its receipt, just after the turn ends. */
+  public updateTurnIndex(sessionId: string, turnIndex: number) {
+    if (this._turn && this._turn.sessionId === sessionId && this._turn.turnIndex === null && Number.isSafeInteger(turnIndex) && turnIndex >= 0) {
+      this._turn = { sessionId, turnIndex };
+      this._pr.turnChanged();
+    }
+  }
+
+  public static setAgentRunning(running: boolean) {
+    ChangesReviewPanel._agentRunning = running;
+    const panel = ChangesReviewPanel.currentPanel;
+    if (panel) {
+      panel._postButton();
+      panel._pr.refreshView();
+    }
   }
 
   public static createOrShow(
     extensionUri: vscode.Uri,
     rpcClient: RpcClient | null,
     initialFilePath?: string,
-    turnFiles?: string[]
+    turnFiles?: string[],
+    turn?: TurnRef | null,
+    openPullRequest = false
   ): ChangesReviewPanel {
     const column = vscode.window.activeTextEditor
       ? (vscode.window.activeTextEditor.viewColumn || vscode.ViewColumn.Active)
       : vscode.ViewColumn.One;
 
     if (ChangesReviewPanel.currentPanel) {
-      ChangesReviewPanel.currentPanel._panel.reveal(column);
-      ChangesReviewPanel.currentPanel._rpcClient = rpcClient;
-      ChangesReviewPanel.currentPanel._turnFiles = turnFiles;
+      const current = ChangesReviewPanel.currentPanel;
+      current._panel.reveal(column);
+      current._rpcClient = rpcClient;
+      if (!current._pr.isRunning()) {
+        current._turnFiles = turnFiles;
+        current._turn = readTurnRef(turn);
+      }
+      if (openPullRequest) current._openPullRequestWhenReady = true;
       if (initialFilePath) {
         ChangesReviewPanel.currentPanel.selectFile(initialFilePath);
       } else {
@@ -88,6 +133,8 @@ export class ChangesReviewPanel {
       initialFilePath,
       turnFiles
     );
+    ChangesReviewPanel.currentPanel._turn = readTurnRef(turn);
+    ChangesReviewPanel.currentPanel._openPullRequestWhenReady = openPullRequest;
 
     return ChangesReviewPanel.currentPanel;
   }
@@ -108,10 +155,32 @@ export class ChangesReviewPanel {
       ? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(initialFilePath))?.uri.fsPath
       : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
+    this._pr = new PullRequestController({
+      post: (msg) => this._postMessage(msg),
+      rpc: () => this._rpcClient,
+      repositoryRoot: () => this._repositoryRoot,
+      projectPath: () => this._projectPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+      files: () => this._files.map((file) => ({
+        path: file.path, status: file.status, additions: file.additions, deletions: file.deletions,
+        binary: file.binary, omitted: file.omitted, originalPath: file.originalPath,
+      })),
+      turnFiles: () => this._turnFilesRel,
+      turn: () => this._turn,
+      scope: () => this._scope,
+      agentRunning: () => ChangesReviewPanel._agentRunning,
+      refresh: () => this.loadChanges(undefined, true),
+      log: () => {},
+    });
+
     this._panel.webview.html = getReviewHtml(this._panel.webview, this._extensionUri);
 
     this._panel.webview.onDidReceiveMessage(
       async (message) => {
+        if (typeof message?.type === "string" && message.type.startsWith("pr_")) {
+          if (message.type === "pr_open" && (message.scope === "turn" || message.scope === "all")) this._scope = message.scope;
+          await this._pr.handle(message);
+          return;
+        }
         switch (message.type) {
           case "webview_ready":
             await this.loadChanges(this._initialFilePath);
@@ -119,6 +188,7 @@ export class ChangesReviewPanel {
 
           case "get_file_diff":
             if (message.filePath) {
+              if (this._knownFiles.has(message.filePath)) this._pr.markOpened(message.filePath);
               await this.loadFileDiff(message.filePath);
             }
             break;
@@ -201,6 +271,9 @@ export class ChangesReviewPanel {
     ++this._diffVersion;
     const ws = this._projectPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!ws || !this._rpcClient) {
+      this._isGit = false;
+      this._files = [];
+      this._postButton();
       this._postMessage({
         type: "set_changes",
         branch: "Offline",
@@ -222,6 +295,9 @@ export class ChangesReviewPanel {
       this._repositoryRoot = statusRes?.repository_root || ws;
 
       if (!statusRes?.is_git) {
+        this._isGit = false;
+        this._files = [];
+        this._postButton();
         this._postMessage({
           type: "set_changes",
           branch: "Not a Git repository",
@@ -240,14 +316,17 @@ export class ChangesReviewPanel {
       for (const m of statusRes.modified_files || []) {
         const norm = m.replace(/\\/g, "/");
         const stats = numstats[norm] || { additions: 0, deletions: 0 };
+        const entry = statusRes.files?.find(file => file.path === norm);
+        const original = typeof entry?.original_path === "string" ? entry.original_path.replace(/\\/g, "/") : undefined;
         filesMap.set(norm, {
           path: norm,
           name: path.basename(norm),
-          status: statusRes.files?.find(file => file.path === norm)?.status || "M",
+          status: entry?.status || "M",
           additions: stats.additions,
           deletions: stats.deletions,
           binary: stats.binary,
           omitted: stats.omitted,
+          originalPath: original && original !== norm ? original : undefined,
         });
       }
 
@@ -292,6 +371,11 @@ export class ChangesReviewPanel {
         totalDeletions += f.deletions;
       }
 
+      const turnFiles = this._turnFiles?.map(file => path.relative(this._repositoryRoot || ws,
+        path.isAbsolute(file) ? file : path.join(ws, file)).replace(/\\/g, "/")) || null;
+      this._files = files;
+      this._turnFilesRel = turnFiles;
+      this._isGit = true;
       this._postMessage({
         type: "set_changes",
         branch: statusRes.branch || "HEAD",
@@ -300,9 +384,14 @@ export class ChangesReviewPanel {
         totalDeletions,
         selectFile: selectFilePath,
         auto,
-        turnFiles: this._turnFiles?.map(file => path.relative(this._repositoryRoot || ws,
-          path.isAbsolute(file) ? file : path.join(ws, file)).replace(/\\/g, "/")) || null,
+        turnFiles,
       });
+      await this._postButton();
+      this._pr.filesChanged();
+      if (this._openPullRequestWhenReady && files.length) {
+        this._openPullRequestWhenReady = false;
+        this._postMessage({ type: "pr_request_open" });
+      }
     } catch (e: any) {
       if (this._isDisposed) return;
       if (version !== this._refreshVersion) return;
@@ -397,6 +486,22 @@ export class ChangesReviewPanel {
     }
   }
 
+  private async _postButton() {
+    if (this._gitAvailable === undefined && this._isGit) {
+      this._gitAvailable = !("problem" in await loadGitApi());
+    }
+    const running = ChangesReviewPanel._agentRunning;
+    this._postMessage({
+      type: "pr_button",
+      state: {
+        visible: this._isGit && this._files.length > 0 && this._gitAvailable !== false,
+        enabled: !running,
+        label: currentAirGap().enabled ? "Commit" : "Create pull request",
+        reason: running ? "Wait for the turn to finish. Files are still changing." : null,
+      },
+    });
+  }
+
   private _postMessage(message: any) {
     if (this._isDisposed) return;
     try {
@@ -408,6 +513,7 @@ export class ChangesReviewPanel {
 
   public dispose() {
     this._isDisposed = true;
+    this._pr.dispose();
     if (this._autoRefreshTimer) clearTimeout(this._autoRefreshTimer);
     ChangesReviewPanel.currentPanel = undefined;
     this._panel.dispose();
