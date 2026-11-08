@@ -135,7 +135,8 @@ h3 { margin: 0 0 4px; font-size: 1em; font-weight: 400; color: var(--rc-muted); 
 .rc-cmd summary .rc-command { flex: 1 1 auto; min-width: 0; }
 .rc-cmd-more { flex: none; padding-top: 2px; color: var(--rc-link); font-size: .92em; white-space: nowrap; }
 .rc-cmd[open] summary .rc-command { display: none; }
-.rc-cmd[open] .rc-cmd-more::before { content: "hide "; }
+.rc-cmd-open, .rc-cmd[open] .rc-cmd-closed { display: none; }
+.rc-cmd[open] .rc-cmd-open { display: inline; }
 
 .rc-status { text-align: center; font-family: var(--rc-mono); color: var(--rc-muted); }
 .rc-status-a { color: var(--rc-add); }

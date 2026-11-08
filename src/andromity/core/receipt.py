@@ -7,6 +7,7 @@ output are never included.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import os
@@ -24,7 +25,9 @@ from andromity.core.session import is_compaction_summary
 
 RECEIPT_VERSION = 1
 MAX_LISTED = 200
-MAX_COMMAND_CHARS = 300
+MAX_COMMAND_CHARS = 2000
+BRIEF_COMMAND_CHARS = 300
+LEGACY_COMMAND_CHARS = 300
 MAX_REDACTED_CHARS = 4096
 MAX_SCANNED_CHARS = 20000
 MAX_PREFIX_TOKENS = 32
@@ -50,6 +53,8 @@ _PERSON_ID = re.compile(r"[0-9a-f]{16}")
 _TURN_KEY = re.compile(r"[0-9a-f]{32}")
 _ROLE = re.compile(r"[a-z0-9_]{1,32}")
 SEALED_SUMMARY = ("files_changed", "commands", "commands_failed")
+SEAL_FORMAT = 2
+_legacy_commands: contextvars.ContextVar[bool] = contextvars.ContextVar("receipt_legacy_commands", default=False)
 # Blank or joining characters that are not in the control and format categories but still hide or disguise text.
 _INVISIBLE = frozenset({0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x034F, 0x180B, 0x180C, 0x180D, 0x180F,
                         0x0334, 0x0335, 0x0336, 0x0337, 0x0338})
@@ -266,6 +271,7 @@ def seal_receipt(session: Any, record: Dict[str, Any]) -> Optional[Dict[str, Any
         return None
     findings = receipt["needs_attention"]
     record["receipt_hash"] = receipt["record_hash"]
+    record["receipt_format"] = SEAL_FORMAT
     record["attention"] = len(findings)
     record["attention_high"] = sum(1 for finding in findings if finding["severity"] == "high")
     for key in SEALED_SUMMARY:
@@ -325,9 +331,94 @@ def visible(text: str) -> str:
     return "".join(parts)
 
 
+def _command_chars() -> int:
+    return LEGACY_COMMAND_CHARS if _legacy_commands.get() else MAX_COMMAND_CHARS
+
+
+_PARTIAL_ESCAPE = re.compile(r"\\(?:u[0-9a-fA-F]{0,3}|U[0-9a-fA-F]{0,7})?$")
+_ESCAPE = re.compile(r"\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}")
+_TRAILING_WORD = re.compile(r"\S{1,256}$")
+
+
+def _redacted_window(raw: str) -> str:
+    """The command's first MAX_REDACTED_CHARS characters with secrets masked. When the command is longer, its last
+    word there may be a secret cut in half, which masking can't recognise, so up to 256 characters of it are dropped:
+    longer than any secret, short enough never to drop a whole long command."""
+    redacted = redact(raw[:MAX_REDACTED_CHARS])
+    return _TRAILING_WORD.sub("", redacted) if len(raw) > MAX_REDACTED_CHARS else redacted
+
+
+def _shown_command(command: str) -> Tuple[str, bool]:
+    """The command as a receipt shows it, and whether it was cut. Secrets are masked over a window twice the
+    shown length, so a secret is never cut in half before masking and then shown."""
+    raw = str(command)
+    shown = visible(redact(raw[:MAX_REDACTED_CHARS]))
+    if _legacy_commands.get():
+        cut = len(shown) > LEGACY_COMMAND_CHARS
+        return (shown[:LEGACY_COMMAND_CHARS] + "..." if cut else shown), cut
+    shown = visible(_redacted_window(raw))
+    if len(shown) <= MAX_COMMAND_CHARS and len(raw) <= MAX_REDACTED_CHARS:
+        return shown, False
+    return _PARTIAL_ESCAPE.sub("", shown[:MAX_COMMAND_CHARS - 3]) + "...", True
+
+
 def safe_command(command: str) -> str:
-    shown = visible(redact(str(command)[:MAX_REDACTED_CHARS]))
-    return shown if len(shown) <= MAX_COMMAND_CHARS else shown[:MAX_COMMAND_CHARS] + "..."
+    return _shown_command(command)[0]
+
+
+def _brief(text: str) -> str:
+    """A command or path shortened for the text and Markdown receipts, which must stay small enough for a pull
+    request. The middle goes, so a path keeps its file name and a command keeps its destructive part."""
+    if len(text) <= BRIEF_COMMAND_CHARS:
+        return text
+    head = _PARTIAL_ESCAPE.sub("", text[:BRIEF_COMMAND_CHARS // 2])
+    start = len(text) - (BRIEF_COMMAND_CHARS - BRIEF_COMMAND_CHARS // 2 - 5)
+    for escape in _ESCAPE.finditer(text, max(0, start - 9), start + 9):
+        if escape.start() < start < escape.end():
+            start = escape.end()
+    return f"{head} ... {text[start:]}"
+
+
+_WORD_SPLIT = re.compile(r"[\s;&|()]+")
+_QUOTES = re.compile(r"['\"`]")
+
+
+def _verified_part(command: str, part: str) -> Optional[str]:
+    """The destructive part of a command, with each word kept only where the masked command has it right after the
+    same word the part has before it, quotes aside; any other word becomes ***. The part is rebuilt from shell words,
+    which drops quotes, so masking it on its own could reveal what masking the command hides, and a secret that
+    also appears elsewhere in the command must still not show in its masked position."""
+    scan = redact(command[:MAX_SCANNED_CHARS])
+    if len(command) > MAX_SCANNED_CHARS:
+        scan = _TRAILING_WORD.sub("", scan)
+    tokens = [token for token in _WORD_SPLIT.split(_QUOTES.sub("", scan)) if token]
+    singles = set(tokens)
+    pairs = set(zip(tokens, tokens[1:]))
+    words = [word for word in _WORD_SPLIT.split(_QUOTES.sub("", redact(part))) if word]
+    raw_words = [word for word in _WORD_SPLIT.split(_QUOTES.sub("", part)) if word]
+    aligned = len(raw_words) == len(words)
+    kept: List[str] = []
+    previous_hidden = False
+    for index, word in enumerate(words):
+        # Only masking's own *** hides what follows; a literal *** typed in the command is just text.
+        masked_here = "***" in word and (not aligned or word != raw_words[index])
+        if index == 0:
+            known = word in singles
+        else:
+            # After a hidden word nothing is known: the pair would match after any masked value in the command.
+            known = not previous_hidden and (words[index - 1], word) in pairs
+        token = word if known else "***"
+        hidden = not known or masked_here
+        if token == "***" and not known and kept and kept[-1] == "***":
+            previous_hidden = True
+            continue
+        kept.append(token)
+        previous_hidden = hidden
+
+    if not kept or kept[0] == "***":
+        return None
+    # Brackets are escaped so command text can't close the suffix early and add a fake one after it.
+    return _brief(visible(" ".join(kept))).replace("[", "\\u005b").replace("]", "\\u005d")
 
 
 def is_check_command(command: str) -> bool:
@@ -405,6 +496,25 @@ def build_receipt(session: Any, turn_index: Optional[int] = None, repo: Any = No
     """Build the receipt for one finished turn of a session."""
     record = _pick_record(session, turn_index)
     _check_snapshot_hashes(record)
+    sealed = record.get("receipt_hash")
+    if record.get("receipt_format") != SEAL_FORMAT and isinstance(sealed, str) and _SHA256.fullmatch(sealed):
+        # Sealed before commands were kept in full. When the seal still matches the older rule, show the receipt as it
+        # was sealed: the seal covers only what that rule kept, so showing more would vouch for text it never covered.
+        token = _legacy_commands.set(True)
+        try:
+            legacy = _build_receipt(session, record, repo)
+        finally:
+            _legacy_commands.reset(token)
+        if legacy["sealed"]["matches"]:
+            if any(len(entry["command"]) > LEGACY_COMMAND_CHARS for entry in [*legacy["commands"], *legacy["checks"]]):
+                legacy["notes"].append("This turn was sealed before commands were kept in full, so its commands are "
+                                       f"shown as they were sealed: cut to {LEGACY_COMMAND_CHARS} characters.")
+                legacy["record_hash"] = record_hash(legacy)
+            return legacy
+    return _build_receipt(session, record, repo)
+
+
+def _build_receipt(session: Any, record: Dict[str, Any], repo: Any) -> Dict[str, Any]:
     project = Path(str(getattr(session, "project_path", "") or ".")).resolve()
     messages = list(getattr(session, "messages", []) or [])
     notes: List[str] = []
@@ -487,7 +597,7 @@ def build_receipt(session: Any, turn_index: Optional[int] = None, repo: Any = No
             searches += 1
         elif name in SHELL_TOOLS:
             command = str(args.get("command") or "")
-            shown = safe_command(command)
+            shown, shown_cut = _shown_command(command)
             check = is_check_command(command)
             commands.append({
                 "command": shown,
@@ -506,9 +616,19 @@ def build_receipt(session: Any, turn_index: Optional[int] = None, repo: Any = No
                 background += 1
             part = destructive_part(command)
             if part is not None:
-                subject = shown if len(shown) <= MAX_COMMAND_CHARS else f"{shown} [destructive part: {safe_command(part)}]"
-                attention.append(_finding("destructive", "high" if outcome == "ok" else "medium",
-                                          f"Destructive command, {approval}", subject, approver))
+                if _legacy_commands.get():
+                    subject = f"{shown} [destructive part: {safe_command(part)}]" if shown_cut else shown
+                    attention.append(_finding("destructive", "high" if outcome == "ok" else "medium",
+                                              f"Destructive command, {approval}", subject, approver))
+                else:
+                    # Also when the command's own text carries a suffix, so the engine's real one always comes last.
+                    needs_suffix = shown_cut or "[destructive part:" in shown
+                    found = _verified_part(command, part) if needs_suffix else None
+                    if found is None and "[destructive part:" in shown:
+                        found = "not shown"
+                    subject = f"{shown} [destructive part: {found}]" if found else shown
+                    attention.append(_finding("destructive", "high" if outcome == "ok" else "medium",
+                                              f"Destructive command, {approval}", subject, approver))
             if _touches_own_records(command):
                 attention.append(_finding("own_records", "high", f"Command touches Andromity's own records, {approval}",
                                           shown, approver))
@@ -635,6 +755,8 @@ def build_receipt(session: Any, turn_index: Optional[int] = None, repo: Any = No
     for key, full in (("files_changed", files_changed), ("files_read", files_read), ("commands", commands)):
         if len(full) > MAX_LISTED:
             notes.append(f"Only the first {MAX_LISTED} of {len(full)} {key.replace('_', ' ')} are listed.")
+    if not _legacy_commands.get():
+        receipt["command_chars"] = MAX_COMMAND_CHARS
     sealed = record.get("receipt_hash")
     if isinstance(sealed, str) and _SHA256.fullmatch(sealed):
         matches = sealed == record_hash(receipt)
@@ -688,7 +810,7 @@ def render_text(receipt: Dict[str, Any], viewer: Optional[Dict[str, Any]] = None
     if receipt["commands"]:
         lines += ["", "Commands"]
         for command in receipt["commands"][:TEXT_COMMAND_LINES]:
-            lines.append(f"  [{_command_status(command, names, me)}] {command['command']}")
+            lines.append(f"  [{_command_status(command, names, me)}] {_brief(command['command'])}")
         extra = s["commands"] - min(len(receipt["commands"]), TEXT_COMMAND_LINES)
         if extra > 0:
             lines.append(f"  ... and {extra} more")
@@ -700,7 +822,7 @@ def render_text(receipt: Dict[str, Any], viewer: Optional[Dict[str, Any]] = None
         for check in receipt["checks"]:
             suffix = " (failed first, passed after)" if check["failed_first"] else ""
             code = f" (exit {check['exit_code']})" if check["result"] == "failed" and check["exit_code"] is not None else ""
-            lines.append(f"  [{check['result']}] {check['command']}{code}{suffix}")
+            lines.append(f"  [{check['result']}] {_brief(check['command'])}{code}{suffix}")
     if receipt["files_changed"]:
         lines += ["", "Files changed"]
         for entry in receipt["files_changed"][:TEXT_FILE_LINES]:
@@ -811,14 +933,14 @@ def render_markdown(receipt: Dict[str, Any]) -> str:
         lines += [f"<details><summary>Commands ({s['commands']})</summary>", "", "| Result | Command |", "|---|---|"]
         for command in receipt["commands"]:
             status = _command_status(command, names, None, markdown=True)
-            lines.append(f"| {status} | {_md_code(command['command'], in_table=True)} |")
+            lines.append(f"| {status} | {_md_code(_brief(command['command']), in_table=True)} |")
         lines += ["", "</details>", ""]
     if receipt["checks"]:
         lines += ["**Checks**", ""]
         for check in receipt["checks"]:
             code = f" (exit {check['exit_code']})" if check["result"] == "failed" and check["exit_code"] is not None else ""
             recovered = ", failed first" if check["failed_first"] else ""
-            lines.append(f"- {check['result']}{code}{recovered}: {_md_code(check['command'])}")
+            lines.append(f"- {check['result']}{code}{recovered}: {_md_code(_brief(check['command']))}")
         lines.append("")
     if receipt["files_changed"]:
         lines += [f"<details><summary>Files changed ({s['files_changed']})</summary>", "", "| | File | Lines | |",

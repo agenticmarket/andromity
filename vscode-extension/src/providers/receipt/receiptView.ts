@@ -108,12 +108,13 @@ function renderCommandText(command: string): string {
   const lines = command.split(ESCAPED_NEWLINE);
   const first = lines[0];
   const extraLines = lines.length - 1;
-  const cut = first.length > COMMAND_PREVIEW_CHARS;
+  const firstChars = Array.from(first);
+  const cut = firstChars.length > COMMAND_PREVIEW_CHARS;
   if (!extraLines && !cut) return `<code class="rc-command">${escapeHtml(command)}</code>`;
-  const preview = cut ? first.slice(0, COMMAND_PREVIEW_CHARS) + "…" : first;
+  const preview = cut ? firstChars.slice(0, COMMAND_PREVIEW_CHARS).join("") + "…" : first;
   const label = extraLines ? `+${plural(extraLines, "line")}` : "show all";
   return `<details class="rc-cmd">
-      <summary><code class="rc-command">${escapeHtml(preview)}</code><span class="rc-cmd-more">${label}</span></summary>
+      <summary><code class="rc-command">${escapeHtml(preview)}</code><span class="rc-cmd-more"><span class="rc-cmd-closed">${label}</span><span class="rc-cmd-open">hide</span></span></summary>
       <code class="rc-command rc-command-full">${lines.map((line) => escapeHtml(line)).join("\n")}</code>
     </details>`;
 }
@@ -185,10 +186,15 @@ function ranWithoutAsking(command: ReceiptCommand): boolean {
   return command.decided_by_person !== true && (command.outcome === "ok" || command.outcome === "failed");
 }
 
+/** A finding's subject in full, never folded. A multi-line command shows one line per escaped newline. */
+function renderSubject(subject: string): string {
+  return `<code class="rc-subject">${subject.split(ESCAPED_NEWLINE).map((line) => escapeHtml(line)).join("\n")}</code>`;
+}
+
 function renderFinding(finding: ReceiptFinding, names: Map<string, string>, viewerId?: string | null): string {
   const severity = finding.severity === "high" ? "high" : "medium";
   const decided = finding.approver ? ` by ${person(finding.approver, names, viewerId)}` : "";
-  const subject = finding.subject ? `<code class="rc-subject">${escapeHtml(finding.subject)}</code>` : "";
+  const subject = finding.subject ? renderSubject(finding.subject) : "";
   return `<li class="rc-finding rc-${severity}">
       <span class="rc-sev">${severity === "high" ? "High" : "Medium"}</span>
       <div class="rc-finding-body">

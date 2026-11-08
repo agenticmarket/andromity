@@ -84,6 +84,8 @@ export interface Receipt {
   tokens: number | null;
   notes: string[];
   sealed?: { hash: string; matches: boolean };
+  /** How many characters of each command this receipt keeps; absent on turns sealed before commands were kept in full. */
+  command_chars?: number;
   record_hash: string;
 }
 
