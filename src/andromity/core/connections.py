@@ -115,6 +115,10 @@ def _effective_base_url(provider: str, saved: dict) -> str:
     return saved.get("base_url") or _DEFAULT_BASE_URLS.get(provider) or _DEFAULT_BASE_URLS.get(kind, "")
 
 
+TITLE_MAX_TOKENS = 256
+TITLE_TIMEOUT_SECONDS = 20
+
+
 def provider_request(provider: str, model: str) -> dict[str, Any]:
     """Resolve a named connection without borrowing another connection's key."""
     saved = config.get_provider_config(provider) or {}

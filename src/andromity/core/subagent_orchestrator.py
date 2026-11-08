@@ -3,7 +3,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from andromity.core.debug_log import get_logger
-from andromity.core.subagent import SubAgent, SubAgentResult
+from andromity.core.subagent import MODE_RANK as _MODE_RANK, SubAgent, SubAgentResult, normalize_mode
 from andromity.core.subagent_config import SubAgentConfigManager
 
 log = get_logger("subagent_orchestrator")
@@ -126,6 +126,24 @@ class SubAgentOrchestrator:
         log.info("Killed subagent %s (reason: %s)", agent_id, reason)
         return True
 
+    def has_running(self) -> bool:
+        return any(not task.done() for task in self._tasks.values())
+
+    def session_ids(self) -> List[str]:
+        """Ids of the sub-agents' own sessions, under which their shell commands run."""
+        ids = (getattr(getattr(agent, "session", None), "id", None) for agent in self._agents.values())
+        return [sid for sid in ids if isinstance(sid, str) and sid]
+
+    def restrict_to(self, mode: Optional[str]) -> None:
+        """Lower this orchestrator's and its sub-agents' permission mode to `mode` when that is stricter."""
+        rank = _MODE_RANK.get(str(mode or "").lower())
+        if rank is None:
+            return
+        for holder in [self, *self._agents.values()]:
+            current = _MODE_RANK.get(str(getattr(holder, "permission_mode", "") or "").lower())
+            if current is None or rank < current:
+                holder.permission_mode = str(mode).lower()
+
     def kill_all(self, reason: str = "orchestrator_shutdown"):
         """Kill all active subagents."""
         for aid in list(self._agents.keys()):
@@ -137,3 +155,25 @@ class SubAgentOrchestrator:
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
         return list(self._results.values())
+
+
+def session_orchestrators(session: Any) -> List[SubAgentOrchestrator]:
+    """The session's current orchestrator and earlier turns' ones whose sub-agents were still running."""
+    current = getattr(session, "_orchestrator", None)
+    earlier = getattr(session, "_earlier_orchestrators", None) or []
+    return [o for o in [current, *earlier] if isinstance(o, SubAgentOrchestrator)]
+
+
+def restrict_session_subagents(session: Any, mode: Any) -> None:
+    """Lower the permission mode of every sub-agent the session started to `mode`, when that is stricter."""
+    for orchestrator in session_orchestrators(session):
+        orchestrator.restrict_to(normalize_mode(mode))
+
+
+def kill_session_subagents(session: Any, reason: str) -> List[str]:
+    """Stop every sub-agent the session started, in this turn or an earlier one. Returns their sessions' ids."""
+    ids: List[str] = []
+    for orchestrator in session_orchestrators(session):
+        ids.extend(orchestrator.session_ids())
+        orchestrator.kill_all(reason=reason)
+    return ids

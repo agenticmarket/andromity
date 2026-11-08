@@ -253,11 +253,18 @@ class Agent:
         from andromity.core.subagent_orchestrator import SubAgentOrchestrator
         from andromity.core.session_bus import SessionBus
 
+        previous = getattr(self.session, "_orchestrator", None)
         self.orchestrator = SubAgentOrchestrator(
             parent_session_id=self.session.id,
             project_path=self.session.project_path,
             permission_mode=getattr(self.session, "permission_mode", None) or config.get("default", "permission_mode", "safe"),
         )
+        # Background sub-agents from earlier turns stay reachable, so Stop can end them too.
+        earlier = [o for o in getattr(self.session, "_earlier_orchestrators", None) or []
+                   if isinstance(o, SubAgentOrchestrator) and o.has_running()]
+        if isinstance(previous, SubAgentOrchestrator) and previous.has_running():
+            earlier.append(previous)
+        self.session._earlier_orchestrators = earlier
         self.session._orchestrator = self.orchestrator
 
         try:
@@ -1323,10 +1330,16 @@ class Agent:
             turn_id=getattr(self, "current_user_turn_id", None),
         )
 
-    def kill_subagents(self, reason: str = "agent_cancelled"):
-        """Terminate all active subagents spawned by this agent."""
-        if hasattr(self, "orchestrator") and self.orchestrator:
-            self.orchestrator.kill_all(reason=reason)
+    def kill_subagents(self, reason: str = "agent_cancelled") -> list[str]:
+        """Terminate every sub-agent this session started, in this turn or earlier ones. Returns their sessions' ids."""
+        from andromity.core.subagent_orchestrator import kill_session_subagents, session_orchestrators
+        own = getattr(self, "orchestrator", None)
+        reachable = session_orchestrators(self.session)
+        ids = kill_session_subagents(self.session, reason)
+        if own is not None and all(own is not o for o in reachable):
+            ids.extend(own.session_ids())
+            own.kill_all(reason=reason)
+        return ids
 
     async def await_subagents(self):
         """Wait for all active subagents to finish and return their results."""
