@@ -9,7 +9,7 @@ import time
 import traceback
 import uuid
 from copy import deepcopy
-from contextlib import contextmanager
+from contextlib import aclosing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set
@@ -2007,46 +2007,47 @@ class JsonRpcHandler:
                     "image_uris": image_uris or [],
                 })
                 session.set_status("running")
-                async for event in agent.run(prompt, images=images, image_uris=image_uris,
-                                             image_only=bool(params.get("image_only"))):
-                    if isinstance(event, InputApplied):
-                        self.notify("agent/inputApplied", {
-                            "session_id": session_id, "input_id": event.input_id,
-                            "prompt": event.prompt, "image_uris": event.image_uris or [],
-                            "turn_index": event.turn_index, "ts": time.time(),
-                        })
-                    elif isinstance(event, ImagesSkipped):
-                        self.notify("agent/imagesSkipped", {
-                            "session_id": session_id, "count": event.count,
-                            "prompt_added": event.prompt_added, "steering": event.steering,
-                            "input_id": event.input_id if event.steering else params.get("input_id"),
-                        })
-                    elif isinstance(event, Done):
-                        if event.outcome != "success":
-                            agent.input_queue.pause()
-                        turn_files = self._extract_turn_files(session)
-                        if turn_checkpoint:
-                            turn_checkpoint.update(close_turn_record(session))
-                            turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path))
-                            if turn_checkpoint["after_hash"]:
-                                from andromity.core.git_ops import checkpoint_changed_files
-                                turn_files = await asyncio.to_thread(checkpoint_changed_files,
-                                    get_repo(Path(session.project_path)), turn_checkpoint, session.project_path)
-                        self.notify("agent/done", {
-                            "session_id": session_id,
-                            "usage": event.usage,
-                            "outcome": event.outcome,
-                            "error_action": event.error_action,
-                            "error_type": event.error_type,
-                            "token_total": getattr(session, "token_total", 0),
-                            "context_tokens": getattr(session, "context_tokens", 0),
-                            "cost_usd": getattr(session, "cost_usd", 0.0),
-                            "turn_files": turn_files,
-                        })
-                        if turn_checkpoint and turn_checkpoint.get("after_hash"):
-                            await self._seal_receipt(session, turn_checkpoint)
-                    else:
-                        self._forward_agent_event(session_id, session, agent, event)
+                async with aclosing(agent.run(prompt, images=images, image_uris=image_uris,
+                                              image_only=bool(params.get("image_only")))) as events:
+                    async for event in events:
+                        if isinstance(event, InputApplied):
+                            self.notify("agent/inputApplied", {
+                                "session_id": session_id, "input_id": event.input_id,
+                                "prompt": event.prompt, "image_uris": event.image_uris or [],
+                                "turn_index": event.turn_index, "ts": time.time(),
+                            })
+                        elif isinstance(event, ImagesSkipped):
+                            self.notify("agent/imagesSkipped", {
+                                "session_id": session_id, "count": event.count,
+                                "prompt_added": event.prompt_added, "steering": event.steering,
+                                "input_id": event.input_id if event.steering else params.get("input_id"),
+                            })
+                        elif isinstance(event, Done):
+                            if event.outcome != "success":
+                                agent.input_queue.pause()
+                            turn_files = self._extract_turn_files(session)
+                            if turn_checkpoint:
+                                turn_checkpoint.update(close_turn_record(session))
+                                turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path))
+                                if turn_checkpoint["after_hash"]:
+                                    from andromity.core.git_ops import checkpoint_changed_files
+                                    turn_files = await asyncio.to_thread(checkpoint_changed_files,
+                                        get_repo(Path(session.project_path)), turn_checkpoint, session.project_path)
+                            self.notify("agent/done", {
+                                "session_id": session_id,
+                                "usage": event.usage,
+                                "outcome": event.outcome,
+                                "error_action": event.error_action,
+                                "error_type": event.error_type,
+                                "token_total": getattr(session, "token_total", 0),
+                                "context_tokens": getattr(session, "context_tokens", 0),
+                                "cost_usd": getattr(session, "cost_usd", 0.0),
+                                "turn_files": turn_files,
+                            })
+                            if turn_checkpoint and turn_checkpoint.get("after_hash"):
+                                await self._seal_receipt(session, turn_checkpoint)
+                        else:
+                            self._forward_agent_event(session_id, session, agent, event)
 
                 if len(session.messages) <= 3 and (session.name in ("new-session", "Main Session") or session.name.startswith("Session ") or session.name.startswith("session-")):
                     try:

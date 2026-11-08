@@ -581,12 +581,13 @@ class Agent:
         metadata = {"provider": self.provider, "model": self.model}
         send_task_event("task_started", self.session.id, run_id, **metadata)
         try:
-            async for event in self._run(user_input, images, image_uris):
-                if first_response_ms is None and isinstance(event, TextDelta):
-                    first_response_ms = int((time.monotonic() - self._telemetry_turn_start) * 1000)
-                if isinstance(event, Done):
-                    outcome = "completed" if event.outcome == "success" else "failed"
-                yield event
+            async with aclosing(self._run(user_input, images, image_uris)) as events:
+                async for event in events:
+                    if first_response_ms is None and isinstance(event, TextDelta):
+                        first_response_ms = int((time.monotonic() - self._telemetry_turn_start) * 1000)
+                    if isinstance(event, Done):
+                        outcome = "completed" if event.outcome == "success" else "failed"
+                    yield event
         except asyncio.CancelledError:
             outcome = "cancelled"
             raise
