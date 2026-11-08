@@ -38,6 +38,7 @@ function el(id = ""): any {
     setAttribute: (k: string, v: string) => { attrs[k] = String(v); },
     getAttribute: (k: string) => (k in attrs ? attrs[k] : null),
     classList: { add() {}, remove() {}, toggle() {} },
+    querySelector: () => null,
     remove() { node.removed = true; },
     focus() {},
     attrs,
@@ -77,15 +78,16 @@ function load(opts: { running?: boolean; queue?: boolean } = {}) {
 const STEP = { title: "Fix the null check", prompt: "Fix the null check in parser.ts", new_session: false };
 
 describe("Suggested next step card", () => {
-  it("shows one card with Do it and dismiss, and puts the title in the input placeholder", () => {
+  it("shows the exact prompt with Send, Edit and dismiss, and puts the title in the input placeholder", () => {
     const rt = load();
     rt.sandbox.step = STEP;
     rt.run("setNextStep('s1', normalizeNextStep(step))");
     const card = rt.card();
     assert.ok(card, "card is rendered when the turn is over");
     assert.ok(card.innerHTML.includes(">Fix the null check<"));
-    assert.ok(card.innerHTML.includes('title="Fix the null check in parser.ts"'), "the full prompt is visible on hover");
-    assert.ok(card.innerHTML.includes('data-action="next-step-run">Do it<'));
+    assert.ok(card.innerHTML.includes(">Fix the null check in parser.ts<"), "the card shows the text Send delivers");
+    assert.ok(card.innerHTML.includes('data-action="next-step-run" data-opt-idx="0">Send<'));
+    assert.ok(card.innerHTML.includes('data-action="next-step-edit"'));
     assert.ok(card.innerHTML.includes('data-action="next-step-dismiss"'));
     assert.ok(!card.innerHTML.includes("New session"), "New session only when the agent marked the work independent");
     assert.equal(rt.input.getAttribute("placeholder"), "Fix the null check  ·  Tab to use");
@@ -287,7 +289,7 @@ describe("Suggested next step wiring", () => {
   it("follows the editor theme", () => {
     const css: string = getChatStyles();
     const block = css.slice(css.indexOf(".next-step-card {"), css.indexOf(".next-step-dismiss:hover"));
-    assert.ok(block.includes("background: var(--chat-surface, var(--card-bg));"));
+    assert.ok(block.includes("border: 1px dashed var(--vscode-input-border, rgba(var(--tint), 0.2));"));
     assert.ok(block.includes("background: var(--vscode-button-background, var(--accent));"));
     assert.ok(!/rgba\(255, 255, 255|#18181b/.test(block), "no fixed dark colours");
   });

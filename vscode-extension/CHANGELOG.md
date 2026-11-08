@@ -8,6 +8,7 @@ All notable changes to the "andromity" extension will be documented in this file
 - **Turn receipts.** A receipt line under each answer that changed files or ran commands shows what the turn did: files changed, commands and their results, sensitive files touched, and who approved or declined each risky step. Open it for the full receipt, copy it as Markdown for a pull request, or save it as JSON. Fixed code writes it from Andromity's own records; the model never does. Also available as **Andromity: Show Turn Receipt**. Long commands are kept up to 2,000 characters, with secrets masked first. Under Needs your eyes, a flagged command is shown in full, and long commands in the Commands list open with **show all**.
 
 ### Changed
+- **A suggested next step reads as your next message.** The card under a finished reply shows the exact text **Send** delivers, drafted like an unsent message of yours, with **Edit** to change it in the input first. Long suggestions show three lines and **Show all**. A choice shows its options above the text of the one you pick.
 - **Safer auto-approval.** Command checks were rebuilt against the published GuardFall bypasses, and "always allow this command" follows the same stricter rule.
 
 ### Fixed

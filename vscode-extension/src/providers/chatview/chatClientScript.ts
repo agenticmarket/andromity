@@ -4577,6 +4577,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'next-step-new-session':
           startNextStepInNewSession();
           break;
+        case 'next-step-select':
+          selectNextStepOption(target.getAttribute('data-opt-idx'));
+          break;
+        case 'next-step-expand':
+          toggleNextStepPrompt();
+          break;
+        case 'next-step-edit':
+          acceptNextStepIntoInput(target.getAttribute('data-opt-idx'));
+          promptInput.focus();
+          break;
         case 'next-step-dismiss':
           dismissNextStep('dismissed');
           promptInput.focus();
@@ -8173,13 +8183,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const nextStepDismissed = new Set();
     let nextStepDefaultPlaceholder = null;
 
+    function cutNextStepText(text, max) {
+      const cut = text.slice(0, max);
+      return /[\\uD800-\\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+    }
+
     function normalizeNextStepOption(raw) {
       if (!raw || typeof raw !== 'object') return null;
       let title = String(raw.title || '').trim().split(/\\s+/).join(' ');
       const prompt = String(raw.prompt || '').trim();
       if (!title || !prompt) return null;
-      if (title.length > 60) title = title.slice(0, 59).trim() + '…';
-      return { title, prompt: prompt.slice(0, 2000), new_session: raw.new_session === true };
+      if (title.length > 60) title = cutNextStepText(title, 59).trim() + '…';
+      return { title, prompt: cutNextStepText(prompt, 2000), new_session: raw.new_session === true };
     }
 
     // One step, or a short question with 2-3 options; title/prompt/new_session are the first option.
@@ -8273,9 +8288,34 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       vscode.postMessage({ type: 'next_step_event', event: event || 'dismissed', sessionId: currentSessionId });
     }
 
-    function renderNextStep() {
+    const NEXT_STEP_SVG = '<svg class="next-step-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">';
+    const NEXT_STEP_ICONS = {
+      sparkle: NEXT_STEP_SVG + '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg>',
+      pencil: NEXT_STEP_SVG + '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>',
+      send: NEXT_STEP_SVG + '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>',
+      newSession: NEXT_STEP_SVG + '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>',
+    };
+    let nextStepPromptObserver = null;
+
+    function selectedNextStepIndex(step) {
+      const i = Number(step.selected);
+      return Number.isInteger(i) && i >= 0 && i < step.options.length ? i : 0;
+    }
+
+    // An index that names no option means the one the card shows.
+    function nextStepOption(step, index) {
+      const i = index == null || index === '' ? NaN : Number(index);
+      return Number.isInteger(i) && i >= 0 && i < step.options.length ? step.options[i] : step.options[selectedNextStepIndex(step)];
+    }
+
+    // The card shows the exact text Send delivers for the selected option.
+    function renderNextStep(focusAction) {
       const existing = document.getElementById('next-step-card');
       if (existing) existing.remove();
+      if (nextStepPromptObserver) {
+        nextStepPromptObserver.disconnect();
+        nextStepPromptObserver = null;
+      }
       const input = document.getElementById('prompt-input');
       if (input && nextStepDefaultPlaceholder === null) nextStepDefaultPlaceholder = input.getAttribute('placeholder') || '';
       const step = currentNextStep();
@@ -8284,48 +8324,92 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (input) input.setAttribute('placeholder', nextStepDefaultPlaceholder || '');
         return;
       }
+      const choices = step.options.length > 1;
+      const sel = selectedNextStepIndex(step);
+      const option = step.options[sel];
+      const elsewhere = choices && option.new_session;
+      const heading = choices ? step.question || 'Choose what to do next' : step.title;
       const card = document.createElement('div');
       card.id = 'next-step-card';
       card.className = 'next-step-card';
+      if (choices) card.classList.add('has-choices');
       card.setAttribute('role', 'group');
       card.setAttribute('aria-label', 'Suggested next step');
-      const choices = step.options.length > 1;
-      if (choices) card.classList.add('has-choices');
-      // One step reads "Do it"; a choice shows each option as its own button, the recommended one first.
-      const buttons = choices
-        ? step.options.map((o, i) => '<button class="next-step-btn' + (i === 0 ? ' primary' : '') + '" data-action="next-step-run" data-opt-idx="' + i + '"' +
-            ' title="' + escapeHtml(o.prompt) + (o.new_session ? ' (runs in a new session)' : '') + '">' + escapeHtml(o.title) +
-            (o.new_session ? '<span class="next-step-new-tag">new session</span>' : '') + '</button>').join('')
-        : '<button class="next-step-btn primary" data-action="next-step-run">Do it</button>' +
-          (step.new_session ? '<button class="next-step-btn" data-action="next-step-new-session" title="Start this in a new session">New session</button>' : '');
-      // The buttons send these prompts as if typed, so the exact text is one click away before sending.
-      const requestHtml = choices
-        ? step.options.map(o => '<div class="next-step-request-item"><span class="next-step-request-name">' + escapeHtml(o.title) + '</span>' + escapeHtml(o.prompt) + '</div>').join('')
-        : escapeHtml(step.prompt);
-      card.innerHTML = '<div class="next-step-text">' +
-          '<div class="next-step-label">Suggested next step</div>' +
-          '<div class="next-step-title" title="' + escapeHtml(choices ? step.question || step.title : step.prompt) + '">' +
-            escapeHtml(choices ? step.question || 'Choose what to do next' : step.title) + '</div>' +
-          '<details class="next-step-request"><summary>See the exact request</summary><div class="next-step-request-body">' + requestHtml + '</div></details>' +
-        '</div>' +
-        '<div class="next-step-actions">' + buttons +
+      const optionsHtml = choices
+        ? '<div class="next-step-options" role="group" aria-label="Options">' + step.options.map((o, i) =>
+            '<button class="next-step-option" data-action="next-step-select" data-opt-idx="' + i + '" aria-pressed="' + (i === sel) + '">' +
+              escapeHtml(o.title) +
+              (o.new_session ? NEXT_STEP_ICONS.newSession + '<span class="sp-sr-only">, runs in a new session</span>' : '') +
+            '</button>').join('') + '</div>'
+        : '';
+      const actions =
+        (!choices && step.new_session ? '<button class="next-step-btn ghost" data-action="next-step-new-session" title="Start this in a new session">' + NEXT_STEP_ICONS.newSession + 'New session</button>' : '') +
+        '<button class="next-step-btn ghost" data-action="next-step-edit" data-opt-idx="' + sel + '" title="Put it in the input to edit first (Tab)">' + NEXT_STEP_ICONS.pencil + 'Edit</button>' +
+        '<button class="next-step-btn primary" data-action="next-step-run" data-opt-idx="' + sel + '">' +
+          (elsewhere ? 'Start session' + NEXT_STEP_ICONS.newSession : 'Send' + NEXT_STEP_ICONS.send) + '</button>';
+      card.innerHTML =
+        '<div class="next-step-head">' +
+          '<span class="next-step-label">' + NEXT_STEP_ICONS.sparkle +
+            '<span class="next-step-kicker">Suggested</span><span class="next-step-sep" aria-hidden="true">·</span>' +
+            '<span class="next-step-title" title="' + escapeHtml(heading) + '">' + escapeHtml(heading) + '</span></span>' +
           '<button class="next-step-dismiss" data-action="next-step-dismiss" aria-label="Dismiss suggestion" title="Dismiss (Esc)">&times;</button>' +
+        '</div>' +
+        optionsHtml +
+        '<div class="next-step-prompt' + (step.expanded ? ' expanded' : '') + '" id="next-step-prompt">' + escapeHtml(option.prompt) + '</div>' +
+        '<div class="next-step-foot">' +
+          '<button class="next-step-more" data-action="next-step-expand" aria-controls="next-step-prompt" aria-expanded="' + Boolean(step.expanded) + '">' +
+            (step.expanded ? 'Show less' : 'Show all') + '</button>' +
+          '<div class="next-step-actions">' + actions + '</div>' +
         '</div>';
       const tipCard = document.getElementById('feature-tip-card');
       if (tipCard) chatContainer.insertBefore(card, tipCard);
       else chatContainer.appendChild(card);
-      if (input) input.setAttribute('placeholder', step.title + '  ·  Tab to use');
+      watchNextStepPrompt(card, step);
+      if (input) input.setAttribute('placeholder', option.title + '  ·  Tab to use');
       if (!step.reported) {
         step.reported = true;
         vscode.postMessage({ type: 'next_step_event', event: 'shown', sessionId: currentSessionId });
       }
+      if (focusAction) {
+        const target = card.querySelector('[data-action="' + focusAction + '"]' + (focusAction === 'next-step-select' ? '[aria-pressed="true"]' : ''));
+        const focusable = target && !target.hidden ? target : card.querySelector('[data-action="next-step-run"]');
+        if (focusable) focusable.focus();
+      }
       scrollToBottomIfNeeded();
+    }
+
+    // "Show all" appears only while the clamped prompt hides text, re-checked as the view resizes.
+    function watchNextStepPrompt(card, step) {
+      const promptEl = card.querySelector('.next-step-prompt');
+      const more = card.querySelector('.next-step-more');
+      if (!promptEl || !more) return;
+      const fit = () => { more.hidden = !step.expanded && promptEl.scrollHeight <= promptEl.clientHeight + 1; };
+      fit();
+      if (typeof ResizeObserver !== 'undefined') {
+        nextStepPromptObserver = new ResizeObserver(fit);
+        nextStepPromptObserver.observe(promptEl);
+      }
+    }
+
+    function selectNextStepOption(index) {
+      const step = currentNextStep();
+      const i = Number(index);
+      if (!step || !Number.isInteger(i) || i < 0 || i >= step.options.length) return;
+      step.selected = i;
+      renderNextStep('next-step-select');
+    }
+
+    function toggleNextStepPrompt() {
+      const step = currentNextStep();
+      if (!step) return;
+      step.expanded = !step.expanded;
+      renderNextStep('next-step-expand');
     }
 
     function runNextStep(index) {
       const step = currentNextStep();
       if (!step) return;
-      const option = step.options[Number(index) || 0] || step.options[0];
+      const option = nextStepOption(step, index);
       if (step.options.length > 1 && option.new_session) {
         startNextStepInNewSession(index);
         return;
@@ -8346,16 +8430,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function startNextStepInNewSession(index) {
       const step = currentNextStep();
       if (!step) return;
-      const option = step.options[Number(index) || 0] || step.options[0];
+      const option = nextStepOption(step, index);
       nextStepDismissed.add(step.key);
       setNextStep(currentSessionId, null);
       vscode.postMessage({ type: 'start_next_step_session', title: option.title, prompt: option.prompt, sessionId: currentSessionId });
     }
 
-    function acceptNextStepIntoInput() {
+    function acceptNextStepIntoInput(index) {
       const step = currentNextStep();
       if (!step) return false;
-      promptInput.value = step.prompt;
+      const option = nextStepOption(step, index);
+      const draft = promptInput.value.replace(/\\s+$/, '');
+      promptInput.value = draft ? draft + '\\n\\n' + option.prompt : option.prompt;
       promptInput.style.height = 'auto';
       promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
       promptInput.selectionStart = promptInput.selectionEnd = promptInput.value.length;
