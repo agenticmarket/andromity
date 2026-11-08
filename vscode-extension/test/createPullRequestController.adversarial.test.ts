@@ -50,6 +50,7 @@ interface Harness {
   files: PrFile[];
   host: any;
   setTurn(turn: { sessionId: string; turnIndex: number | null } | null): void;
+  setSession(id: string | null): void;
 }
 
 const cleanups: (() => void)[] = [];
@@ -93,6 +94,14 @@ interface Options {
   turn?: { sessionId: string; turnIndex: number | null } | null;
   /** Turn indexes whose receipt the engine fails to load. */
   failingReceipts?: number[];
+  /** Gives the host a currentSession() (the chat session). */
+  currentSession?: string | null;
+  /** Engine sessions for session.receipt: turn index -> files changed (repo paths) and line counts. */
+  /** Answers session.receipt with whatever this returns (for real engine answers). */
+  engineResponder?: (params: any) => unknown;
+  /** host.files() reads the repository's changes live, as the refreshed panel does. */
+  liveFiles?: boolean;
+  engineSessions?: Record<string, Record<number, { path: string; added?: number; deleted?: number }[]>>;
 }
 
 async function harness(opts: Options = {}): Promise<Harness> {
@@ -133,6 +142,23 @@ async function harness(opts: Options = {}): Promise<Harness> {
   const rpc = {
     call: async (method: string, params: any) => {
       rpcCalls.push({ method, params });
+      if (method === "session.receipt" && opts.engineResponder) {
+        await receiptGate;
+        return opts.engineResponder(params);
+      }
+      if (method === "session.receipt" && opts.engineSessions) {
+        await receiptGate;
+        const turns = opts.engineSessions[params.session_id];
+        if (!turns) return { success: false, error: "That session was not found." };
+        const numbers = Object.keys(turns).map(Number).sort((a, b) => a - b);
+        const index = params.turn_index === undefined ? numbers[numbers.length - 1] : Number(params.turn_index);
+        if (!(index in turns)) return { success: false, error: "no checkpoint" };
+        const r: any = receiptFor([], findings, index);
+        r.session_id = params.session_id;
+        r.files_changed = turns[index].map((f) => ({ path: f.path, status: "M", added: f.added ?? 1, deleted: f.deleted ?? 1, via: "edit" }));
+        r.summary.files_changed = turns[index].length;
+        return { success: true, receipt: r, markdown: `### Receipt ${params.session_id} turn ${index + 1}`, text: "", turns: numbers };
+      }
       if (method === "session.receipt") {
         await receiptGate;
         const index = Number(params.turn_index);
@@ -155,15 +181,19 @@ async function harness(opts: Options = {}): Promise<Harness> {
   };
   const posts: any[] = [];
   const logs: string[] = [];
+  let currentSessionId: string | null = opts.currentSession ?? null;
   let currentTurn: { sessionId: string; turnIndex: number | null } | null = opts.turn === undefined ? { sessionId: "s1", turnIndex: 0 } : opts.turn;
   const host = {
     post: (m: unknown) => posts.push(JSON.parse(JSON.stringify(m))),
     rpc: () => rpc as any,
     repositoryRoot: () => sb.work,
     projectPath: () => sb.work,
-    files: () => files,
+    // liveFiles: what Changes Review lists right now (it refreshes on file and git events, so after the commit
+    // the committed files are gone from it), instead of the list taken when the harness started.
+    files: () => (opts.liveFiles ? changedFiles(sb) : files),
     turnFiles: () => (currentTurn ? turnFiles : null),
     turn: () => currentTurn,
+    ...(opts.currentSession !== undefined ? { currentSession: () => currentSessionId } : {}),
     scope: () => "turn" as const,
     agentRunning: opts.agentRunning ?? (() => false),
     refresh: async () => {},
@@ -171,7 +201,7 @@ async function harness(opts: Options = {}): Promise<Harness> {
   };
   const ctrl = new PullRequestController(host);
   cleanups.push(() => ctrl.dispose());
-  return { sb, repo, ctrl, posts, logs, rpcCalls, prompts, release: { receipt: releaseReceipt, draft: releaseDraft }, files, host, setTurn: (t) => { currentTurn = t; } };
+  return { sb, repo, ctrl, posts, logs, rpcCalls, prompts, release: { receipt: releaseReceipt, draft: releaseDraft }, files, host, setTurn: (t) => { currentTurn = t; }, setSession: (id) => { currentSessionId = id; } };
 }
 
 const views = (h: Harness) => h.posts.filter((m) => m.type === "pr_view").map((m) => m.view);
@@ -730,5 +760,269 @@ describe("round 3: two GitHub accounts (DESIGN 5 'Not signed in', 'No push acces
     const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"));
     assert.ok(create, JSON.stringify(lastView(h)));
     assert.equal(create.headers.Authorization, `Bearer ${TOKEN}`, "the pull request was opened with an account the form never checked");
+  });
+});
+
+// ── Round 4: the receipt recovered from the chat's latest turn when no turn is known (commit 2e4bf2d) ──────────
+describe("round 4: receipt recovered after a restart (DESIGN 3.5)", { timeout: 120_000 }, () => {
+  const totals = (added = 1, deleted = 1) => ({ path: "orders/totals.py", added, deleted });
+
+  it("the founder's path: no turn reference, the chat's session has the turn → the receipt is attached and the form says so", async () => {
+    const h = await harness({ findings: [], turn: null, currentSession: "s9", engineSessions: { s9: { 0: [{ path: "x.md" }], 4: [totals(), { path: ".env" }] } } });
+    await openReady(h);
+    const call = h.rpcCalls.find((c) => c.method === "session.receipt")!;
+    assert.equal(call.params.session_id, "s9");
+    assert.ok(!("turn_index" in call.params), "asked for a specific turn although none is known");
+    assert.equal(form(h).receipt.available, true, form(h).receipt.reason);
+    assert.match(form(h).receipt.summary, /turn 5 \(found by matching these changes\)/);
+    assert.match(form(h).plan, /The receipt for turn 5 is attached/);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    assert.equal(lastView(h).phase, "done", JSON.stringify(lastView(h).failed ?? form(h)?.disabledReason));
+    const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
+    assert.match(create.body.body, /Receipt for Andromity turn 5, found by matching the changed files, committed as `[0-9a-f]{7}`\./);
+    assert.ok(create.body.body.includes("### Receipt s9 turn 5"));
+    assert.ok(lastView(h).done.lines.some((l: string) => /receipt for turn 5 is at the end/.test(l)));
+  });
+
+  it("a follow-up turn that changed nothing (a question) doesn't hide the turn that made these changes", async () => {
+    // Every trusted turn gets a checkpoint (rpc_handler start_turn_record), so "the latest finished turn" is often a chat-only turn.
+    const h = await harness({ findings: [], turn: null, currentSession: "s9", engineSessions: { s9: { 3: [totals(), { path: ".env" }], 4: [] } } });
+    await openReady(h, { receipt: false });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(form(h).receipt.available, true, `no receipt: ${form(h).receipt.reason}`);
+    assert.match(form(h).receipt.summary, /turn 4/);
+  });
+
+  it("a turn that only touched a same-named path, with different line counts, is attached only with a visible 'found by file name' label", async () => {
+    // Policy since 6a9aabb (agreed): attach with a plain label rather than nothing. Earlier this test expected no attachment.
+    const h = await harness({ findings: [], turn: null, currentSession: "s9", engineSessions: { s9: { 7: [totals(40, 0)] } } });
+    await openReady(h);
+    assert.match(form(h).receipt.summary, /turn 8 \(found by file name; these files also have other changes\)/);
+    assert.ok(form(h).files.find((f: any) => f.path === "orders/totals.py").tags.some((t: any) => /outside this turn/.test(t.text)));
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
+    assert.ok(create, JSON.stringify(lastView(h)));
+    assert.match(create.body.body, /Receipt for Andromity turn 8, found by file name; these files also have changes this receipt does not cover, committed as/);
+  });
+
+  it("no session, a hostile session id, or an unknown session: no receipt, no request with the bad id", async () => {
+    for (const id of [null, "", "../../x", "s/1", "a".repeat(129), "s1\nx", "s1 ", "ś1"]) {
+      const h = await harness({ findings: [], turn: null, currentSession: id, engineSessions: { s9: { 0: [totals()] } } });
+      await openReady(h, { receipt: false });
+      await new Promise((r) => setTimeout(r, 200));
+      assert.equal(h.rpcCalls.filter((c) => c.method === "session.receipt").length, 0, `asked the engine with ${JSON.stringify(id)}`);
+      assert.equal(form(h).receipt.available, false);
+      assert.match(form(h).plan, /No receipt is attached/);
+      h.ctrl.dispose();
+    }
+    const unknown = await harness({ findings: [], turn: null, currentSession: "nope", engineSessions: { s9: { 0: [totals()] } } });
+    await openReady(unknown, { receipt: false });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(form(unknown).receipt.available, false);
+  });
+
+  it("the chat's latest turn changed none of these files: not attached, and the reason says why", async () => {
+    const h = await harness({ findings: [], turn: null, currentSession: "s9", engineSessions: { s9: { 2: [{ path: "other/project/file.ts" }] } } });
+    await openReady(h, { receipt: false });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(form(h).receipt.available, false);
+    assert.match(form(h).receipt.reason, /No turn in this chat made these changes as they are now/);
+  });
+
+  it("partly related: the fixed line lists what the turn changed that is left out and what else is committed", async () => {
+    const h = await harness({ findings: [], turn: null, currentSession: "s9", engineSessions: { s9: { 5: [totals(), { path: "docs/already-committed.md" }] } } });
+    await openReady(h);
+    await h.ctrl.handle({ type: "pr_update", changes: { file: { path: ".env", checked: true } } });
+    await waitFor(() => form(h).files.find((f: any) => f.path === ".env").checked, "the tick");
+    await new Promise((r) => setTimeout(r, 300));
+    await waitFor(() => form(h).sizeLine.text !== "Counting lines…", "the file checks");
+    if (form(h).checks) await h.ctrl.handle({ type: "pr_update", changes: { ack: form(h).checks.key } });
+    await waitFor(() => form(h).primary.enabled, `the button (${form(h).disabledReason})`);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
+    assert.ok(create, JSON.stringify(lastView(h)));
+    assert.match(create.body.body, /leaves out 1 file the turn changed: `docs\/already-committed\.md`/);
+    assert.match(create.body.body, /It also commits 1 file the turn did not change: `\.env`/);
+  });
+
+  it("engine offline: no receipt, the plan sentence says so, nothing breaks", async () => {
+    const h = await harness({ findings: [], turn: null, currentSession: "s9", engineSessions: { s9: { 0: [totals()] } } });
+    h.host.rpc = () => null;
+    await openReady(h, { receipt: false, draft: false });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(form(h).receipt.available, false);
+    assert.match(form(h).receipt.reason, /Reconnect/);
+    assert.match(form(h).plan, /No receipt is attached/);
+  });
+
+  it("reopening the form after the chat switched sessions uses the new session; a known turn always wins over recovery", async () => {
+    const h = await harness({ findings: [], turn: null, currentSession: "s9", engineSessions: { s9: { 1: [totals()] }, s10: { 6: [totals()] } } });
+    await openReady(h);
+    assert.match(form(h).receipt.summary, /turn 2/);
+    h.ctrl.close();
+    h.setSession("s10");
+    await openReady(h);
+    assert.match(form(h).receipt.summary, /turn 7/);
+    h.ctrl.close();
+    h.setTurn({ sessionId: "s9", turnIndex: 1 });
+    await openReady(h);
+    assert.match(form(h).receipt.summary, /^Receipt · turn 2 ·/, "a known turn must not be replaced by the chat's latest turn");
+  });
+});
+
+// The engine's real session.receipt: a session where turn 1 edits orders/totals.py and turn 2 is a question.
+const ENGINE_PY = process.env.ANDROMITY_E2E_PYTHON || "D:\\saas\\agent\\.venv\\Scripts\\python.exe";
+const SESSION_PROBE = String.raw`import asyncio, json, sys
+sys.path.insert(0, sys.argv[1])
+project = sys.argv[2]
+followup = sys.argv[3] == "1"
+from pathlib import Path
+from andromity.config import config
+from andromity.core.session import Session
+from andromity.core.git_ops import ensure_git_tracking, create_pre_edit_snapshot
+from andromity.core.receipt import start_turn_record, close_turn_record
+from andromity.server.rpc_handler import JsonRpcHandler
+config.set_trusted(project)
+p = Path(project)
+session = Session(name="probe", project_path=project)
+def turn(prompt, edit):
+    ensure_git_tracking(p)
+    record = start_turn_record(session, create_pre_edit_snapshot(p))
+    session.add_message("user", prompt)
+    if edit:
+        target = p / "orders" / "totals.py"
+        target.write_bytes(b"def total(x):\n    return round(x, 2)\n")
+    session.add_message("assistant", "Done.")
+    record.update(close_turn_record(session))
+    record["after_hash"] = create_pre_edit_snapshot(p)
+    session.save()
+turn("Round totals to cents", True)
+if followup:
+    turn("What did you change?", False)
+class Self:
+    _active_sessions = {session.id: session}
+async def main():
+    out = {}
+    for turn_index in [None, 0, 1]:
+        params = {"session_id": session.id, "project_path": project}
+        if turn_index is not None:
+            params["turn_index"] = turn_index
+        out[str(turn_index)] = await JsonRpcHandler.rpc_session_receipt(Self(), params)
+    print("@@" + json.dumps({"session_id": session.id, "answers": out}, default=str))
+asyncio.run(main())
+`;
+
+function realEngineSession(followup: boolean): { session_id: string; answers: Record<string, any> } {
+  const sb = makeSandbox("engine");
+  try {
+    const script = path.join(sb.dir, "probe.py");
+    fs.writeFileSync(script, SESSION_PROBE);
+    const env: NodeJS.ProcessEnv = { ...sb.env, ANDROMITY_CONFIG_DIR: path.join(sb.dir, "cfg"), APPDATA: sb.dir, LOCALAPPDATA: sb.dir };
+    delete env.ANDROMITY_AIRGAP;
+    const engineSrc = path.resolve(__dirname, "..", "..", "..", "src");
+    const r = require("node:child_process").spawnSync(ENGINE_PY, ["-I", script, engineSrc, sb.work, followup ? "1" : "0"], { env, encoding: "utf8", timeout: 120_000, windowsHide: true });
+    const line = String(r.stdout || "").split("\n").find((l: string) => l.startsWith("@@"));
+    if (!line) throw new Error(`engine probe failed: ${String(r.stderr).slice(-2000)}`);
+    return JSON.parse(line.slice(2));
+  } finally {
+    // The engine's git and SQLite handles can linger for a moment on Windows.
+    fs.rmSync(sb.dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 });
+  }
+}
+
+describe("round 4 with the real engine's session.receipt (founder's path: turn ends → restart → Create pull request)", { timeout: 240_000 }, () => {
+  const skip = !fs.existsSync(ENGINE_PY) && `no engine Python at ${ENGINE_PY}`;
+
+  it("the turn that edited the file is the chat's latest turn: its receipt is recovered and attached", { skip }, async () => {
+    const engine = realEngineSession(false);
+    assert.equal(engine.answers["None"].receipt.turn_index, 0);
+    const h = await harness({ findings: [], turn: null, currentSession: engine.session_id,
+      engineResponder: (params) => engine.answers[params.turn_index === undefined ? "None" : String(params.turn_index)] ?? { success: false } });
+    await openReady(h);
+    assert.equal(form(h).receipt.available, true, form(h).receipt.reason);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
+    assert.ok(create, JSON.stringify(lastView(h)));
+    assert.match(create.body.body, /Receipt for Andromity turn 1, found by matching the changed files, committed as/);
+    assert.ok(create.body.body.includes("### Andromity receipt · turn 1"), "the engine's own receipt Markdown is in the body");
+  });
+
+  it("the founder asked a follow-up question after the edit: the editing turn's receipt is still recovered", { skip }, async () => {
+    const engine = realEngineSession(true);
+    assert.equal(engine.answers["None"].receipt.turn_index, 1, "the engine's latest turn is the question");
+    assert.deepEqual(engine.answers["None"].receipt.files_changed, []);
+    assert.deepEqual(engine.answers["0"].receipt.files_changed.map((f: any) => f.path), ["orders/totals.py"]);
+    const h = await harness({ findings: [], turn: null, currentSession: engine.session_id,
+      engineResponder: (params) => engine.answers[params.turn_index === undefined ? "None" : String(params.turn_index)] ?? { success: false } });
+    await openReady(h, { receipt: false });
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(form(h).receipt.available, true, `no receipt after a follow-up question: ${form(h).receipt.reason}`);
+  });
+});
+
+// ── Round 5 (commit 6a9aabb): left-out list after the commit, and the recovery walk ──────────
+describe("round 5: the receipt line is built from what was committed, not from the refreshed panel", { timeout: 120_000 }, () => {
+  it("founder's live bug: a committed turn file is never listed as 'left out' once the panel has refreshed", async () => {
+    const h = await harness({ findings: [], liveFiles: true });
+    await openReady(h);
+    assert.equal(form(h).files.find((f: any) => f.path === ".env").checked, false);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    assert.equal(lastView(h).phase, "done", JSON.stringify(lastView(h).failed ?? form(h)?.disabledReason));
+    assert.ok(!h.host.files().some((f: PrFile) => f.path === "orders/totals.py"), "precondition: the panel no longer lists the committed file");
+    const body: string = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!.body.body;
+    const line = /<sub>Receipt for[^\n]*<\/sub>/.exec(body)![0];
+    assert.match(line, /leaves out 1 file the turn changed: `\.env`\./, line);
+    assert.ok(!line.includes("orders/totals.py"), `the committed file is listed as left out: ${line}`);
+    assert.ok(!line.includes("also commits"), line);
+  });
+
+  it("the same holds for the copied description on a host page, including 'Copy description again' after the panel refreshed", async () => {
+    const h = await harness({ findings: [], liveFiles: true, host: "gitlab.com" });
+    await openReady(h);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    assert.equal(lastView(h).phase, "done", JSON.stringify(lastView(h).failed));
+    await h.ctrl.handle({ type: "pr_action", action: "copy_description" });
+    assert.equal(state.clipboard.length, 2);
+    for (const text of state.clipboard) {
+      const line = /<sub>Receipt for[^\n]*<\/sub>/.exec(text)![0];
+      assert.ok(!line.includes("orders/totals.py") && line.includes("`.env`"), line);
+    }
+  });
+});
+
+describe("round 5: the recovery walk (DESIGN 3.5)", { timeout: 120_000 }, () => {
+  const totals = (added = 1, deleted = 1) => ({ path: "orders/totals.py", added, deleted });
+
+  it("an exact match on an older turn beats a name-only match on a newer one", async () => {
+    const h = await harness({ findings: [], turn: null, currentSession: "s9", engineSessions: { s9: { 1: [totals()], 2: [{ path: "x.md" }], 3: [totals(9, 9)] } } });
+    await openReady(h);
+    assert.match(form(h).receipt.summary, /^Receipt · turn 2 \(found by matching these changes\)/);
+  });
+
+  it("looks at no more than ten turns and never trusts an answer for a different turn than asked", async () => {
+    const turns: Record<number, { path: string; added?: number; deleted?: number }[]> = { 0: [totals()] };
+    for (let i = 1; i <= 14; i++) turns[i] = [{ path: "x.md" }];
+    const h = await harness({ findings: [], turn: null, currentSession: "s9", engineSessions: { s9: turns } });
+    await openReady(h, { receipt: false });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(h.rpcCalls.filter((c) => c.method === "session.receipt").length <= 10);
+    assert.equal(form(h).receipt.available, false);
+    const latest = { success: true, receipt: { ...receiptFor([], [], 9), files_changed: [{ path: "x.md", status: "M", added: 1, deleted: 1, via: "edit" }] }, markdown: "### latest", text: "", turns: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] };
+    const liar = await harness({ findings: [], turn: null, currentSession: "s9", engineResponder: () => ({ ...latest, receipt: { ...latest.receipt, files_changed: [{ path: "orders/totals.py", status: "M", added: 7, deleted: 7, via: "edit" }] } }) });
+    await openReady(liar);
+    // Every answer claims turn 10, whatever was asked: only the answer to the unscoped request may be used.
+    assert.match(form(liar).receipt.summary, /^Receipt · turn 10 /);
+  });
+
+  it("a name-only match doesn't claim the files changed 'after that turn' when an earlier turn of the chat also changed them", async () => {
+    // Turn 3 and turn 4 both edited orders/totals.py; the diff against HEAD is the sum of both turns, so no single
+    // turn's counts match. Nothing changed after turn 4, but the public receipt line says it did.
+    const h = await harness({ findings: [], turn: null, currentSession: "s9", engineSessions: { s9: { 3: [totals(1, 0)], 4: [totals(0, 1)] } } });
+    await openReady(h);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    const body: string = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!.body.body;
+    const line = /<sub>Receipt for[^\n]*<\/sub>/.exec(body)![0];
+    assert.match(line, /Receipt for Andromity turn 5/);
+    assert.ok(!/changed again after that turn/.test(line), `the pull request states as fact something the code doesn't know: ${line}`);
   });
 });
