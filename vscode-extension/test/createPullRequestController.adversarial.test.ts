@@ -1,0 +1,575 @@
+// Independent adversarial tests for the Create pull request host controller (PullRequestController), run against a
+// real temporary git repository through the real VscodeGitPort and a CLI-backed stand-in for vscode.git's API.
+// GitHub is a fake behind a patched global fetch that refuses every host but api.github.com, and answers locally.
+// Spec: private/design/create-pr/DESIGN.md 3.2–3.7, 4, 5, 6, 7.1, 7.2.
+import { describe, it, afterEach } from "node:test";
+import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { installVscodeStub, resetState, state } from "./helpers/prVscodeStub.js";
+import { FakeGitHub } from "./helpers/prFakes.js";
+import { CliApiRepository, Sandbox, gitOk, gitSync, makeSandbox, writeHook } from "./helpers/prRealGit.js";
+import type { PrFile } from "../src/integrations/pullRequest/types.js";
+
+installVscodeStub();
+const { PullRequestController } = require("../src/panels/pullRequestController.js") as typeof import("../src/panels/pullRequestController.js");
+const { onFeatureUse } = require("../src/telemetry/featureUsage.js") as typeof import("../src/telemetry/featureUsage.js");
+
+const TOKEN = "gho_controller_test_token_ABCDEFGHIJKLMNOP";
+const SECRET_IN_ENV = "SUPERSECRET_VALUE_9f8e7d";
+const AWS = "AKIA" + "POIUYTREWQLKJHGF";
+
+// ── fake GitHub behind global fetch ─────────────────────────────
+let api = new FakeGitHub("test", "orders");
+const fetchLog: string[] = [];
+const originalFetch = globalThis.fetch;
+globalThis.fetch = (async (input: any, init: any) => {
+  const url = String(input);
+  fetchLog.push(url);
+  if (new URL(url).origin !== "https://api.github.com") throw new Error(`blocked fetch to ${url}`);
+  return api.fetch(url, init) as any;
+}) as typeof fetch;
+process.on("exit", () => { globalThis.fetch = originalFetch; });
+
+const features: string[] = [];
+onFeatureUse((name) => features.push(name));
+
+interface Harness {
+  sb: Sandbox;
+  repo: CliApiRepository;
+  ctrl: InstanceType<typeof PullRequestController>;
+  posts: any[];
+  logs: string[];
+  rpcCalls: { method: string; params: any }[];
+  prompts: string[];
+  release: { receipt(): void; draft(): void };
+  files: PrFile[];
+  host: any;
+  setTurn(turn: { sessionId: string; turnIndex: number | null } | null): void;
+}
+
+const cleanups: (() => void)[] = [];
+afterEach(() => {
+  for (const fn of cleanups.splice(0).reverse()) fn();
+});
+
+function receiptFor(turnFiles: string[], findings: { kind: string; severity: string; detail: string; subject?: string }[], turnIndex = 0) {
+  return {
+    version: 1, session_id: "s1", turn_index: turnIndex, started_at: null, ended_at: null, duration_seconds: null, models: ["m"], mode: null,
+    snapshot: {}, files_changed: turnFiles.map((p) => ({ path: p, status: "M", added: 1, deleted: 1, via: "edit" })),
+    edited_not_in_snapshot: [], files_read: [], commands: [], checks: [], web_hosts: [], mcp_servers: [], other_tools: {},
+    needs_attention: findings, approvers: [], cost_usd: null, tokens: null, notes: [], record_hash: "e".repeat(64),
+    summary: { files_changed: turnFiles.length, lines_added: 1, lines_deleted: 1, files_read: 0, searches: 0, commands: 0, commands_failed: 0,
+      blocked: 0, denied: 0, approved_by_person: 0, denied_by_person: 0, subagents: 0, web_searches: 0 },
+  };
+}
+
+function changedFiles(sb: Sandbox): PrFile[] {
+  const out: PrFile[] = [];
+  for (const line of gitOk(sb.work, sb.env, ["diff", "--numstat", "HEAD"]).split("\n").filter(Boolean)) {
+    const [a, d, p] = line.split("\t");
+    out.push({ path: p, status: "M", additions: Number(a) || 0, deletions: Number(d) || 0 });
+  }
+  return out;
+}
+
+interface Options {
+  findings?: { kind: string; severity: string; detail: string; subject?: string }[];
+  holdReceipt?: boolean;
+  holdDraft?: boolean;
+  signedIn?: boolean;
+  airGap?: boolean;
+  draftText?: string;
+  remoteName?: string;
+  host?: string;
+  agentRunning?: () => boolean;
+  repositories?: (repo: CliApiRepository) => any[];
+  /** The turn Changes Review shows; change it later with Harness.setTurn. null = no turn. */
+  turn?: { sessionId: string; turnIndex: number | null } | null;
+  /** Turn indexes whose receipt the engine fails to load. */
+  failingReceipts?: number[];
+}
+
+async function harness(opts: Options = {}): Promise<Harness> {
+  resetState();
+  api = new FakeGitHub("test", "orders");
+  const sb = makeSandbox("orders");
+  cleanups.push(() => sb.cleanup());
+  if (opts.host) {
+    const url = gitOk(sb.work, sb.env, ["config", "--get", "remote.origin.url"]);
+    const other = url.replace("github.com", opts.host);
+    gitOk(sb.work, sb.env, ["remote", "set-url", "origin", other]);
+    gitOk(sb.work, sb.env, ["config", `url.${sb.bare.replace(/\\/g, "/")}.insteadOf`, other]);
+  }
+  fs.writeFileSync(path.join(sb.work, ".env"), "API_KEY=old\n");
+  gitOk(sb.work, sb.env, ["add", ".env"]);
+  gitOk(sb.work, sb.env, ["commit", "-qm", "env"]);
+  gitOk(sb.work, sb.env, ["push", "-q", "origin", "main"]);
+  fs.writeFileSync(path.join(sb.work, ".env"), `API_KEY=${SECRET_IN_ENV}\n`);
+  fs.writeFileSync(path.join(sb.work, "orders", "totals.py"), "def total(x):\n    return round(x, 2)\n");
+  const files = changedFiles(sb);
+  const turnFiles = files.map((f) => f.path);
+
+  const repo = new CliApiRepository(sb.work, sb.env);
+  await repo.status();
+  const exportsApi = { enabled: true, getAPI: () => ({ repositories: opts.repositories ? opts.repositories(repo) : [repo] }) };
+  state.gitExtension = { isActive: true, exports: exportsApi, activate: async () => exportsApi };
+  state.session = opts.signedIn === false ? null : { accessToken: TOKEN, account: { label: "ada", id: "1" }, scopes: ["repo"] };
+  if (opts.airGap) state.config.andromity = { "airGap.enabled": true };
+
+  let releaseReceipt = () => {};
+  let releaseDraft = () => {};
+  const receiptGate = opts.holdReceipt ? new Promise<void>((r) => (releaseReceipt = r)) : Promise.resolve();
+  const draftGate = opts.holdDraft ? new Promise<void>((r) => (releaseDraft = r)) : Promise.resolve();
+  cleanups.push(() => { releaseReceipt(); releaseDraft(); });
+  const rpcCalls: Harness["rpcCalls"] = [];
+  const prompts: string[] = [];
+  const findings = opts.findings ?? [{ kind: "sensitive", severity: "high", detail: "Changed a sensitive file", subject: ".env" }];
+  const rpc = {
+    call: async (method: string, params: any) => {
+      rpcCalls.push({ method, params });
+      if (method === "session.receipt") {
+        await receiptGate;
+        const index = Number(params.turn_index);
+        if ((opts.failingReceipts ?? []).includes(index)) return { success: false, error: "no receipt" };
+        const markdown = index === 0 ? "### Andromity receipt\n\n**Needs your eyes**\n- High · Changed a sensitive file: `.env`" : `### Andromity receipt for turn ${index + 1}`;
+        return { success: true, receipt: receiptFor(turnFiles, findings, index), markdown, text: "", turns: [index] };
+      }
+      if (method === "git.file_diff") {
+        const diff = gitSync(sb.work, sb.env, ["diff", "--no-ext-diff", "HEAD", "--", params.path]).stdout;
+        return { diff };
+      }
+      if (method === "agent.quickPrompt") {
+        prompts.push(String(params.prompt));
+        await draftGate;
+        return opts.draftText ?? "<commit_message>fix(orders): round totals to cents</commit_message>\n<pr_description>Rounds order totals.</pr_description>";
+      }
+      if (method === "telemetry.recordFeature") return {};
+      throw new Error(`unexpected rpc ${method}`);
+    },
+  };
+  const posts: any[] = [];
+  const logs: string[] = [];
+  let currentTurn: { sessionId: string; turnIndex: number | null } | null = opts.turn === undefined ? { sessionId: "s1", turnIndex: 0 } : opts.turn;
+  const host = {
+    post: (m: unknown) => posts.push(JSON.parse(JSON.stringify(m))),
+    rpc: () => rpc as any,
+    repositoryRoot: () => sb.work,
+    projectPath: () => sb.work,
+    files: () => files,
+    turnFiles: () => (currentTurn ? turnFiles : null),
+    turn: () => currentTurn,
+    scope: () => "turn" as const,
+    agentRunning: opts.agentRunning ?? (() => false),
+    refresh: async () => {},
+    log: (m: string) => logs.push(m),
+  };
+  const ctrl = new PullRequestController(host);
+  cleanups.push(() => ctrl.dispose());
+  return { sb, repo, ctrl, posts, logs, rpcCalls, prompts, release: { receipt: releaseReceipt, draft: releaseDraft }, files, host, setTurn: (t) => { currentTurn = t; } };
+}
+
+const views = (h: Harness) => h.posts.filter((m) => m.type === "pr_view").map((m) => m.view);
+const lastView = (h: Harness) => views(h).at(-1);
+const form = (h: Harness) => lastView(h)?.form;
+
+async function waitFor(pred: () => boolean, what: string, ms = 8000): Promise<void> {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (pred()) return;
+    await new Promise((r) => setTimeout(r, 15));
+  }
+  assert.fail(`timed out waiting for ${what}`);
+}
+
+async function openReady(h: Harness, opts: { receipt?: boolean; draft?: boolean } = {}) {
+  await h.ctrl.handle({ type: "pr_open" });
+  await waitFor(() => lastView(h)?.phase === "form", "the form");
+  await waitFor(() => !!form(h) && form(h).sizeLine.text !== "Counting lines…", "the file checks");
+  if (opts.receipt !== false) await waitFor(() => form(h).receipt.available === true, "the receipt");
+  if (opts.draft !== false) await waitFor(() => !form(h).drafting && !!(h.ctrl as any).form.commitMessage, "the draft");
+  await new Promise((r) => setTimeout(r, 350));
+}
+
+const remoteBranches = (h: Harness) => gitOk(h.sb.dir, h.sb.env, ["--git-dir", h.sb.bare, "for-each-ref", "--format=%(refname:short)", "refs/heads"]).split("\n").filter(Boolean);
+const gitMutations = (h: Harness) => h.repo.calls.filter((c) => ["createBranch", "checkout", "add", "revert", "commit", "push"].includes(c.name)).map((c) => c.name);
+
+describe("controller: sensitive files and drafting (3.2, 3.4, 7.1)", { timeout: 60_000 }, () => {
+  it("the AI draft is built from the ticked files only: a sensitive file that starts unticked never goes to the model", async () => {
+    const h = await harness();
+    await openReady(h);
+    const env = form(h).files.find((f: any) => f.path === ".env");
+    assert.equal(env.checked, false, ".env starts unticked once the receipt flags it");
+    assert.ok(h.prompts.length >= 1, "a draft was requested");
+    for (const prompt of h.prompts) {
+      assert.ok(!prompt.includes(SECRET_IN_ENV), "the .env diff (with its secret) was sent to the model provider for drafting");
+    }
+  });
+
+  it("submitting before the receipt has loaded can't ship the sensitive file or skip the high-finding acknowledgement (3.2, 3.6)", async () => {
+    const h = await harness({ holdReceipt: true });
+    await openReady(h, { receipt: false });
+    const before = form(h);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary", form: { commitMessage: "fix: quick" } });
+    await new Promise((r) => setTimeout(r, 300));
+    const committed = gitSync(h.sb.work, h.sb.env, ["log", "--all", "--format=%H", "--", ".env"]).stdout.trim().split("\n").filter(Boolean).length;
+    assert.ok(committed <= 1, `.env was committed (button was ${before.primary.enabled ? "enabled" : "disabled"}: ${before.disabledReason})`);
+    assert.ok(!remoteBranches(h).some((b) => b !== "main"), "pushed before the receipt (and its high findings) loaded");
+  });
+
+  it("ticking a sensitive file after acknowledging needs a fresh acknowledgement (3.6: the ack can't be reused after what it covers changes)", async () => {
+    const h = await harness();
+    await openReady(h);
+    const key = form(h).checks.key;
+    await h.ctrl.handle({ type: "pr_update", changes: { ack: key } });
+    assert.equal(form(h).checks.acked, true);
+    await h.ctrl.handle({ type: "pr_update", changes: { file: { path: ".env", checked: true } } });
+    await waitFor(() => form(h).files.find((f: any) => f.path === ".env").checked === true, "the tick");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(form(h).checks.notes.some((n: string) => n.includes("sensitive file is ticked")));
+    assert.equal(form(h).checks.acked, false, "the acknowledgement given while .env was left out still counts after ticking .env");
+  });
+});
+
+describe("controller: the things-to-check acknowledgement (3.6)", { timeout: 60_000 }, () => {
+  const runsCode = [{ kind: "runs_code", severity: "high", detail: "Changed a file that runs code", subject: ".github/workflows/ci.yml" }];
+
+  it("can't be bypassed: a wrong or missing key never runs the flow", async () => {
+    const h = await harness({ findings: runsCode });
+    await openReady(h);
+    assert.ok(form(h).checks && !form(h).checks.acked);
+    assert.equal(form(h).primary.enabled, false);
+    for (const ack of [undefined, "wrong", true, 1, { toString: () => form(h).checks.key }, form(h).checks.key + " "]) {
+      await h.ctrl.handle({ type: "pr_submit", action: "primary", form: { ack } });
+      await h.ctrl.handle({ type: "pr_submit", action: "commit_only", form: { ack } });
+    }
+    assert.deepEqual(gitMutations(h), [], "the flow ran without the acknowledgement");
+  });
+
+  it("is reset when the items change: a key pasted into the commit message", async () => {
+    const h = await harness({ findings: runsCode });
+    await openReady(h);
+    await h.ctrl.handle({ type: "pr_update", changes: { ack: form(h).checks.key } });
+    assert.equal(form(h).primary.enabled, true, form(h).disabledReason);
+    await h.ctrl.handle({ type: "pr_update", changes: { commitMessage: `fix: x\n\nkey ${AWS}` } });
+    assert.equal(form(h).checks.acked, false);
+    assert.ok(form(h).checks.items.some((i: any) => i.label === "Secret" && /commit message/.test(i.text)));
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    assert.deepEqual(gitMutations(h), []);
+    assert.ok(!JSON.stringify(h.posts.filter((m) => m.type === "pr_view")).includes(AWS), "the key reached the webview in a view");
+  });
+
+  it("a key written into the file after acknowledging is caught by the last scan before staging (4.1)", async () => {
+    const h = await harness({ findings: runsCode });
+    await openReady(h);
+    await h.ctrl.handle({ type: "pr_update", changes: { ack: form(h).checks.key } });
+    fs.appendFileSync(path.join(h.sb.work, "orders", "totals.py"), `KEY = "${AWS}"\n`);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    assert.deepEqual(gitMutations(h), [], "a secret added after the acknowledgement went into a commit");
+    assert.ok(form(h).checks.items.some((i: any) => i.label === "Secret" && i.path === "orders/totals.py" && i.line === 3));
+    assert.ok(!JSON.stringify(h.posts).includes(AWS.slice(4)), "secret value reached the webview");
+  });
+});
+
+describe("controller: messages from the webview are untrusted (7.2 rules 2, 3, 4)", { timeout: 60_000 }, () => {
+  it("odd shapes, unknown paths, prototype keys and huge strings change nothing they shouldn't", async () => {
+    const h = await harness({ findings: [] });
+    await openReady(h);
+    const internal = (h.ctrl as any).form;
+    const tickedBefore = [...internal.ticked];
+    const junk: any[] = [
+      null, undefined, 5, "pr_submit", { type: 5 }, { type: "pr_update" }, { type: "pr_update", changes: "x" }, { type: "pr_update", changes: [1, 2] },
+      { type: "pr_update", changes: { file: { path: "../../outside.txt", checked: true } } },
+      { type: "pr_update", changes: { file: { path: "C:\\Windows\\win.ini", checked: true } } },
+      { type: "pr_update", changes: { file: { path: "__proto__", checked: true } } },
+      { type: "pr_update", changes: { file: { path: { toString: () => "orders/totals.py" }, checked: false } } },
+      { type: "pr_update", changes: JSON.parse('{"__proto__": {"polluted": true}, "constructor": {"prototype": {"polluted2": true}}}') },
+      { type: "pr_update", changes: { base: "evil-not-listed" } }, { type: "pr_update", changes: { base: "--upload-pack=x" } },
+      { type: "pr_update", changes: { scope: "everything" } }, { type: "pr_update", changes: { stagedChoice: "force" } },
+      { type: "pr_action", action: "open_link" }, { type: "pr_action", action: "authorize_sso" }, { type: "pr_action", action: "switch_back" },
+      { type: "pr_action", action: "retry" }, { type: "pr_action", action: "push_new_name" }, { type: "pr_action", action: { id: "x" } },
+      { type: "pr_action", action: "constructor" }, { type: "pr_open_link", url: "https://evil.example" }, { type: "pr_copy", text: "x" },
+    ];
+    for (const message of junk) await h.ctrl.handle(message);
+    assert.deepEqual([...internal.ticked], tickedBefore);
+    assert.ok(!internal.ticked.has("../../outside.txt") && !internal.unticked.has("__proto__"));
+    assert.equal(internal.base, "main");
+    assert.equal(internal.scope, "turn");
+    assert.equal(internal.stagedChoice, null);
+    assert.equal(({} as any).polluted, undefined);
+    assert.equal(({} as any).polluted2, undefined);
+    assert.deepEqual(state.opened, []);
+    assert.deepEqual(state.clipboard, []);
+    assert.deepEqual(gitMutations(h), []);
+
+    const huge = "x".repeat(5_000_000);
+    await h.ctrl.handle({ type: "pr_update", changes: { title: huge, description: huge, commitMessage: huge, branchName: huge, reviewers: Array(100_000).fill("a".repeat(10_000)) } });
+    assert.ok(internal.title.length <= 512 && internal.description.length <= 61_000 && internal.commitMessage.length <= 20_000, "lengths are capped");
+    assert.ok(internal.reviewers.length <= 30 && internal.reviewers.every((r: string) => r.length <= 120));
+    assert.equal(form(h).primary.enabled, false, "a 61,000-character description must not be sendable");
+    await h.ctrl.handle({ type: "pr_update", changes: { commitMessage: "fix\u0000:\u202e evil\u0007", title: "t\u0000i\u202et\u2066le" } });
+    assert.equal(internal.commitMessage, "fix: evil");
+    assert.equal(internal.title, "title");
+  });
+
+  it("branch names are checked in the host: a bad name from the webview never reaches git", async () => {
+    const h = await harness({ findings: [] });
+    await openReady(h);
+    for (const branchName of ["-f", "--force", "x..y", "@{-1}", "a b", "main.lock", "refs/../x", "a".repeat(150)]) {
+      await h.ctrl.handle({ type: "pr_submit", action: "primary", form: { branchName } });
+      assert.deepEqual(gitMutations(h), [], `ran with branch ${JSON.stringify(branchName)}`);
+    }
+  });
+
+  it("while the agent is running nothing can be submitted (2)", async () => {
+    let running = false;
+    const h = await harness({ findings: [], agentRunning: () => running });
+    await openReady(h);
+    running = true;
+    h.ctrl.refreshView();
+    assert.equal(form(h).primary.enabled, false);
+    assert.match(form(h).disabledReason, /Wait for the turn to finish/);
+    await h.ctrl.handle({ type: "pr_submit", action: "commit_only" });
+    assert.deepEqual(gitMutations(h), []);
+  });
+});
+
+describe("controller: the run, the token and URLs (4, 5, 7.1, 7.2 rules 5, 7)", { timeout: 90_000 }, () => {
+  it("creates the pull request; the token never reaches the webview, the engine, logs, telemetry or notifications", async () => {
+    features.length = 0;
+    const h = await harness({ findings: [] });
+    await openReady(h);
+    assert.equal(form(h).primary.label, "Create pull request");
+    assert.equal(form(h).primary.enabled, true, form(h).disabledReason);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    assert.equal(lastView(h).phase, "done", JSON.stringify(lastView(h).failed ?? lastView(h)));
+    assert.ok(remoteBranches(h).includes("andromity/round-totals-to-cents"), remoteBranches(h).join(","));
+    const pushes = h.repo.calls.filter((c) => c.name === "push");
+    assert.deepEqual(pushes.map((c) => c.args), [["origin", "andromity/round-totals-to-cents", true]], "push with set-upstream and no force mode");
+    const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
+    assert.match(create.body.body, /Receipt for Andromity turn 1, committed as `[0-9a-f]{7}`\./);
+    // .env is left unticked by name (engine's sensitive-path rule) even though this fake receipt doesn't flag it;
+    // a real receipt always flags a changed .env (DESIGN 3.2 as amended in 2358148).
+    assert.match(create.body.body, /leaves out 1 file the turn changed: `\.env`/);
+    assert.equal(gitSync(h.sb.work, h.sb.env, ["log", "--format=%H", "andromity/round-totals-to-cents", "--", ".env"]).stdout.trim().split("\n").filter(Boolean).length, 1, ".env was committed by default");
+    const everything = JSON.stringify({ posts: h.posts, logs: h.logs, rpc: h.rpcCalls, features, infos: state.infos, warnings: state.warnings, clipboard: state.clipboard, commands: state.commands });
+    assert.ok(!everything.includes(TOKEN) && !everything.includes(TOKEN.slice(4, 20)), "the token leaked");
+    for (const c of api.calls) assert.equal(c.headers.Authorization, `Bearer ${TOKEN}`);
+    assert.ok(fetchLog.every((u) => u.startsWith("https://api.github.com/")));
+  });
+
+  it("opens only links it built: a hostile html_url from the API is never opened", async () => {
+    const h = await harness({ findings: [] });
+    api.routes["POST /repos/test/orders/pulls"] = { status: 201, body: { number: 42, html_url: "https://evil.example/phish", title: "t" } };
+    await openReady(h);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    assert.equal(lastView(h).phase, "done");
+    assert.equal(lastView(h).done.url, "https://github.com/test/orders/pull/42");
+    await h.ctrl.handle({ type: "pr_action", action: "open_link" });
+    await h.ctrl.handle({ type: "pr_action", action: "copy_link" });
+    assert.deepEqual(state.opened, ["https://github.com/test/orders/pull/42"]);
+    assert.deepEqual(state.clipboard, ["https://github.com/test/orders/pull/42"]);
+  });
+
+  it("commit only: nothing leaves the machine", async () => {
+    const h = await harness({ findings: [] });
+    await openReady(h);
+    const before = api.calls.filter((c) => c.method === "POST").length;
+    await h.ctrl.handle({ type: "pr_submit", action: "commit_only" });
+    assert.equal(lastView(h).phase, "done");
+    assert.ok(!h.repo.calls.some((c) => c.name === "push"));
+    assert.deepEqual(remoteBranches(h), ["main"]);
+    assert.equal(api.calls.filter((c) => c.method === "POST").length, before);
+  });
+
+  it("not signed in and the sign-in is declined: nothing has changed (3.7)", async () => {
+    const h = await harness({ findings: [], signedIn: false });
+    await openReady(h);
+    assert.equal(form(h).primary.label, "Sign in and create pull request");
+    assert.ok(form(h).secondary.some((a: any) => a.id === "push_open_page"));
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    assert.ok(state.sessionRequests.some((r) => r.options?.createIfNone === true && r.scopes.includes("repo")));
+    assert.deepEqual(gitMutations(h), [], "git was touched although sign-in was declined");
+  });
+
+  it("signed out, Push and open GitHub: compare page built from parts, description copied, not in the URL (5)", async () => {
+    const h = await harness({ findings: [], signedIn: false });
+    const fetchesBefore = fetchLog.length;
+    await openReady(h);
+    await h.ctrl.handle({ type: "pr_update", changes: { description: "Secretless description & stuff #1" } });
+    await h.ctrl.handle({ type: "pr_submit", action: "push_open_page" });
+    assert.equal(lastView(h).phase, "done", JSON.stringify(lastView(h)));
+    assert.deepEqual(state.opened, ["https://github.com/test/orders/compare/main...andromity/round-totals-to-cents?expand=1"]);
+    assert.ok(state.clipboard[0].includes("Secretless description & stuff #1"));
+    assert.ok(state.clipboard[0].includes("### Andromity receipt"), "the receipt is copied with the description");
+    assert.ok(!state.opened[0].includes("Secretless"));
+    assert.equal(fetchLog.length, fetchesBefore, "GitHub's API was called while signed out");
+  });
+
+  it("GitLab remote: pushes and opens the merge request page on the remote's own host", async () => {
+    const h = await harness({ findings: [], host: "gitlab.com" });
+    await openReady(h);
+    assert.equal(form(h).primary.label, "Push and open merge request page");
+    const fetchesBefore = fetchLog.length;
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    assert.equal(lastView(h).phase, "done", JSON.stringify(lastView(h)));
+    const opened = new URL(state.opened[0]);
+    assert.equal(opened.hostname, "gitlab.com");
+    assert.equal(opened.searchParams.get("merge_request[source_branch]"), "andromity/round-totals-to-cents");
+    assert.equal(fetchLog.length, fetchesBefore, "GitHub's API was called for a GitLab remote");
+  });
+
+  it("air-gap mode: Commit only, no push, no GitHub call, no fetch of the remote (6)", async () => {
+    const h = await harness({ findings: [], airGap: true });
+    const fetchesBefore = fetchLog.length;
+    await openReady(h, { receipt: true });
+    assert.equal(form(h).primary.label, "Commit");
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    assert.equal(lastView(h).phase, "done");
+    assert.ok(!h.repo.calls.some((c) => c.name === "push" || c.name === "fetch"));
+    assert.equal(fetchLog.length, fetchesBefore);
+    assert.ok(!state.sessionRequests.length, "asked VS Code for a GitHub session in air-gap mode");
+  });
+
+  it("a pre-commit hook stops the commit: failure view, Switch back offered and works", async () => {
+    const h = await harness({ findings: [] });
+    writeHook(path.join(h.sb.work, ".git"), "pre-commit", "exit 1");
+    await openReady(h);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    const failed = lastView(h).failed;
+    assert.equal(lastView(h).phase, "failed");
+    assert.equal(failed.heading, "Git couldn't commit");
+    assert.ok(failed.actions.some((a: any) => a.id === "switch_back"));
+    assert.ok(!JSON.stringify(failed).includes("exit 1"));
+    await h.ctrl.handle({ type: "pr_action", action: "switch_back" });
+    assert.equal(gitOk(h.sb.work, h.sb.env, ["rev-parse", "--abbrev-ref", "HEAD"]), "main");
+  });
+
+  it("the panel closing mid-flow still reports the result as a notification (5)", async () => {
+    const h = await harness({ findings: [] });
+    await openReady(h);
+    const run = h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    h.ctrl.dispose();
+    await run;
+    assert.ok(state.infos.some((t) => /Pull request #\d+ opened/.test(t)), state.infos.join(" | "));
+  });
+
+  it("acts on exactly the repository Changes Review shows, never another one VS Code has open (7.2 rule 1)", async () => {
+    const decoy = { rootUri: { fsPath: path.join(path.dirname(path.dirname(process.cwd())), "not-this-repo") }, state: { remotes: [], indexChanges: [] }, status: async () => { throw new Error("decoy used"); } };
+    const h = await harness({ findings: [], repositories: (repo) => [decoy, repo] });
+    await openReady(h);
+    assert.equal(lastView(h).phase, "form");
+    const lonely = await harness({ findings: [], repositories: () => [decoy] });
+    await lonely.ctrl.handle({ type: "pr_open" });
+    await waitFor(() => lastView(lonely)?.phase === "blocked", "the blocked view");
+    assert.match(lastView(lonely).blocked.title, /doesn't see this repository/);
+  });
+});
+
+describe("controller: late drafts never overwrite what the user typed (3.1, 3.4, 3.5)", { timeout: 60_000 }, () => {
+  it("commit message, title and branch name typed before the draft arrives are kept", async () => {
+    const h = await harness({ findings: [], holdDraft: true });
+    await openReady(h, { draft: false });
+    await h.ctrl.handle({ type: "pr_update", changes: { commitMessage: "feat: mine", title: "My title", branchName: "me/my-branch", description: "My words" } });
+    const postsBefore = h.posts.length;
+    h.release.draft();
+    await waitFor(() => h.prompts.length > 0 && !form(h).drafting, "the draft to finish");
+    await new Promise((r) => setTimeout(r, 400));
+    const internal = (h.ctrl as any).form;
+    assert.equal(internal.commitMessage, "feat: mine");
+    assert.equal(internal.title, "My title");
+    assert.equal(internal.branchName, "me/my-branch");
+    assert.equal(internal.description, "My words");
+    const fields = h.posts.slice(postsBefore).filter((m) => m.type === "pr_field");
+    assert.deepEqual(fields, [], "the host pushed a late draft over typed text");
+  });
+
+  it("the title follows the commit message's subject until the user edits the title (3.5)", async () => {
+    const h = await harness({ findings: [] });
+    await openReady(h);
+    await h.ctrl.handle({ type: "pr_update", changes: { commitMessage: "fix(orders): a better subject\n\nbody" } });
+    assert.equal((h.ctrl as any).form.title, "fix(orders): a better subject");
+  });
+});
+
+describe("telemetry names are fixed pr_* strings (7.1)", () => {
+  it("every name used is pr_*, at most 31 characters, and carries no user data", () => {
+    const source = fs.readFileSync(path.join(__dirname, "..", "..", "src", "panels", "pullRequestController.ts"), "utf8");
+    const literal = [...source.matchAll(/track(?:Once)?\(\s*"([^"]+)"/g)].map((m) => m[1]);
+    const ternary = [...source.matchAll(/track(?:Once)?\([^;]*?\?\s*"([^"]+)"\s*:\s*"([^"]+)"/g)].flatMap((m) => [m[1], m[2]]);
+    const templates = [...source.matchAll(/track(?:Once)?\(\s*`([^`]+)`/g)].map((m) => m[1]);
+    for (const name of [...literal, ...ternary]) {
+      assert.match(name, /^pr_[a-z0-9_]+$/, name);
+      assert.ok(name.length <= 31, `${name} is ${name.length} characters`);
+    }
+    const allowedHoles = /\$\{(?:context\.remote \? .*|context\.github\.problem|failure\.kind|STEP_NAMES\[failure\.step\]|mode|this\.form\.scope)\}/;
+    for (const template of templates) {
+      assert.ok(template.startsWith("pr_"), template);
+      for (const hole of template.match(/\$\{[^}]+\}/g) || []) assert.match(hole, allowedHoles, `telemetry name built from ${hole}`);
+    }
+    assert.ok(features.every((name) => /^pr_[a-z0-9_]{1,28}$/.test(name) || !name.startsWith("pr_")), features.join(","));
+    assert.ok(features.filter((n) => n.startsWith("pr_")).every((n) => !/orders|test|ada|round|andromity|priya|gitlab_com|main/.test(n.replace(/^pr_host_gitlab$/, ""))), features.join(","));
+  });
+});
+
+describe("controller: attacking the fixes in 2358148", { timeout: 90_000 }, () => {
+  it("without a turn (no receipt), ticking a file named like a secrets file still needs 'I've checked these' (3.2, 3.6)", async () => {
+    const h = await harness({ findings: [], turn: null });
+    await openReady(h, { receipt: false });
+    const env = form(h).files.find((f: any) => f.path === ".env");
+    assert.equal(env.checked, false, ".env starts unticked by name");
+    await h.ctrl.handle({ type: "pr_update", changes: { file: { path: ".env", checked: true } } });
+    await waitFor(() => form(h).files.find((f: any) => f.path === ".env").checked === true, "the tick");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(form(h).checks, "a ticked sensitive file shows no things-to-check box, so its warning note is dropped and nothing needs acknowledging");
+    await h.ctrl.handle({ type: "pr_submit", action: "commit_only" });
+    assert.deepEqual(gitMutations(h), [], "committed a sensitive file with no acknowledgement");
+  });
+
+  it("switching to a turn whose receipt isn't ready drops the previous turn's receipt (3.5)", async () => {
+    const h = await harness({ findings: [] });
+    await openReady(h);
+    assert.equal(form(h).receipt.available, true);
+    h.setTurn({ sessionId: "s1", turnIndex: null });
+    h.ctrl.turnChanged();
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(form(h).receipt.available, false, "the form still offers turn 1's receipt for a different turn");
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"));
+    assert.ok(!create || !create.body.body.includes("Receipt for Andromity turn 1"), "the pull request carries the previous turn's receipt");
+  });
+
+  it("switching to a turn whose receipt fails to load drops the previous turn's receipt (3.5)", async () => {
+    const h = await harness({ findings: [], failingReceipts: [3] });
+    await openReady(h);
+    h.setTurn({ sessionId: "s1", turnIndex: 3 });
+    h.ctrl.turnChanged();
+    await waitFor(() => !/Loading the receipt/.test(form(h).disabledReason ?? ""), "the receipt load to finish");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(form(h).receipt.available, false, "turn 1's receipt is still attached after turn 4's failed to load");
+  });
+
+  it("switching to another turn with a receipt attaches that turn's receipt", async () => {
+    const h = await harness({ findings: [] });
+    await openReady(h);
+    h.setTurn({ sessionId: "s1", turnIndex: 1 });
+    h.ctrl.turnChanged();
+    await waitFor(() => /turn 2/.test(form(h).receipt.summary ?? ""), "turn 2's receipt");
+    await waitFor(() => form(h).primary.enabled === true, `the button (${form(h).disabledReason})`);
+    await h.ctrl.handle({ type: "pr_submit", action: "primary" });
+    const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
+    assert.match(create.body.body, /Receipt for Andromity turn 2/);
+    assert.ok(create.body.body.includes("### Andromity receipt for turn 2"));
+  });
+
+  it("while the receipt loads the button waits, and the draft never contains a secret from any ticked file", async () => {
+    const h = await harness({ findings: [], holdReceipt: true });
+    fs.writeFileSync(path.join(h.sb.work, "orders", "totals.py"), `def total(x):\n    return round(x, 2)\nKEY = "${AWS}"\n`);
+    await openReady(h, { receipt: false });
+    assert.equal(form(h).primary.enabled, false);
+    assert.match(form(h).disabledReason, /Loading the receipt/);
+    for (const prompt of h.prompts) {
+      assert.ok(!prompt.includes(SECRET_IN_ENV) && !prompt.includes(AWS), "a secret went to the model");
+    }
+  });
+});
