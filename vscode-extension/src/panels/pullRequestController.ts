@@ -130,6 +130,8 @@ export class PullRequestController {
   private receiptLoading = false;
   /** The receipt was found as the chat's latest turn rather than handed over with the files. */
   private receiptRecovered = false;
+  /** How a recovered receipt was matched: its line counts are still in these files, or only its file names. */
+  private receiptMatch: "exact" | "names" | null = null;
   private branchRenamedFrom: string | null = null;
   private templateText: string | null = null;
   private form: FormState = freshForm();
@@ -348,6 +350,7 @@ export class PullRequestController {
     this.receipt = null;
     if (hadReceipt) this.scheduleEvaluate(0);
     this.receiptRecovered = false;
+    this.receiptMatch = null;
     const rpc = this.host.rpc();
     const known = this.host.turnFiles() ? this.host.turn() : null;
     const sessionId = known?.sessionId ?? this.host.currentSession?.() ?? null;
@@ -367,25 +370,29 @@ export class PullRequestController {
       this.postView();
       return;
     }
-    let raw: unknown;
     this.receiptLoading = true;
     this.receiptReason = "Loading the receipt…";
     this.postView();
+    const fetchOne = async (turnIndex?: number) => {
+      try {
+        return readResponse(await rpc.call<unknown>("session.receipt", {
+          session_id: sessionId,
+          project_path: this.host.projectPath(),
+          ...(turnIndex === undefined ? {} : { turn_index: turnIndex }),
+        }));
+      } catch {
+        return readResponse(null);
+      }
+    };
+    let response: ReturnType<typeof readResponse>;
     try {
-      raw = await rpc.call<unknown>("session.receipt", {
-        session_id: sessionId,
-        project_path: this.host.projectPath(),
-        ...(known ? { turn_index: known.turnIndex } : {}),
-      });
-    } catch {
-      raw = null;
+      response = known ? await fetchOne(known.turnIndex as number) : await this.findMatchingReceipt(fetchOne, generation);
     } finally {
       if (generation === this.generation) this.receiptLoading = false;
     }
     if (generation !== this.generation) return;
-    const response = readResponse(raw);
     if (recovering && (!response.success || !response.receipt || !response.markdown)) {
-      this.receiptReason = "There's no agent turn for these changes, so there's no receipt to attach.";
+      this.receiptReason = "No turn in this chat made these changes as they are now, so there's no receipt to attach.";
       this.postView();
       return;
     }
@@ -396,11 +403,7 @@ export class PullRequestController {
       return;
     }
     const receipt = response.receipt;
-    const files = new Map<string, { added: number | null; deleted: number | null }>();
-    for (const entry of receipt.files_changed) {
-      const rel = this.toRepoPath(entry.path);
-      if (rel) files.set(rel, { added: entry.added, deleted: entry.deleted });
-    }
+    const files = this.receiptFiles(receipt);
     const sensitive = new Set<string>();
     const runsCode = new Set<string>();
     const high: LoadedReceipt["high"] = [];
@@ -411,12 +414,6 @@ export class PullRequestController {
       if (finding.severity === "high") high.push({ text: finding.detail, subject: finding.subject, kind: finding.kind });
     }
     if (recovering) {
-      const changed = new Set(this.host.files().map((file) => file.path));
-      if (![...files.keys()].some((file) => changed.has(file))) {
-        this.receiptReason = "The latest turn in this chat didn't change these files, so there's no receipt to attach.";
-        this.postView();
-        return;
-      }
       this.receiptRecovered = true;
       this.trackOnce("pr_receipt_recovered");
     }
@@ -426,6 +423,63 @@ export class PullRequestController {
     if (sensitive.size) this.trackOnce("pr_check_sensitive_left_out");
     this.scheduleEvaluate(0);
     this.postView();
+  }
+
+  private receiptFiles(receipt: Receipt): Map<string, { added: number | null; deleted: number | null }> {
+    const files = new Map<string, { added: number | null; deleted: number | null }>();
+    for (const entry of receipt.files_changed) {
+      const rel = this.toRepoPath(entry.path);
+      if (rel) files.set(rel, { added: entry.added, deleted: entry.deleted });
+    }
+    return files;
+  }
+
+  /** A turn whose changes are still in these files exactly: some file changed by the turn shows the same
+   *  added and deleted line counts now. A file with the same name but other changes doesn't count. */
+  private matchesChanges(receipt: Receipt): "exact" | "names" | null {
+    const now = new Map(this.host.files().map((file) => [file.path, file]));
+    let names = false;
+    for (const [path, counts] of this.receiptFiles(receipt)) {
+      const file = now.get(path);
+      if (!file) continue;
+      if (counts.added !== null && counts.added === file.additions && counts.deleted === file.deletions) return "exact";
+      names = true;
+    }
+    return names ? "names" : null;
+  }
+
+  /** With no turn handed over (after a restart): the newest of the chat's last ten turns whose changes these are. */
+  private async findMatchingReceipt(
+    fetchOne: (turnIndex?: number) => Promise<ReturnType<typeof readResponse>>,
+    generation: number,
+  ): Promise<ReturnType<typeof readResponse>> {
+    const none = readResponse(null);
+    const latest = await fetchOne();
+    if (generation !== this.generation || !latest.success || !latest.receipt) return none;
+    let byName: ReturnType<typeof readResponse> | null = null;
+    const consider = (response: ReturnType<typeof readResponse>): boolean => {
+      if (!response.success || !response.receipt || !response.markdown) return false;
+      const match = this.matchesChanges(response.receipt);
+      if (match === "exact") {
+        this.receiptMatch = "exact";
+        return true;
+      }
+      if (match === "names" && !byName) byName = response;
+      return false;
+    };
+    if (consider(latest)) return latest;
+    const tried = new Set([latest.receipt.turn_index]);
+    const earlier = [...(latest.turns ?? [])].filter((turn) => !tried.has(turn)).sort((a, b) => b - a).slice(0, 9);
+    for (const turn of earlier) {
+      const response = await fetchOne(turn);
+      if (generation !== this.generation) return none;
+      if (response.success && response.receipt?.turn_index === turn && consider(response)) return response;
+    }
+    if (byName) {
+      this.receiptMatch = "names";
+      return byName;
+    }
+    return none;
   }
 
   public turnChanged(): void {
@@ -709,7 +763,7 @@ export class PullRequestController {
     const r = this.receipt?.receipt;
     const findings = r?.needs_attention.length ?? 0;
     const receiptSummary = r
-      ? `Receipt · turn ${r.turn_index + 1}${this.receiptRecovered ? " (the latest turn in this chat)" : ""} · ${plural(r.summary.files_changed, "file")} changed · ${plural(r.summary.commands, "command")}${findings ? ` · ${findings} to check` : " · nothing flagged"}${r.sealed?.matches ? " · sealed" : ""}`
+      ? `Receipt · turn ${r.turn_index + 1}${this.receiptRecovered ? (this.receiptMatch === "exact" ? " (found by matching these changes)" : " (found by file name; these files changed again since)") : ""} · ${plural(r.summary.files_changed, "file")} changed · ${plural(r.summary.commands, "command")}${findings ? ` · ${findings} to check` : " · nothing flagged"}${r.sealed?.matches ? " · sealed" : ""}`
       : null;
     const isPublic = ctx.github.repo ? !ctx.github.repo.isPrivate : null;
     const publicNote = receiptShown && this.receipt && this.form.attachReceipt
@@ -841,20 +895,21 @@ export class PullRequestController {
     return this.form.attachReceipt ? ` The receipt for turn ${this.receipt.receipt.turn_index + 1} is attached below the description.` : " The receipt is not attached.";
   }
 
-  private receiptLink(commit?: string): ReceiptLink | null {
+  private receiptLink(commit?: string, committedPaths?: readonly string[]): ReceiptLink | null {
     if (!this.receipt) return null;
-    const committed = new Set(pathsToStage(this.tickedFiles()));
+    const committed = new Set(committedPaths ?? pathsToStage(this.tickedFiles()));
     const turnFiles = [...this.receipt.files.keys()];
     return {
       turnIndex: this.receipt.receipt.turn_index,
+      matched: this.receiptRecovered ? this.receiptMatch ?? "names" : undefined,
       commitSha: commit,
       leftOut: turnFiles.filter((file) => !committed.has(file)),
       extra: [...committed].filter((file) => !this.receipt?.files.has(file)),
     };
   }
 
-  private bodyFor(commit: string | undefined): string {
-    const link = this.receiptLink(commit);
+  private bodyFor(commit: string | undefined, committedPaths?: readonly string[]): string {
+    const link = this.receiptLink(commit, committedPaths);
     const attach = this.receipt && this.form.attachReceipt && link;
     return composeBody(this.form.description, attach ? { markdown: (this.receipt as LoadedReceipt).markdown, link } : undefined).body;
   }
@@ -1288,6 +1343,7 @@ export class PullRequestController {
     const message = plainText(this.form.commitMessage, MAX_COMMIT_MESSAGE).trim();
     const reviewers = mode === "pull_request" ? this.reviewerChoice() : null;
     const receipt = this.receipt;
+    const committedPaths = pathsToStage(ticked);
     return {
       mode,
       remote: ctx.remote?.name ?? null,
@@ -1304,13 +1360,13 @@ export class PullRequestController {
       commitMessage: coAuthor ? appendCoAuthorTrailer(message) : message,
       signoff: vscode.workspace.getConfiguration("git").get<boolean>("alwaysSignOff", false) === true,
       title: cleanTitle(this.form.title) || cleanTitle(message.split("\n", 1)[0]),
-      bodyFor: (commit) => this.bodyFor(commit),
+      bodyFor: (commit) => this.bodyFor(commit, committedPaths),
       draft: this.form.draft,
       reviewers: reviewers?.reviewers ?? [],
       teams: reviewers?.teams ?? [],
       existingPull: ctx.existingPull,
       commentFor: mode === "update" && receipt && this.form.commentReceipt
-        ? (commit) => composeReceiptComment({ markdown: receipt.markdown, link: this.receiptLink(commit) as ReceiptLink }).body
+        ? (commit) => composeReceiptComment({ markdown: receipt.markdown, link: this.receiptLink(commit, committedPaths) as ReceiptLink }).body
         : null,
     };
   }
