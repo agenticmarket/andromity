@@ -1186,6 +1186,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     // one item per invocation instead of collapsing into a single line.
     const subToolSeqCounts = {};
 
+    // Engine timestamps are epoch seconds. Anything else, or a time well in the future, falls back to now.
+    function toolStartMs(ts) {
+      const now = Date.now();
+      if (typeof ts !== 'number' || !Number.isFinite(ts) || ts < 1e9 || ts * 1000 > now + 60000) return now;
+      return Math.min(now, ts * 1000);
+    }
+
     function ensureToolSequence() {
       if (currentToolSequence && !toolSeqFinished) return currentToolSequence;
 
@@ -9303,6 +9310,37 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       accumulatedAssistantText = previous._rawMarkdown ? previous._rawMarkdown + String.fromCharCode(10, 10) : '';
     }
 
+    function resumeRunningTurn(startedAtMs, editedFiles, toolSeqStartedAtMs) {
+      resumeAssistantTurn(startedAtMs);
+      if (editedFiles) editedFiles.forEach((file) => turnEditedFiles.add(file));
+      adoptResumedToolSequence(toolSeqStartedAtMs);
+    }
+
+    // A reply drawn from history can end in the running turn's tool group; tools still to come belong in it.
+    function adoptResumedToolSequence(startedAtMs) {
+      const reply = currentTurnAssistantDiv;
+      if (!reply) return;
+      let last = reply.lastElementChild;
+      while (last && last.id === 'turn-loading-indicator') last = last.previousElementSibling;
+      if (!last || !last.classList.contains('tool-sequence-wrap')) return;
+      const seq = last.querySelector(':scope > .tool-sequence');
+      const body = seq ? seq.querySelector(':scope > .tool-seq-body') : null;
+      if (!seq || !body) return;
+      const rows = Array.from(body.children).filter((el) => !el.classList.contains('thinking-card'));
+      currentToolSequence = seq;
+      toolSeqFinished = false;
+      toolSeqUserToggled = false;
+      toolSeqCount = rows.length;
+      toolSeqDoneTools = new Set(rows.map((_, index) => 'history:' + index));
+      toolSeqStartTime = startedAtMs > 0 ? Math.min(Date.now(), startedAtMs) : (currentTurnStartTime || Date.now());
+      lastToolName = '';
+      lastToolRunning = false;
+      seq.classList.remove('collapsed');
+      if (toolSeqTimer) clearInterval(toolSeqTimer);
+      toolSeqTimer = setInterval(updateToolSeqHeader, 1000);
+      updateToolSeqHeader();
+    }
+
     function getLangBadgeHtml(filePath) {
       const parts = filePath.split('.');
       const ext = parts.length > 1 ? parts.pop().toLowerCase().trim() : '';
@@ -10115,6 +10153,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           );
           const runningTurnPrompt = ((msg.session && msg.session.messages) || []).filter((m) => m && m.role === 'user').pop();
           const runningTurnStart = runningTurnPrompt && runningTurnPrompt.ts ? Date.parse(runningTurnPrompt.ts) || 0 : 0;
+          let resumedTurnEditedFiles = null;
+          let lastHistoryToolSeqStart = 0;
           sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
           sessionsState[currentSessionId].isRunning = sessionIsRunning;
           if (sessionIsRunning) {
@@ -10243,6 +10283,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   if (!currentTurnToolSeq) {
                     currentTurnToolSeq = document.createElement('div');
                     currentTurnToolSeq.className = 'tool-sequence collapsed';
+                    lastHistoryToolSeqStart = m.ts ? Date.parse(m.ts) || 0 : 0;
                     currentTurnToolSeq.innerHTML = '<div class="tool-seq-header">' +
                       '<svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>' +
                       '<span class="tool-seq-title">0 tools · worked</span>' +
@@ -10399,7 +10440,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   }
                 }
 
-                if (!hasMoreAssistantInTurn) {
+                const turnStillRunning = !hasMoreAssistantInTurn && sessionIsRunning &&
+                  !allMessages.slice(i + 1).some(later => later && later.role === 'user');
+                if (turnStillRunning) {
+                  resumedTurnEditedFiles = new Set(turnEditedFilesForLoad);
+                } else if (!hasMoreAssistantInTurn) {
                   currentTurnToolSeq = null;
                   currentTurnToolBody = null;
                   currentTurnToolCount = 0;
@@ -10457,7 +10502,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             if (buffered && buffered.length > 0) {
               // Ensure a live turn wrapper exists to append into
               const needTurn = !currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv);
-              if (needTurn) resumeAssistantTurn(runningTurnStart);
+              if (needTurn) resumeRunningTurn(runningTurnStart, resumedTurnEditedFiles, lastHistoryToolSeqStart);
               for (const ev of buffered) {
                 if (ev.t === 'thinking_delta') {
                   removeTurnLoader(); setTurnOrb(null);
@@ -10487,8 +10532,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 } else if (ev.t === 'tool_start') {
                   setTurnOrb(null);
                   removeTurnLoader(); finishCurrentThinking(); currentAssistantContent = null;
-                  const seq = ensureToolSequence(); toolSeqCount++; lastToolName = ev.tool_name||'tool'; lastToolRunning=true; updateToolSeqHeader();
-                  const td = document.createElement('div'); td.className='tool-card expanded'; td.id='tool-'+ev.tool_id; td.setAttribute('data-tool-name', ev.tool_name||'');
+                  const seq = ensureToolSequence(); const evStartedAt = toolStartMs(ev.ts); if (toolSeqCount === 0 || evStartedAt < toolSeqStartTime) toolSeqStartTime = evStartedAt; toolSeqCount++; lastToolName = ev.tool_name||'tool'; lastToolRunning=true; updateToolSeqHeader();
+                  const td = document.createElement('div'); td.className='tool-card expanded'; td.id='tool-'+ev.tool_id; td.setAttribute('data-tool-name', ev.tool_name||''); td.setAttribute('data-start-ts', String(toolStartMs(ev.ts)));
                   td.innerHTML = '<div class="tool-header"><div class="tool-title-group"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg><span>'+escapeHtml(ev.tool_name)+'</span></div><div style="display:flex; align-items:center;"><span class="tool-tag">RUNNING</span><svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div></div><div class="tool-body" id="args-'+escapeHtml(ev.tool_id)+'"></div>';
                   seq.querySelector('.tool-seq-body').appendChild(td);
                 } else if (ev.t === 'tool_delta') {
@@ -10504,7 +10549,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             }
           }
           if (sessionIsRunning && (!currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv))) {
-            resumeAssistantTurn(runningTurnStart);
+            resumeRunningTurn(runningTurnStart, resumedTurnEditedFiles, lastHistoryToolSeqStart);
           }
           if (runtime) handleBackendMessage({ type: 'session_runtime', session_id: currentSessionId, runtime });
           if (currentSessionId && !nextStepBySession[currentSessionId] && !sessionIsRunning &&
@@ -10667,7 +10712,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             sessionsState[msg.session_id].isRunning = true;
             sessionsState[msg.session_id].hasUnread = true;
             updateSessionActivityIndicator();
-            bufferLiveEvent(msg.session_id, { t:'tool_start', tool_id: msg.tool_id, tool_name: msg.tool_name });
+            bufferLiveEvent(msg.session_id, { t:'tool_start', tool_id: msg.tool_id, tool_name: msg.tool_name, ts: msg.ts });
             break;
           }
           removeTurnLoader();
@@ -10678,6 +10723,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           currentAssistantContent = null;
 
           const seq = ensureToolSequence();
+          const toolStartedAt = toolStartMs(msg.ts);
+          if (toolSeqCount === 0 || toolStartedAt < toolSeqStartTime) toolSeqStartTime = toolStartedAt;
           toolSeqCount++;
           lastToolName = msg.tool_name || 'tool';
           lastToolRunning = true;
@@ -10694,7 +10741,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (isWriteOrCmd && typeof window.renderAntigravityActivityRow === 'function') {
             const isCmd = /^(shell_exec|run_command|bash|exec|cmd)$/i.test(msg.tool_name);
             toolDiv.className = 'activity-row running';
-            toolDiv.setAttribute('data-start-ts', String(Date.now()));
+            toolDiv.setAttribute('data-start-ts', String(toolStartMs(msg.ts)));
             toolDiv.setAttribute('data-label-resolved', '0');
             toolDiv.innerHTML = '<span class="activity-action">' + (isCmd ? 'Running' : 'Editing') + '</span>' +
               '<span class="activity-filename" id="label-' + escapeHtml(msg.tool_id) + '">' + escapeHtml(msg.tool_name) + '…</span>' +
@@ -10703,7 +10750,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               '<div class="tool-body" id="args-' + escapeHtml(msg.tool_id) + '" style="display:none;"></div>';
           } else {
             toolDiv.className = 'tool-card expanded';
-            toolDiv.setAttribute('data-start-ts', String(Date.now()));
+            toolDiv.setAttribute('data-start-ts', String(toolStartMs(msg.ts)));
             toolDiv.innerHTML = '<div class="tool-header">' +
               '<div class="tool-title-group">' +
                 '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>' +

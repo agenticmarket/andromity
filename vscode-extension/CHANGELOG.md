@@ -11,6 +11,7 @@ All notable changes to the "andromity" extension will be documented in this file
 - **Safer auto-approval.** Command checks were rebuilt against the published GuardFall bypasses, and "always allow this command" follows the same stricter rule.
 
 ### Fixed
+- **A chat or Waterfall opened while a turn is running shows the turn as it is.** Running commands count from when they really started instead of from when the view opened, new tools join the turn's tool group instead of starting a second one, and the Files Changed card waits for the turn to end and lists every file it edited. The Waterfall shows a tool that is still running as running and closes it with its real duration, instead of showing it as done in 400 ms.
 - Andromity's own git calls no longer run programs set in a repository's config.
 
 ### Security
