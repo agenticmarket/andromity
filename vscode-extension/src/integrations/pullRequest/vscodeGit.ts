@@ -37,6 +37,7 @@ export interface ApiRepository {
   };
   status(): Promise<void>;
   getConfig(key: string): Promise<string>;
+  getGlobalConfig?(key: string): Promise<string>;
   getRefs?(query: { pattern?: string; count?: number }): Promise<ApiRef[]>;
   fetch(options: { remote?: string; ref?: string }): Promise<void>;
   log(options: { range?: string; maxEntries?: number }): Promise<{ hash: string }[]>;
@@ -176,13 +177,18 @@ export class VscodeGitPort implements GitPort {
     return (this.repo.state.mergeChanges?.length ?? 0) > 0 ? "merge" : null;
   }
 
+  /** The repository's own value, else the user's global one. (vscode.git's getConfig reads only --local.) */
   async config(key: string): Promise<string | undefined> {
-    try {
-      const value = (await this.repo.getConfig(key)).trim();
-      return value || undefined;
-    } catch {
-      return undefined;
-    }
+    const read = async (get: ((key: string) => Promise<string>) | undefined) => {
+      if (typeof get !== "function") return undefined;
+      try {
+        const value = (await get.call(this.repo, key)).trim();
+        return value || undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    return (await read(this.repo.getConfig)) ?? (await read(this.repo.getGlobalConfig));
   }
 
   async localBranchExists(name: string): Promise<boolean> {

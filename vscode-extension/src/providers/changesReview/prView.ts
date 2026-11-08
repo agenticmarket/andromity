@@ -44,7 +44,7 @@ export interface PrStep {
 export interface PrFormView {
   title: string;
   repo: { display: string; visibility: "public" | "private" | null } | null;
-  account: { kind: "signed_in"; login: string } | { kind: "sign_in"; label: string } | null;
+  account: { kind: "signed_in"; login: string; switchable: boolean } | { kind: "sign_in"; label: string } | null;
   accountNote: string | null;
   update: { number: number; title: string } | null;
   base: string;

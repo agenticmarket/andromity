@@ -163,7 +163,11 @@ export async function prepareContext(deps: FlowDeps): Promise<RepoContext> {
       context.github.problem = "signed_out";
     } else {
       try {
-        const [viewer, repo] = await Promise.all([deps.github.viewer(), deps.github.repository(parsed.owner, parsed.repo)]);
+        const github = deps.github;
+        const [viewer, repo] = await Promise.all([
+          github.viewer().then((login) => { context.github.viewer = login; return login; }),
+          github.repository(parsed.owner, parsed.repo),
+        ]);
         context.github.viewer = viewer;
         context.github.repo = repo;
         context.github.headOwner = repo.owner;

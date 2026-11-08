@@ -196,7 +196,8 @@ export async function draftCommitAndDescription(
       project_path: input.projectPath,
       model: chat?.getCurrentModel(),
       provider: chat?.getCurrentProvider(),
-    }, input.withDescription ? 60000 : 35000);
+      ...(input.withDescription ? { raw: true, max_tokens: 2000 } : {}),
+    }, input.withDescription ? 120000 : 35000);
     raw = typeof res === "string" ? res : res?.message || res?.result || res?.commitMessage || "";
   } catch (e: any) {
     log(`[GitCommit] draft request failed: ${e?.message || e}`);

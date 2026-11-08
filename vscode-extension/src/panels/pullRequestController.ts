@@ -529,7 +529,6 @@ export class PullRequestController {
     if (this.receiptLoading) return "Loading the receipt…";
     const ticked = this.tickedFiles();
     if (!ticked.length) return "Tick at least one file.";
-    if (!ctx.userConfigured) return "Set your git name and email first: git config --global user.name \"Your Name\" and git config --global user.email you@example.com";
     if (this.form.createBranch) {
       if (!isValidBranchName(this.form.branchName)) return "Choose a branch name with letters, numbers, dots, dashes, underscores and slashes.";
       if (this.form.branchTaken) return `A branch named ${this.form.branchName} already exists. Choose another name.`;
@@ -644,9 +643,13 @@ export class PullRequestController {
     if (!ctx.remote) notes.push({ text: "This repository has no remote yet, so this commits on this computer only.", tone: "muted" });
     else if (!ctx.canReachRemote) notes.push({ text: airGapOffMessage("pushing and opening pull requests"), tone: "muted" });
     if (ctx.remote && ctx.canReachRemote && !parsed && !ctx.remote.local) notes.push({ text: `Andromity doesn't recognise ${ctx.remote.name}'s host, so it will push and leave the pull request to you.`, tone: "muted" });
-    if (ctx.github.problem === "not_found") notes.push({ text: `GitHub can't find this repository with your sign-in. You can still push and open GitHub's page.`, tone: "warn" });
+    if (ctx.github.problem === "not_found") {
+      const who = ctx.github.viewer ? `@${ctx.github.viewer}` : "your sign-in";
+      notes.push({ text: `GitHub can't find ${parsed?.owner}/${parsed?.repo} with ${who}. If it belongs to another of your GitHub accounts, choose Use another account. You can still push and open GitHub's page.`, tone: "warn" });
+    }
     if (ctx.github.problem === "rate_limited") notes.push({ text: "GitHub is limiting requests right now. Try again in a few minutes.", tone: "warn" });
     if (ctx.github.problem === "unavailable") notes.push({ text: "GitHub didn't answer. You can still push and open GitHub's page.", tone: "warn" });
+    if (!ctx.userConfigured) notes.push({ text: "Andromity can't see a git name and email for this repository. If committing fails, set them with git config --global user.name and user.email.", tone: "muted" });
     if (ctx.fetchFailed) notes.push({ text: `Couldn't check whether ${this.form.base} has moved.`, tone: "muted" });
     const latest = this.latestInfo();
     if (ctx.behind && !this.form.createBranch) {
@@ -671,7 +674,7 @@ export class PullRequestController {
     let account: PrFormView["account"] = null;
     let accountNote: string | null = null;
     if (parsed?.kind === "github" && ctx.canReachRemote && !airGap.enabled) {
-      if (this.deps?.github && ctx.github.viewer) account = { kind: "signed_in", login: ctx.github.viewer };
+      if (this.deps?.github && ctx.github.viewer) account = { kind: "signed_in", login: ctx.github.viewer, switchable: true };
       else if (ctx.github.problem === "unauthorized") account = { kind: "sign_in", label: "Sign in again" };
       else if (!this.deps?.github) account = { kind: "sign_in", label: "Sign in to GitHub" };
       if (ctx.github.problem === "sso") accountNote = `${parsed.owner} requires single sign-on for this sign-in. Authorize it, then reopen this form.`;
@@ -858,13 +861,15 @@ export class PullRequestController {
     }
   }
 
-  private async githubClient(prompt: "silent" | "ask" | "renew"): Promise<GitHubClient | null> {
+  private async githubClient(prompt: "silent" | "ask" | "renew" | "choose"): Promise<GitHubClient | null> {
     try {
       const session = prompt === "silent"
         ? await vscode.authentication.getSession("github", ["repo"], { createIfNone: false, silent: true })
         : prompt === "ask"
           ? await vscode.authentication.getSession("github", ["repo"], { createIfNone: true })
-          : await vscode.authentication.getSession("github", ["repo"], { forceNewSession: { detail: "GitHub refused the saved sign-in. Sign in again to open the pull request." } });
+          : prompt === "choose"
+            ? await vscode.authentication.getSession("github", ["repo"], { createIfNone: true, clearSessionPreference: true })
+            : await vscode.authentication.getSession("github", ["repo"], { forceNewSession: { detail: "GitHub refused the saved sign-in. Sign in again to open the pull request." } });
       return session?.accessToken ? new GitHubClient(session.accessToken, fetchImpl) : null;
     } catch {
       return null;
@@ -881,10 +886,10 @@ export class PullRequestController {
     this.postView();
   }
 
-  private async draft(generation: number, withDescription: boolean): Promise<void> {
+  private async draft(generation: number, withDescription: boolean, descriptionOnly = false): Promise<void> {
     const rpc = this.host.rpc();
     const settings = vscode.workspace.getConfiguration("andromity");
-    const describe = withDescription && settings.get<boolean>("pullRequest.draftWithAI", true) !== false && this.showPullFields() && !this.updating();
+    const describe = withDescription && (descriptionOnly || settings.get<boolean>("pullRequest.draftWithAI", true) !== false) && this.showPullFields() && !this.updating();
     if (!rpc) {
       this.draftNote = "Drafting needs Andromity's engine. Write the message yourself, or reconnect and press Draft again.";
       this.postView();
@@ -915,12 +920,15 @@ export class PullRequestController {
       if (generation !== this.generation || this.phase !== "form") return;
       this.track("pr_draft_ok");
       const message = cleanDraft(draft.commitMessage, MAX_COMMIT_MESSAGE);
-      if (!this.form.commitEdited && message) {
+      if (descriptionOnly && !draft.description) {
+        this.draftNote = "The model didn't write a description. Write one, or press Draft with AI again.";
+      }
+      if (!descriptionOnly && !this.form.commitEdited && message) {
         this.form.commitMessage = message;
         this.postField("commitMessage", message);
       }
       const subject = cleanTitle(message.split("\n", 1)[0]);
-      if (!this.form.titleEdited && subject) {
+      if (!descriptionOnly && !this.form.titleEdited && subject) {
         this.form.title = subject;
         this.postField("title", subject);
       }
@@ -931,7 +939,7 @@ export class PullRequestController {
         this.form.descriptionSource = this.form.descriptionSource === "template" ? "template" : "ai";
         this.postField("description", this.form.description);
       }
-      if (this.form.createBranch && !this.form.branchEdited && subject) {
+      if (!descriptionOnly && this.form.createBranch && !this.form.branchEdited && subject) {
         const prefix = branchPrefix(settings.get("pullRequest.branchPrefix"));
         this.form.branchName = suggestBranchName(prefix, subject, files.map((file) => file.path));
         this.postField("branchName", this.form.branchName);
@@ -994,11 +1002,14 @@ export class PullRequestController {
       case "pr_draft_description":
         if (this.phase === "form" && !this.drafting) {
           this.form.descriptionEdited = false;
-          void this.draft(this.generation, true);
+          void this.draft(this.generation, true, true);
         }
         return;
       case "pr_sign_in":
         await this.signIn("ask");
+        return;
+      case "pr_switch_account":
+        await this.signIn("choose");
         return;
       case "pr_submit":
         if (message.form) this.applyUpdate(message.form);
@@ -1144,9 +1155,9 @@ export class PullRequestController {
     this.postView();
   }
 
-  private async signIn(kind: "ask" | "renew"): Promise<boolean> {
+  private async signIn(kind: "ask" | "renew" | "choose"): Promise<boolean> {
     if (!this.deps || currentAirGap().enabled) return false;
-    this.track(kind === "ask" ? "pr_sign_in" : "pr_sign_in_again");
+    this.track(kind === "ask" ? "pr_sign_in" : kind === "choose" ? "pr_switch_account" : "pr_sign_in_again");
     const client = await this.githubClient(kind);
     if (!client) {
       this.track("pr_sign_in_declined");

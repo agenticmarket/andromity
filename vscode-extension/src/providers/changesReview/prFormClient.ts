@@ -215,7 +215,8 @@ export function prFormClient(vscode: PrVsCodeApi, hooks: PrClientHooks): void {
       : "";
     const account = !form.account ? ""
       : form.account.kind === "signed_in"
-        ? '<span class="pr-muted pr-small">' + icon("account") + " Signed in as <b>@" + esc(form.account.login) + "</b></span>"
+        ? '<span class="pr-muted pr-small">' + icon("account") + " Signed in as <b>@" + esc(form.account.login) + "</b>" +
+          (form.account.switchable ? ' · <button type="button" class="pr-link-btn" data-pr-switch-account>Use another account</button>' : "") + "</span>"
         : '<button type="button" class="pr-signin" data-pr-sign-in>' + icon("account") + " " + esc(form.account.label) + "</button>";
     setHtml("prf-repo", (form.repo ? '<span class="pr-repo">' + icon("repo") + " " + esc(form.repo.display) + " " + visibility + "</span>" : '<span class="pr-repo pr-muted">No remote</span>') + account);
     setHtml("prf-account-note", form.accountNote ? '<p class="pr-help warn">' + icon("warning") + " " + esc(form.accountNote) + "</p>" : "");
@@ -380,7 +381,7 @@ export function prFormClient(vscode: PrVsCodeApi, hooks: PrClientHooks): void {
   sheet.addEventListener("click", (event) => {
     const target = event.target as HTMLElement | null;
     if (!target) return;
-    const el = target.closest("[data-pr-close],[data-pr-action],[data-pr-submit],[data-pr-scope],[data-pr-show],[data-pr-staged],[data-pr-preview],[data-pr-sign-in],[data-pr-redraft],[data-pr-draft-description],[data-pr-new-branch],[data-pr-remove-reviewer]") as HTMLElement | null;
+    const el = target.closest("[data-pr-close],[data-pr-action],[data-pr-submit],[data-pr-scope],[data-pr-show],[data-pr-staged],[data-pr-preview],[data-pr-sign-in],[data-pr-switch-account],[data-pr-redraft],[data-pr-draft-description],[data-pr-new-branch],[data-pr-remove-reviewer]") as HTMLElement | null;
     if (!el) return;
     if (el.hasAttribute("data-pr-close")) {
       vscode.postMessage(phase === "running" ? { type: "pr_action", action: "cancel" } : { type: "pr_close" });
@@ -400,6 +401,8 @@ export function prFormClient(vscode: PrVsCodeApi, hooks: PrClientHooks): void {
       if (view && view.form) updateForm(view.form);
     } else if (el.hasAttribute("data-pr-sign-in")) {
       vscode.postMessage({ type: "pr_sign_in" });
+    } else if (el.hasAttribute("data-pr-switch-account")) {
+      vscode.postMessage({ type: "pr_switch_account" });
     } else if (el.hasAttribute("data-pr-redraft")) {
       delete dirty.commitMessage;
       delete dirty.description;
