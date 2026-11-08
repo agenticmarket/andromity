@@ -3303,6 +3303,31 @@ class JsonRpcHandler:
         except Exception:
             return {"success": False, "diff": "", "notice": "This turn's diff couldn't be read. Try again."}
 
+    async def rpc_git_turn_revert_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from andromity.core.turn_changes import TurnChangesUnavailable, turn_revert_file
+        from andromity.core.git_ops import run_restoration
+        session, repo, problem = await self._turn_session_repo(params)
+        if problem:
+            return {"success": False, "error": problem}
+        try:
+            guarded = self._review_repo({"project_path": session.project_path}, mutate=True)
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+        if guarded is not None:
+            await asyncio.to_thread(guarded.close)
+        root = str(Path(repo.working_tree_dir).resolve())
+        self._git_mutating_roots.add(root)
+        try:
+            return await run_restoration(turn_revert_file, session, params["turn_index"], params.get("path"), repo)
+        except TurnChangesUnavailable as exc:
+            return {"success": False, "error": str(exc)}
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+        except Exception:
+            return {"success": False, "error": "The turn's change couldn't be undone. Nothing was changed."}
+        finally:
+            self._git_mutating_roots.discard(root)
+
     async def rpc_git_file_diff(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.git_review import file_diff
         repo = self._review_repo(params)

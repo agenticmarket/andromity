@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from andromity.core.git_ops import safe_git_command
+from andromity.core.git_ops import repository_path, safe_git_command, uses_disabled_filter
 
 _OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 MAX_FILES = 500
@@ -115,15 +115,21 @@ def turn_changes(session: Any, turn_index: int, repo: Any) -> Dict[str, Any]:
     return {"turn_index": turn_index, "files": files, "truncated": len(statuses) > MAX_FILES}
 
 
-def turn_file_diff(session: Any, turn_index: int, path: str, repo: Any) -> Dict[str, Any]:
-    """One file's change in one turn: the diff between the turn's before and after snapshots."""
+def _turn_path(session: Any, turn_index: int, path: Any, repo: Any) -> tuple:
+    """The turn's record and git command, after checking the path is one this turn changed."""
     record = _record(session, turn_index)
     if not isinstance(path, str) or not path or "\0" in path or len(path) > 4096:
         raise TurnChangesUnavailable("Choose a file this turn changed.")
-    listed = {entry["path"] for entry in turn_changes(session, turn_index, repo)["files"]}
-    if path not in listed:
-        raise TurnChangesUnavailable("This turn didn't change that file.")
     git = safe_git_command(repo)
+    project = Path(str(getattr(session, "project_path", "") or ".")).resolve()
+    if path not in _names(repo, git, record["snapshot_hash"], record["after_hash"], _scope(repo, project)):
+        raise TurnChangesUnavailable("This turn didn't change that file.")
+    return record, git
+
+
+def turn_file_diff(session: Any, turn_index: int, path: str, repo: Any) -> Dict[str, Any]:
+    """One file's change in one turn: the diff between the turn's before and after snapshots."""
+    record, git = _turn_path(session, turn_index, path, repo)
     diff = repo.git.execute([*git, "diff", "--no-renames", "--no-ext-diff", "--no-textconv",
                              record["snapshot_hash"], record["after_hash"], "--", ":(literal)" + path])
     if "GIT binary patch" in diff or "Binary files " in diff:
@@ -133,3 +139,37 @@ def turn_file_diff(session: Any, turn_index: int, path: str, repo: Any) -> Dict[
     if diff and "@@ " not in diff:
         return {"diff": "", "notice": "Only the file's mode or type changed in this turn."}
     return {"diff": diff}
+
+
+def _blob(repo: Any, git: List[str], commit: str, path: str) -> Optional[str]:
+    try:
+        return repo.git.execute([*git, "rev-parse", "--verify", "--quiet", f"{commit}:{path}"]).strip() or None
+    except Exception:
+        return None
+
+
+def turn_revert_file(session: Any, turn_index: int, path: str, repo: Any) -> Dict[str, Any]:
+    """Undoes one turn's change to one file: the file goes back to the turn's before snapshot, so edits made before
+    the turn stay. Only while the file is still exactly as the turn left it; the staging area is not touched."""
+    record, git = _turn_path(session, turn_index, path, repo)
+    full, rel = repository_path(repo, path)
+    if full.is_dir():
+        raise TurnChangesUnavailable("Choose a file.")
+    driver = uses_disabled_filter(repo, rel)
+    if driver:
+        raise TurnChangesUnavailable(f"This file uses the git filter '{driver}'. Andromity doesn't run git filter programs, so undo this change with git.")
+    after_blob = _blob(repo, git, record["after_hash"], rel)
+    if after_blob is None:
+        if full.exists() or full.is_symlink():
+            raise TurnChangesUnavailable("This file changed after the turn, so undoing the turn's change could lose later work.")
+    else:
+        if not full.is_file():
+            raise TurnChangesUnavailable("This file changed after the turn, so undoing the turn's change could lose later work.")
+        now_blob = repo.git.execute([*git, "hash-object", f"--path={rel}", "--", str(full)]).strip()
+        if now_blob != after_blob:
+            raise TurnChangesUnavailable("This file changed after the turn, so undoing the turn's change could lose later work.")
+    if _blob(repo, git, record["snapshot_hash"], rel) is not None:
+        repo.git.execute([*git, "restore", f"--source={record['snapshot_hash']}", "--worktree", "--", ":(literal)" + rel])
+        return {"success": True, "action": "restored", "path": rel}
+    full.unlink(missing_ok=True)
+    return {"success": True, "action": "removed", "path": rel}

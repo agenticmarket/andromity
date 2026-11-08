@@ -25,7 +25,8 @@ function readTurnFiles(value: unknown): TurnViewFile[] | null {
   const files: TurnViewFile[] = [];
   for (const entry of value.slice(0, 500)) {
     const p = entry?.path;
-    if (typeof p !== "string" || !p || p.length > 4096 || p.includes("\0")) continue;
+    if (typeof p !== "string" || !p || p.length > 4096 || p.includes("\0") || p.includes("\\") || p.startsWith("/")
+      || /^[A-Za-z]:/.test(p) || p.split("/").some((part) => part === ".." || part === ".")) continue;
     const count = (n: unknown) => (typeof n === "number" && Number.isSafeInteger(n) && n >= 0 ? n : 0);
     const now = ["uncommitted", "committed", "changed"].includes(entry?.now) ? entry.now : "unknown";
     files.push({
@@ -226,6 +227,10 @@ export class ChangesReviewPanel {
         switch (message.type) {
           case "webview_ready":
             await this.loadChanges(this._initialFilePath);
+            break;
+
+          case "revert_turn_file":
+            if (typeof message.filePath === "string") await this._revertTurnFile(message.filePath);
             break;
 
           case "get_turn_file_diff":
@@ -491,6 +496,34 @@ export class ChangesReviewPanel {
     if (seq !== this._turnSeq || this._isDisposed) return;
     this._turnView = files ? { turnIndex: turn.turnIndex, files } : null;
     this._postMessage({ type: "set_turn_changes", turnView: this._turnView });
+  }
+
+  /** Puts one file back to how it was before the turn, keeping edits made before it. */
+  private async _revertTurnFile(filePath: string) {
+    const view = this._turnView;
+    const turn = this._turn;
+    const file = view?.files.find((entry) => entry.path === filePath);
+    if (!view || !turn || turn.turnIndex !== view.turnIndex || !file || file.now !== "uncommitted") return;
+    if (!this._rpcClient) {
+      vscode.window.showErrorMessage("Reconnect the daemon before undoing changes.");
+      return;
+    }
+    const confirm = await vscode.window.showWarningMessage(
+      `Undo turn ${view.turnIndex + 1}'s change to "${filePath}"? The file goes back to how it was before that turn; your own edits from before it stay.`,
+      { modal: true }, "Undo Turn's Change");
+    if (confirm !== "Undo Turn's Change") return;
+    try {
+      const res = await this._rpcClient.call<{ success?: boolean; error?: string }>("git.turn_revert_file", {
+        session_id: turn.sessionId, project_path: this._projectPath, turn_index: view.turnIndex, path: filePath,
+      });
+      if (!res?.success) {
+        vscode.window.showWarningMessage(typeof res?.error === "string" ? res.error : "The turn's change couldn't be undone.");
+      }
+      void vscode.commands.executeCommand("git.refresh");
+    } catch {
+      vscode.window.showErrorMessage("The turn's change couldn't be undone. Check workspace trust and wait for agent turns to finish.");
+    }
+    await this.loadChanges();
   }
 
   private async _loadTurnFileDiff(filePath: string) {

@@ -602,7 +602,7 @@ export function getReviewClientScript(): string {
       const key = diffKey(state.activeFilePath);
       const diffData = state.fileDiffs[key] || '';
       const notice = (state.fileNotices || {})[key];
-      const canDiscard = !inTurn || (fileObj && fileObj.now === 'uncommitted' && state.files.some(function (f) { return f.path === state.activeFilePath; }));
+      const canDiscard = !inTurn || (fileObj && fileObj.now === 'uncommitted');
 
       // Build Header
       const headerHtml =
@@ -623,9 +623,13 @@ export function getReviewClientScript(): string {
               '<span class="codicon codicon-diff-single"></span> Compare' +
             '</button>') +
             (canDiscard ?
-            '<button class="action-btn discard-btn" id="action-revert-file" title="Discard all changes in this file" aria-label="Discard file changes">' +
-              '<span class="codicon codicon-discard"></span> Discard' +
-            '</button>' : '') +
+            (inTurn
+              ? '<button class="action-btn discard-btn" id="action-revert-file" title="Put the file back to how it was before this turn; edits from before the turn stay" aria-label="Undo the change this turn made to the file">' +
+                  '<span class="codicon codicon-discard"></span> Undo turn change' +
+                '</button>'
+              : '<button class="action-btn discard-btn" id="action-revert-file" title="Discard all changes in this file" aria-label="Discard file changes">' +
+                  '<span class="codicon codicon-discard"></span> Discard' +
+                '</button>') : '') +
           '</div>' +
         '</div>';
 
@@ -829,7 +833,7 @@ export function getReviewClientScript(): string {
       const revertFileBtn = document.getElementById('action-revert-file');
       if (revertFileBtn) {
         revertFileBtn.addEventListener('click', function () {
-          vscode.postMessage({ type: 'revert_file', filePath: state.activeFilePath });
+          vscode.postMessage({ type: turnViewActive() ? 'revert_turn_file' : 'revert_file', filePath: state.activeFilePath });
         });
       }
 
