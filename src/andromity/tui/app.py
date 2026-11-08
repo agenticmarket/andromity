@@ -999,6 +999,8 @@ class AndromityApp(App):
             except Exception as e:
                 exc = e
                 log.exception("Cron run error for '%s': %s", cron.name, e)
+            finally:
+                self._end_subagents(cron_session)
 
             try:
                 cron_session.flush()
@@ -1358,9 +1360,13 @@ class AndromityApp(App):
         if self._esc_count >= 2:
             self._esc_count = 0
             if self._current_task and not self._current_task.done():
+                from andromity.core.subagent_orchestrator import kill_session_subagents
                 from andromity.core.tools import stop_session_commands
-                stop_session_commands(getattr(self.session, "id", ""))
                 self._current_task.cancel()
+                stopping = list(dict.fromkeys([getattr(self.session, "id", ""), *kill_session_subagents(self.session, "cancelled")]))
+                # taskkill can take seconds per session; keep the terminal responsive while it runs.
+                threading.Thread(target=lambda: [stop_session_commands(sid) for sid in stopping],
+                                 daemon=True, name="andromity-stop").start()
                 self.query_one(ChatPanel).add_system_message("[Cancelled]")
                 self.query_one(InputBar).clear_input()
                 self.query_one(InputBar).query_one("#input-field").focus()
@@ -1870,9 +1876,36 @@ class AndromityApp(App):
 
     def _apply_mode_change(self):
         mode = "yolo" if self._yolo_session else config.get("default", "permission_mode", "safe")
+        self._mode_for_subagents(mode)
         self._update_status()
         chat = self.query_one(ChatPanel)
         chat.add_system_message(f"Permission mode set to [bold]{mode.upper()}[/]")
+
+    def _mode_for_subagents(self, mode: str, lower_only: bool = False) -> None:
+        """Apply a mode to this session and its sub-agents. Running sub-agents are only ever lowered. With lower_only, a
+        looser mode waits (for the current response to end) and only a stricter one applies at once."""
+        from andromity.core.subagent import MODE_RANK, normalize_mode
+        from andromity.core.subagent_orchestrator import restrict_session_subagents
+        mode = normalize_mode(mode)
+        if getattr(self, "session", None) is None:
+            return
+        restrict_session_subagents(self.session, mode)
+        current = normalize_mode(getattr(self.session, "permission_mode", None))
+        if lower_only and MODE_RANK[mode] >= MODE_RANK[current]:
+            return
+        self.session.permission_mode = mode
+        orchestrator = getattr(getattr(self, "agent", None), "orchestrator", None)
+        if orchestrator is not None:
+            orchestrator.permission_mode = mode
+
+    def _end_subagents(self, session: Any) -> None:
+        """End every sub-agent a session started and stop their commands, off the UI thread."""
+        from andromity.core.subagent_orchestrator import kill_session_subagents
+        from andromity.core.tools import stop_session_commands
+        stray = kill_session_subagents(session, "run_ended")
+        if stray:
+            threading.Thread(target=lambda: [stop_session_commands(sid) for sid in stray],
+                             daemon=True, name="andromity-stop").start()
 
     async def _generate_ai_session_name(self, prompt: str):
         try:
@@ -1883,8 +1916,9 @@ class AndromityApp(App):
             if not provider or not model:
                 return
                 
-            from andromity.core.connections import provider_request
-            kwargs = {**provider_request(provider, model), "stream": False}
+            from andromity.core.connections import TITLE_MAX_TOKENS, TITLE_TIMEOUT_SECONDS, provider_request
+            kwargs = {**provider_request(provider, model), "stream": False,
+                      "max_tokens": TITLE_MAX_TOKENS, "timeout": TITLE_TIMEOUT_SECONDS}
 
             messages = [
                 {"role": "system", "content": """You are a title generator. You output ONLY a thread title. Nothing else.
@@ -1926,7 +1960,8 @@ Your output must be:
             ]
             kwargs["messages"] = messages
             
-            response = await litellm.acompletion(**kwargs)
+            async with asyncio.timeout(TITLE_TIMEOUT_SECONDS + 5):
+                response = await litellm.acompletion(**kwargs)
             if response.choices:
                 name = response.choices[0].message.content.strip().strip('"').strip("'")
                 if name:
@@ -2115,6 +2150,9 @@ Your output must be:
 
                 if mode == "yolo":
                     self._yolo_session = True
+                    self._mode_for_subagents("yolo", lower_only=self._is_streaming)
+                    if self._is_streaming:
+                        self._pending_mode_change = True
                     self._update_status()
                     chat.add_system_message(
                         "⚡ [bold red]YOLO mode enabled for this session only.[/]\n"
@@ -2123,6 +2161,7 @@ Your output must be:
                 elif mode in ("safe", "trust", "full"):
                     self._yolo_session = False
                     config.set("default", "permission_mode", mode)
+                    self._mode_for_subagents(mode, lower_only=True)
                     if self._is_streaming:
                         self._pending_mode_change = True
                         chat.add_system_message(f"⚡ [yellow]Mode change to {mode.upper()} pending...[/] (Will apply after current response)")

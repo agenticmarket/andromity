@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import hashlib
 import inspect
 import json
@@ -8,6 +9,7 @@ import sys
 import time
 import traceback
 import uuid
+import weakref
 from copy import deepcopy
 from contextlib import aclosing, contextmanager
 from datetime import datetime, timezone
@@ -158,6 +160,16 @@ def _undo_limit_error(available: int, summarized: bool) -> str:
     return f"There {'is' if available == 1 else 'are'} only {turns} to undo."
 
 
+_STOP_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="andromity-stop")
+
+
+def _stop_commands(session_ids: List[str]) -> None:
+    from andromity.core.tools import stop_session_commands
+    for sid in dict.fromkeys(session_ids):
+        stop_session_commands(sid)
+
+
+
 class JsonRpcHandler:
     """Core RPC Handler managing agent execution, sessions, tools, and multi-client sync."""
 
@@ -165,6 +177,9 @@ class JsonRpcHandler:
         self.send_notification = send_notification
         self._active_sessions: Dict[str, Session] = {}
         self._running_tasks: Dict[str, asyncio.Task] = {}
+        self._title_tasks: Dict[str, Set[asyncio.Task]] = {}
+        self._stop_requested: "weakref.WeakSet[asyncio.Task]" = weakref.WeakSet()
+        self._turns_started: "weakref.WeakSet[asyncio.Task]" = weakref.WeakSet()
         self._runtime = SessionRuntime()
         self._watch_airgap_blocks()
         self._pending_approvals: Dict[str, Any] = {}
@@ -940,6 +955,11 @@ class JsonRpcHandler:
         if task is not None and not task.done():
             return {"success": False, "error": "This chat is running. Stop it before deleting it."}
         session = self._active_sessions.get(valid_id)
+        if session is not None:
+            from andromity.core.subagent_orchestrator import kill_session_subagents
+            stray = kill_session_subagents(session, "session_deleted")
+            if stray:
+                await asyncio.get_running_loop().run_in_executor(_STOP_EXECUTOR, _stop_commands, stray)
         if session is not None:
             session.delete()
         else:
@@ -1796,8 +1816,12 @@ class JsonRpcHandler:
         session.profile = profile
         reasoning_effort = params.get("reasoning_effort") or config.get("default", "reasoning_effort", "auto")
         # Respect per-session mode passed from client, falling back to server default
-        mode = (params.get("mode") or config.get("default", "permission_mode", "safe")).lower()
+        from andromity.core.subagent_orchestrator import normalize_mode, restrict_session_subagents
+        mode = normalize_mode(params.get("mode") or config.get("default", "permission_mode", "safe"))
         session.permission_mode = mode
+        if not params.get("is_auto_wake"):
+            # A woken turn is capped by content nobody typed; only the user's own choice lowers running sub-agents.
+            restrict_session_subagents(session, mode)
         is_trusted_workspace = config.is_trusted(session.project_path)
         auto_approve = mode in ("full", "yolo")
 
@@ -1959,7 +1983,9 @@ class JsonRpcHandler:
                     self.notify("session/updated", {"session_id": session.id, "name": session.name})
             # Trigger background AI LLM-powered title generation (TUI parity)
             try:
-                asyncio.create_task(self._generate_ai_session_name(session, prompt, provider, model))
+                title_task = asyncio.create_task(self._generate_ai_session_name(session, prompt, provider, model))
+                self._title_tasks.setdefault(session.id, set()).add(title_task)
+                title_task.add_done_callback(lambda done, sid=session.id: self._forget_title_task(sid, done))
             except Exception:
                 pass
 
@@ -1979,6 +2005,9 @@ class JsonRpcHandler:
 
         async def _run_stream():
             turn_checkpoint = None
+            current = asyncio.current_task()
+            if current is not None:
+                self._turns_started.add(current)
             try:
                 # Reset turn snapshot flag and take pre-turn snapshot
                 session._turn_snapshotted = False
@@ -2380,23 +2409,39 @@ class JsonRpcHandler:
             raise ValueError("session_id is required")
         self._inputs(session_id).pause()
 
-        # A running command would otherwise keep the turn waiting until it finished on its own.
-        from andromity.core.tools import stop_session_commands
-        await asyncio.to_thread(stop_session_commands, session_id)
-
+        # Cancel first, so the turn can't send another model request while its commands are being stopped.
         cancelled = False
-        if session_id in self._active_agents:
-            try:
-                self._active_agents[session_id].kill_subagents("cancelled")
-            except Exception:
-                pass
+        task = self._running_tasks.get(session_id)
+        if task is not None and not task.done() and task not in self._turns_started:
+            # A turn cancelled before its first step would skip its own cleanup and never report agent/cancelled.
+            await asyncio.sleep(0)
+        if task is not None and not task.done():
+            # One cancel per turn: a second would interrupt the turn's own cleanup (its closing snapshot and save).
+            # task.cancelling() can't tell, since a timeout inside the turn cancels and uncancels the task itself.
+            if task not in self._stop_requested:
+                self._stop_requested.add(task)
+                task.cancel()
+            cancelled = True
+        for title_task in self._title_tasks.pop(session_id, set()):
+            if not title_task.done():
+                title_task.cancel()
 
-        if session_id in self._running_tasks:
-            task = self._running_tasks[session_id]
-            if not task.done():
-                if not task.cancelling():
-                    task.cancel()
-                cancelled = True
+        subagent_sessions: List[str] = []
+        try:
+            agent = self._active_agents.get(session_id)
+            if agent is not None:
+                subagent_sessions = agent.kill_subagents("cancelled") or []
+            else:
+                session = self._active_sessions.get(session_id) or self._cron_live_sessions.get(session_id)
+                if session is not None:
+                    from andromity.core.subagent_orchestrator import kill_session_subagents
+                    subagent_sessions = kill_session_subagents(session, "cancelled")
+        except Exception as e:
+            log.debug("Could not stop sub-agents of %s: %s", session_id, e)
+
+        # A running command would otherwise keep the turn waiting until it finished on its own. Stopping runs on
+        # its own threads: tool threads blocked on commands can fill the default executor.
+        await asyncio.get_running_loop().run_in_executor(_STOP_EXECUTOR, _stop_commands, [session_id, *subagent_sessions])
 
         # Resolve any pending futures specifically for this session
         for aid, item in list(self._pending_approvals.items()):
@@ -2515,6 +2560,11 @@ class JsonRpcHandler:
         value = params.get("value")
         if not key:
             raise ValueError("key is required")
+        if key in ("permission_mode", "mode"):
+            from andromity.core.subagent_orchestrator import normalize_mode, restrict_session_subagents
+            value = normalize_mode(value)
+            for live in list(self._active_sessions.values()):
+                restrict_session_subagents(live, value)
         config.set(section, key, value)
         config.save()
 
@@ -3348,6 +3398,7 @@ class JsonRpcHandler:
         if current is not None:
             # Lets Stop in an open chat cancel the run like a normal turn.
             self._running_tasks[cron_session.id] = current
+            self._turns_started.add(current)
         collector = CronRunCollector()
         agent = Agent(
             session=cron_session,
@@ -3432,6 +3483,14 @@ class JsonRpcHandler:
         """End a scheduled run's live state before its finish signal goes out, so a chat
         that reloads on that signal sees the run as finished and can continue it."""
         self._cron_live_sessions.pop(cron_session.id, None)
+        # Nobody can reach a finished run's sub-agents any more, so they end with it however it ended.
+        try:
+            from andromity.core.subagent_orchestrator import kill_session_subagents
+            stray = kill_session_subagents(cron_session, "run_ended")
+            if stray:
+                asyncio.get_running_loop().run_in_executor(_STOP_EXECUTOR, _stop_commands, stray)
+        except Exception as e:
+            log.debug("Could not stop a scheduled run's sub-agents: %s", e)
         task = self._running_tasks.get(cron_session.id)
         if task is asyncio.current_task():
             self._running_tasks.pop(cron_session.id, None)
@@ -3696,6 +3755,13 @@ class JsonRpcHandler:
 
         return edited_files
 
+    def _forget_title_task(self, session_id: str, task: asyncio.Task) -> None:
+        tasks = self._title_tasks.get(session_id)
+        if tasks is not None:
+            tasks.discard(task)
+            if not tasks:
+                self._title_tasks.pop(session_id, None)
+
     async def _generate_ai_session_name(self, session: Session, prompt: str, provider: str, model: str):
         try:
             import sys, os
@@ -3714,8 +3780,9 @@ class JsonRpcHandler:
             if not provider or not model:
                 return
 
-            from andromity.core.connections import provider_request
-            kwargs = {**provider_request(provider, model), "stream": False}
+            from andromity.core.connections import TITLE_MAX_TOKENS, TITLE_TIMEOUT_SECONDS, provider_request
+            kwargs = {**provider_request(provider, model), "stream": False,
+                      "max_tokens": TITLE_MAX_TOKENS, "timeout": TITLE_TIMEOUT_SECONDS}
 
             messages = [
                 {"role": "system", "content": """You are a title generator. You output ONLY a thread title. Nothing else.
@@ -3757,9 +3824,10 @@ Your output must be:
             ]
             kwargs["messages"] = messages
 
-            response = await litellm.acompletion(**kwargs)
+            async with asyncio.timeout(TITLE_TIMEOUT_SECONDS + 5):
+                response = await litellm.acompletion(**kwargs)
             if response.choices:
-                name = response.choices[0].message.content.strip().strip('"').strip("'")
+                name = (response.choices[0].message.content or "").strip().strip('"').strip("'")
                 if name:
                     session.name = name
                     session.save()

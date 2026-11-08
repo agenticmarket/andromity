@@ -23,6 +23,15 @@ from andromity.core.tools import CORE_TOOLS, execute_tool_async
 log = get_logger("subagent")
 
 
+MODE_RANK = {"safe": 0, "trust": 1, "full": 2, "yolo": 3}
+
+
+def normalize_mode(mode: Any) -> str:
+    """A permission mode as one of safe, trust, full or yolo. Anything else is safe, never a mode no check matches."""
+    value = str(mode or "").strip().lower()
+    return value if value in MODE_RANK else "safe"
+
+
 @dataclass
 class SubAgentResult:
     agent_id: str
@@ -120,7 +129,7 @@ class SubAgent:
         self.role = role.lower().strip()
         self.task = task
         self.project_path = project_path
-        self.permission_mode = (permission_mode or config.get("default", "permission_mode", "safe")).lower().strip()
+        self.permission_mode = normalize_mode(permission_mode or config.get("default", "permission_mode", "safe"))
         self.depth = depth
         self.tool_id = tool_id
         self.progress_callback = progress_callback

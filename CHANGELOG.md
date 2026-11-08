@@ -13,10 +13,12 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 - **Command checks rebuilt against the GuardFall bypasses.** Auto-approval refuses commands with shell-significant characters, checks both sides of `=`, needs an exact allowlist match for programs that run code (such as `bash -c`, `python`, `sudo` and `ssh`), blocks risky options per program (git, pytest, tar, npm), and a turn stops after `max_tool_rounds` (default 60). VS Code's "always allow this command" follows the same rule.
 
 ### Fixed
+- **Stop ends everything the turn started.** Stop now cancels the turn before stopping its commands, so no further model request goes out. It also ends background sub-agents started in earlier turns and their shell commands, a scheduled run's sub-agents, and the session-title request, which now has a token limit and a timeout. Deleting a session ends its sub-agents, and starting a turn in a stricter permission mode lowers the mode of sub-agents still running.
 - **Git calls no longer run programs from repository config.** Snapshots, undo, status, diffs, Changes Review and search turn off hooks, fsmonitor, clean and smudge filters and textconv, so a cloned repository can't run code through them. Discard refuses files whose filter was turned off.
 - **Reused tool-call ids.** A provider that reuses a tool-call id can no longer give a new call an earlier approval or refusal.
 
 ### Security
+- **Permission modes are checked strictly.** A mode with stray spaces or an unknown name is treated as SAFE everywhere, including for sub-agents. Before, a value such as "safe " matched none of the checks, so shell commands ran without asking. Lowering the mode also lowers sub-agents that are still running, and `/mode` in the terminal app now changes the current session's approvals.
 - VS Code: file links in chat and Fingerprint are judged by where they really lead. Symlinks and junctions out of the workspace ask first and name the real file, links to network shares outside the workspace are refused without connecting to them, and relative paths need an open folder. In a folder opened by its network path, links to the folder's own files now open.
 
 ## [0.2.25] — 2026-10-31
