@@ -905,10 +905,6 @@ _RATE_CODES = frozenset({
 })
 _CREDIT_CODES = frozenset({"insufficient_quota", "insufficient_credits", "insufficient_balance", "payment_required"})
 _STALL_PHRASES = ("stalled", "watchdog", "first token", "timed out")
-_GATEWAY_QUOTA_PHRASES = (
-    "daily_limit_reached", "quota_exceeded", "free trial requests", "daily limit", "upgrade_url",
-    "sign in with github",
-)
 _SIGN_IN_PHRASES = ("sign in", "sign-in", "signin", "log in", "login", "authentication token", "expired")
 _GATEWAY_CONTEXT_CODES = ("prompt_too_large", "payload_too_large", "context_length_exceeded")
 
@@ -1139,7 +1135,11 @@ def _identifier(value: Any) -> Optional[str]:
 
 
 def _gateway_details(e: BaseException, facts: Dict[str, Any]) -> Dict[str, Any]:
-    """What the gateway said about a failed request: its typed headers first, then its JSON body."""
+    """What the gateway said about a failed request.
+
+    The type and action come only from the gateway's own typed headers. Its message can carry a provider's words,
+    and a stream can carry a provider's error event, so neither may choose the card or its action.
+    """
     headers, body = facts["headers"], facts["body"]
     message = body.get("message") if isinstance(body.get("message"), str) else ""
     retry_after = None
@@ -1150,9 +1150,9 @@ def _gateway_details(e: BaseException, facts: Dict[str, Any]) -> Dict[str, Any]:
     elif isinstance(body_wait, (int, float)) and not isinstance(body_wait, bool) and math.isfinite(body_wait) and body_wait > 0:
         retry_after = int(min(body_wait, 86400))
     return {
-        "type": _identifier(headers.get("x-andromity-error-type")) or _identifier(body.get("type")),
+        "type": _identifier(headers.get("x-andromity-error-type")),
         "code": _identifier(body.get("code")),
-        "action": _identifier(headers.get("x-andromity-error-action")) or _identifier(body.get("action")),
+        "action": _identifier(headers.get("x-andromity-error-action")),
         "retry_after": retry_after,
         "message": message.strip() or extract_clean_error_message(e),
     }
@@ -1161,12 +1161,10 @@ def _gateway_details(e: BaseException, facts: Dict[str, Any]) -> Dict[str, Any]:
 def gateway_error(e: Exception, *types: str) -> Optional[Dict[str, Any]]:
     """The structured error the Andromity gateway sent, when its type is one of `types`.
 
-    LiteLLM keeps only the message text and the response headers of a failed call, so the type,
-    action and wait come from the gateway's headers, then from its JSON body when that is reachable.
+    LiteLLM keeps only the message text and the response headers of a failed call. The type and action come from
+    the gateway's typed headers; the wait from its headers, then its JSON body.
     """
     facts = _error_facts(e)
-    if facts["text_body"].get("type") in types:
-        return dict(facts["text_body"])
     details = _gateway_details(e, facts)
     if details["type"] not in types:
         return None
@@ -1380,10 +1378,13 @@ def classify_error_info(
             gateway_card = "trouble"
         elif g_type == "authentication_error":
             gateway_card = "gateway_auth" if g_code == "invalid_key" else "sign_in"
-        elif not network:
+        elif g_type is not None:
+            is_auth = is_outage = False
+            is_rate = g_type in _RATE_CODES
             if g_type == "invalid_request_error" and g_code in _GATEWAY_CONTEXT_CODES:
                 is_context = True
-            elif server_error:
+        elif not network:
+            if server_error:
                 gateway_card = "trouble"
             elif is_auth:
                 if mentions(_SIGN_IN_PHRASES):
@@ -1392,8 +1393,6 @@ def classify_error_info(
                     gateway_card = "access_denied"
                 else:
                     gateway_card = "gateway_auth"
-            elif g_type is None and mentions(_GATEWAY_QUOTA_PHRASES) and (is_rate or status in (None, 429)):
-                gateway_card = "quota_exceeded"
             elif is_outage:
                 gateway_card = "trouble"
     typed_message = g_message.strip() if g_type and not is_html else ""

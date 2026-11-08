@@ -345,13 +345,16 @@ describe("the offered flag comes only from the engine's turn result", () => {
     return { store, controller, emit, posts, changes: () => changes };
   }
 
-  it("agent/done with the join_waitlist action marks the waitlist offered once", async () => {
+  it("a daily-limit agent/done with the join_waitlist action marks the waitlist offered once", async () => {
     const chat = engineChat();
+    const dailyLimit = { outcome: "error", error_type: "quota_exceeded", error_action: "join_waitlist" };
     await chat.emit("agent/done", { outcome: "error", error_action: "join_waitlist" });
+    assert.equal(chat.controller.offered(), false, "the action without the daily-limit type is not enough");
+    await chat.emit("agent/done", dailyLimit);
     assert.equal(chat.store.get("andromity.waitlistOffered"), true);
     assert.equal(chat.controller.offered(), true);
     assert.equal(chat.changes(), 1, "open pages are told");
-    await chat.emit("agent/done", { outcome: "error", error_action: "join_waitlist" });
+    await chat.emit("agent/done", dailyLimit);
     assert.equal(chat.changes(), 1);
     assert.ok(chat.posts.some((m) => m.type === "agent_done"), "the turn still finishes normally");
   });
