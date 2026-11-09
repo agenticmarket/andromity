@@ -934,11 +934,13 @@ export class PullRequestController {
   }
 
   private bodyFor(commit: string | undefined, committedPaths?: readonly string[]): string {
-    const description = closeOpenBlocks(plainText(this.form.description, MAX_DESCRIPTION).trim());
+    const raw = plainText(this.form.description, MAX_DESCRIPTION).trim();
     const section = this.receipt && this.form.attachReceipt ? this.turnRecord(commit, committedPaths) : null;
-    if (!section) return description;
+    if (!section) return closeOpenBlocks(raw);
     const room = GITHUB_BODY_LIMIT - 512 - section.length - 2;
-    return `${description ? description.slice(0, Math.max(0, room)) + "\n\n" : ""}${section}`;
+    let description = closeOpenBlocks(raw);
+    if (description.length > room) description = closeOpenBlocks(raw.slice(0, Math.max(0, room - 1200)));
+    return `${description ? description + "\n\n" : ""}${section}`;
   }
 
   /** The AI change record of the pushed pull request, from the receipts of every turn, in any chat of this project,
@@ -978,7 +980,8 @@ export class PullRequestController {
       }
     };
     const turns: RecordTurn[] = [];
-    let unread = Math.max(0, keys.length - MAX_RECORD_TURNS);
+    const skipped = Math.max(0, keys.length - MAX_RECORD_TURNS);
+    let unread = 0;
     for (const key of keys.slice(0, MAX_RECORD_TURNS)) {
       const receipt = await load(key);
       if (receipt) turns.push({ key, receipt });
@@ -990,14 +993,14 @@ export class PullRequestController {
       const chat = key.slice(0, key.lastIndexOf(":"));
       newest.set(chat, Math.max(newest.get(chat) ?? -1, Number(key.slice(key.lastIndexOf(":") + 1))));
     }
-    for (const [chat, index] of [...newest].slice(0, 10)) {
+    for (const [chat, index] of newest) {
       for (let next = index + 1; next <= index + MAX_LATER_TURNS; next++) {
         const receipt = await load(`${chat}:${next}`);
         if (!receipt) break;
         later.push({ key: `${chat}:${next}`, receipt });
       }
     }
-    const record = buildChangeRecord({ head: typeof res.head === "string" ? res.head : "", scope: "pull_request", files, turns, later, unread, truncated: res.truncated === true });
+    const record = buildChangeRecord({ head: typeof res.head === "string" ? res.head : "", scope: "pull_request", files, turns, later, unread, skipped, truncated: res.truncated === true });
     const withAi = record.files.withAi;
     this.trackOnce(withAi === record.files.total && !record.files.modifiedOutside.length ? "pr_receipts_all_covered" : withAi ? "pr_receipts_some_covered" : "pr_receipts_none_covered");
     if (newest.size > 1) this.trackOnce("pr_receipts_many_chats");

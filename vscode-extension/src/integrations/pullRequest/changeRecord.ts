@@ -15,6 +15,7 @@ export interface RecordFile {
 }
 
 export interface RecordItem {
+  severity: "high" | "medium";
   detail: string;
   subject?: string;
   decidedBy?: string;
@@ -47,9 +48,16 @@ const MAX_ITEMS = 15;
 const MAX_LISTED = 10;
 const MAX_COMMAND = 200;
 
+/** When the turn ended, or NaN when its receipt doesn't say. */
 function ended(receipt: Receipt): number {
-  const time = Date.parse(receipt.ended_at ?? receipt.started_at ?? "");
-  return Number.isFinite(time) ? time : 0;
+  const value = receipt.ended_at ?? receipt.started_at;
+  return typeof value === "string" ? Date.parse(value) : NaN;
+}
+
+function byTime(a: RecordTurn, b: RecordTurn): number {
+  const x = ended(a.receipt);
+  const y = ended(b.receipt);
+  return (Number.isFinite(x) ? x : 0) - (Number.isFinite(y) ? y : 0);
 }
 
 function addUnique(list: string[], value: unknown): void {
@@ -62,12 +70,17 @@ function count(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
-function sameCommand(a: string, b: string): boolean {
-  return a.split(/\s+/).join(" ") === b.split(/\s+/).join(" ");
+function commandKey(value: string): string {
+  return value.split(/\s+/).filter(Boolean).join(" ");
+}
+
+function text(value: unknown, limit: number): string {
+  return typeof value === "string" ? plainText(value, limit) : "";
 }
 
 /** The record of the pull request, from its files and the receipts of the turns that made them. `later` are receipts
- *  of turns that changed none of its files; only their checks count. `unread` is how many receipts couldn't be read. */
+ *  of turns that changed none of its files; only their checks count. `unread` is how many receipts couldn't be read;
+ *  `skipped` how many turns weren't asked for because of the limit. */
 export function buildChangeRecord(input: {
   head: string;
   scope: ChangeRecord["scope"];
@@ -75,19 +88,30 @@ export function buildChangeRecord(input: {
   turns: RecordTurn[];
   later?: RecordTurn[];
   unread?: number;
+  skipped?: number;
   truncated?: boolean;
   notes?: string[];
 }): ChangeRecord {
   const byKey = new Map(input.turns.map((turn) => [turn.key, turn.receipt]));
-  const turns = [...input.turns].sort((a, b) => ended(a.receipt) - ended(b.receipt));
-  const withChecks = [...input.turns, ...(input.later ?? [])].sort((a, b) => ended(a.receipt) - ended(b.receipt));
+  const turns = [...input.turns].sort(byTime);
+  const withChecks = [...input.turns, ...(input.later ?? [])].sort(byTime);
 
-  const withAi = input.files.filter((file) => file.coverage !== "none");
+  const unique = new Map<string, RecordFile>();
+  for (const file of input.files) {
+    const path = text(file?.path, 1000).trim();
+    if (!path) continue;
+    const known = unique.get(path);
+    const turnsOf = Array.isArray(file.turns) ? file.turns.filter((key) => typeof key === "string") : [];
+    if (!known) unique.set(path, { path, coverage: file.coverage, turns: turnsOf });
+    else known.turns = [...new Set([...known.turns, ...turnsOf])];
+  }
+  const allFiles = [...unique.values()];
+  const withAi = allFiles.filter((file) => file.coverage === "covered" || file.coverage === "partial" || file.coverage === "edited");
   const files = {
-    total: input.files.length,
+    total: allFiles.length,
     withAi: withAi.length,
-    modifiedOutside: input.files.filter((file) => file.coverage === "partial" || file.coverage === "edited").map((file) => file.path),
-    notRecorded: input.files.filter((file) => file.coverage === "none").map((file) => file.path),
+    modifiedOutside: allFiles.filter((file) => file.coverage === "partial" || file.coverage === "edited").map((file) => file.path),
+    notRecorded: allFiles.filter((file) => !withAi.includes(file)).map((file) => file.path),
   };
 
   const models: string[] = [];
@@ -104,9 +128,9 @@ export function buildChangeRecord(input: {
     addUnique(modes, receipt.mode);
     for (const host of Array.isArray(receipt.web_hosts) ? receipt.web_hosts : []) addUnique(webHosts, host);
     for (const server of Array.isArray(receipt.mcp_servers) ? receipt.mcp_servers : []) addUnique(mcpServers, server);
-    const summary = receipt.summary ?? ({} as Receipt["summary"]);
+    const summary = (receipt.summary && typeof receipt.summary === "object" ? receipt.summary : {}) as Partial<Receipt["summary"]>;
     approvals.approved += count(summary.approved_by_person);
-    approvals.declined += count(summary.denied_by_person);
+    approvals.declined += Math.max(count(summary.denied), count(summary.denied_by_person));
     approvals.blocked += count(summary.blocked);
     commands.total += count(summary.commands);
     commands.failed += count(summary.commands_failed);
@@ -115,21 +139,29 @@ export function buildChangeRecord(input: {
     if (receipt.sealed && receipt.sealed.matches === false) resealed++;
   }
 
-  const checks: ChangeRecord["checks"] = [];
+  const checksByCommand = new Map<string, ChangeRecord["checks"][number]>();
   const checkTimes: number[] = [];
   for (const { receipt } of withChecks) {
+    let added = false;
     for (const check of Array.isArray(receipt.checks) ? receipt.checks : []) {
       if (!check || typeof check.command !== "string" || !check.command.trim()) continue;
-      const entry = { command: plainText(check.command, 2000), passed: check.result === "passed", exitCode: Number.isSafeInteger(check.exit_code) ? check.exit_code : null };
-      const at = checks.findIndex((existing) => sameCommand(existing.command, entry.command));
-      if (at >= 0) checks.splice(at, 1);
-      checks.push(entry);
+      const command = plainText(check.command, 2000);
+      const key = commandKey(command);
+      checksByCommand.delete(key);
+      checksByCommand.set(key, { command, passed: check.result === "passed", exitCode: Number.isSafeInteger(check.exit_code) ? check.exit_code : null });
+      added = true;
     }
-    if ((Array.isArray(receipt.checks) ? receipt.checks : []).length) checkTimes.push(ended(receipt));
+    const time = ended(receipt);
+    if (added && Number.isFinite(time)) checkTimes.push(time);
   }
+  const checks = [...checksByCommand.values()];
   const noCheckAfter = checks.length
     ? withAi.filter((file) => {
-      const last = Math.max(...file.turns.map((key) => byKey.get(key)).filter((r): r is Receipt => !!r).map(ended), 0);
+      const receipts = file.turns.map((key) => byKey.get(key));
+      if (!receipts.length || receipts.some((receipt) => !receipt)) return true;
+      const times = (receipts as Receipt[]).map(ended);
+      if (times.some((time) => !Number.isFinite(time))) return true;
+      const last = Math.max(...times);
       return !checkTimes.some((time) => time >= last);
     }).map((file) => file.path)
     : [];
@@ -137,23 +169,35 @@ export function buildChangeRecord(input: {
   const items: RecordItem[] = [];
   const seen = new Set<string>();
   for (const { receipt } of turns) {
-    const names = new Map((Array.isArray(receipt.approvers) ? receipt.approvers : []).map((person) => [person.id, person.name]));
+    const names = new Map<string, string>();
+    for (const person of Array.isArray(receipt.approvers) ? receipt.approvers : []) {
+      if (person && typeof person.id === "string" && typeof person.name === "string") names.set(person.id, person.name);
+    }
     for (const finding of Array.isArray(receipt.needs_attention) ? receipt.needs_attention : []) {
-      if (!finding || SKIPPED_FINDINGS.has(finding.kind) || (finding.severity !== "high" && finding.severity !== "medium")) continue;
-      if (finding.kind === "check_failed" && finding.subject && checks.some((check) => check.passed && sameCommand(check.command, finding.subject as string))) continue;
-      const key = `${finding.kind}\u0000${finding.subject ?? ""}\u0000${finding.detail}`;
+      if (!finding || typeof finding !== "object" || typeof finding.kind !== "string" || SKIPPED_FINDINGS.has(finding.kind)) continue;
+      if (finding.severity !== "high" && finding.severity !== "medium") continue;
+      const detail = text(finding.detail, 300).trim();
+      if (!detail) continue;
+      const subject = text(finding.subject, 2000);
+      if (finding.kind === "check_failed" && subject && checksByCommand.get(commandKey(subject))?.passed) continue;
+      const key = `${finding.kind}\u0000${subject}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const decidedBy = finding.approver ? names.get(finding.approver) : undefined;
+      const decidedBy = typeof finding.approver === "string" ? names.get(finding.approver) : undefined;
       items.push({
-        detail: plainText(finding.detail, 300),
-        ...(finding.subject ? { subject: plainText(finding.subject, 2000) } : {}),
+        severity: finding.severity,
+        detail,
+        ...(subject ? { subject } : {}),
         ...(decidedBy ? { decidedBy: plainText(decidedBy, 100) } : {}),
       });
     }
   }
-  if (resealed) items.push({ detail: resealed === 1 ? "The record of 1 turn differs from the copy sealed when the turn ended" : `The records of ${resealed} turns differ from the copies sealed when the turns ended` });
-  if (input.unread) items.push({ detail: `The records of ${input.unread} ${input.unread === 1 ? "turn" : "turns"} could not be read, so they are not included` });
+  if (resealed) items.push({ severity: "high", detail: resealed === 1 ? "The record of 1 turn differs from the copy sealed when the turn ended" : `The records of ${resealed} turns differ from the copies sealed when the turns ended` });
+  if (input.unread) items.push({ severity: "high", detail: `The records of ${input.unread} ${input.unread === 1 ? "turn" : "turns"} could not be read, so they are not included` });
+  items.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "high" ? -1 : 1));
+
+  const notes = [...(input.notes ?? [])];
+  if (input.skipped) notes.push(`${input.skipped} ${input.skipped === 1 ? "turn is" : "turns are"} not included because a record covers at most 60 turns.`);
 
   return {
     head: input.head,
@@ -171,7 +215,7 @@ export function buildChangeRecord(input: {
     subagents,
     items,
     truncated: input.truncated === true,
-    notes: [...(input.notes ?? [])],
+    notes,
   };
 }
 
@@ -182,21 +226,39 @@ function cell(value: string): string {
   return value.replace(/[\r\n]+/g, " ").replace(/\|/g, "\\|");
 }
 
-function codeList(values: readonly string[], limit: number, cut = 300): string {
-  const shown = values.slice(0, limit).map((value) => mdCode(value.length > cut ? value.slice(0, cut) + "…" : value)).join(", ");
-  return values.length > limit ? `${shown} and ${values.length - limit} more` : shown;
+/** Text outside code: no Markdown, HTML, links, images, @mentions or issue references can come out of it. Pipes
+ *  are left for `cell`. */
+function mdText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/([\\`*_[\]~()])/g, "\\$1")
+    .replace(/@|:\/\/|www\.|#(?=\d)|GH-(?=\d)/gi, (match) => match[0] + "\u200b" + match.slice(1));
+}
+
+function cut(value: string, limit: number): string {
+  return value.length > limit ? value.slice(0, limit) + "…" : value;
+}
+
+function codeList(values: readonly string[], limit: number, length = 300): string {
+  const shown = values.slice(0, Math.max(1, limit)).map((value) => mdCode(cut(value, length)));
+  const more = values.length - shown.length;
+  return more > 0 ? `${shown.join(", ")} and ${more} more` : shown.join(", ");
 }
 
 const MODE_NAMES: Record<string, string> = { safe: "Safe", full: "Full", yolo: "YOLO", plan: "Plan", auto: "Auto" };
 
 function modeName(mode: string): string {
-  return MODE_NAMES[mode.toLowerCase()] ?? mode;
+  return MODE_NAMES[mode.toLowerCase()] ?? mdCode(cut(mode, 60));
 }
 
 function itemLine(item: RecordItem): string {
-  const subject = item.subject ? `: ${mdCode(item.subject.length > MAX_COMMAND ? item.subject.slice(0, MAX_COMMAND) + "…" : item.subject)}` : "";
-  const decided = item.decidedBy ? ` · decided by ${item.decidedBy} (git user.name, not verified)` : "";
-  return `${item.detail}${subject}${decided}`;
+  const subject = item.subject ? `: ${mdCode(cut(item.subject, MAX_COMMAND))}` : "";
+  const decided = item.decidedBy ? ` · decided by ${mdCode(item.decidedBy)} (git user.name, not verified)` : "";
+  return `${item.severity === "high" ? "High" : "Medium"} · ${mdText(item.detail)}${subject}${decided}`;
+}
+
+function checkLine(check: ChangeRecord["checks"][number]): string {
+  return `${mdCode(cut(check.command, MAX_COMMAND))} ${check.passed ? "passed" : "failed"}${check.exitCode === null ? "" : ` (exit ${check.exitCode})`}`;
 }
 
 function rows(record: ChangeRecord, limits: { items: number; listed: number }): [string, string][] {
@@ -209,22 +271,36 @@ function rows(record: ChangeRecord, limits: { items: number; listed: number }): 
   if (record.files.modifiedOutside.length) out.push(["Modified outside Andromity", codeList(record.files.modifiedOutside, limits.listed)]);
   out.push(["Not recorded by Andromity", record.files.notRecorded.length ? codeList(record.files.notRecorded, limits.listed) : "None"]);
 
-  out.push(["Models", record.models.length
-    ? record.models.slice(0, limits.listed).map((model) => model === "andromity/auto" ? `${mdCode(model)} (model selected per request by the Andromity gateway)` : mdCode(model)).join(" · ")
-    : "Not recorded"]);
+  if (record.models.length) {
+    const shown = record.models.slice(0, limits.listed).map((model) => model === "andromity/auto"
+      ? `${mdCode(model)} (model selected per request by the Andromity gateway)` : mdCode(cut(model, 120)));
+    const more = record.models.length - shown.length;
+    out.push(["Models", shown.join(" · ") + (more > 0 ? ` · and ${more} more` : "")]);
+  } else {
+    out.push(["Models", "Not recorded"]);
+  }
 
   const approvals = record.approvals.approved || record.approvals.declined || record.approvals.blocked
     ? [`Approved by a person: ${record.approvals.approved}`, `Declined: ${record.approvals.declined}`, `Blocked by Andromity: ${record.approvals.blocked}`].join(" · ")
-    : "No approvals requested";
-  out.push(["Permission mode", `${record.modes.length ? record.modes.map(modeName).join(", ") : "Not recorded"} · ${approvals}`]);
+    : "No approvals recorded";
+  const modes = record.modes.length
+    ? record.modes.slice(0, limits.listed).map(modeName).join(", ") + (record.modes.length > limits.listed ? ` and ${record.modes.length - limits.listed} more` : "")
+    : "Not recorded";
+  out.push(["Permission mode", `${modes} · ${approvals}`]);
 
-  out.push(["Checks", record.checks.length
-    ? record.checks.slice(0, limits.listed).map((check) => `${mdCode(check.command.length > MAX_COMMAND ? check.command.slice(0, MAX_COMMAND) + "…" : check.command)} ${check.passed ? "passed" : "failed"}${check.exitCode === null ? "" : ` (exit ${check.exitCode})`}`).join("<br>")
-      + (record.checks.length > limits.listed ? `<br>and ${record.checks.length - limits.listed} more` : "")
-    : "None recorded"]);
+  if (record.checks.length) {
+    const ordered = [...record.checks.filter((check) => !check.passed), ...record.checks.filter((check) => check.passed)];
+    const shown = ordered.slice(0, limits.listed).map(checkLine);
+    const rest = ordered.slice(limits.listed);
+    const failedRest = rest.filter((check) => !check.passed).length;
+    if (rest.length) shown.push(`and ${rest.length} more${failedRest ? ` (${failedRest} failed)` : ""}`);
+    out.push(["Checks", shown.join("<br>")]);
+  } else {
+    out.push(["Checks", "None recorded"]);
+  }
   if (record.noCheckAfter.length) out.push(["No check after last change", codeList(record.noCheckAfter, limits.listed)]);
 
-  out.push(["Commands run", record.commands.total ? `${record.commands.total}${record.commands.failed ? ` · ${record.commands.failed} failed` : ""}` : "None"]);
+  out.push(["Commands run", record.commands.total ? `${record.commands.total}${record.commands.failed ? ` · ${record.commands.failed} failed` : ""}` : "None recorded"]);
   const network = [
     ...(record.webHosts.length ? [codeList(record.webHosts, limits.listed, 200)] : []),
     ...(record.webSearches ? [`Web searches: ${record.webSearches}`] : []),
@@ -239,7 +315,8 @@ function rows(record: ChangeRecord, limits: { items: number; listed: number }): 
   return out;
 }
 
-/** The pull request's AI change record, written by fixed code. Fits within `budget` characters. */
+/** The pull request's AI change record, written by fixed code. Never longer than `budget` characters; empty when
+ *  even the shortest form doesn't fit. */
 export function composeChangeRecord(record: ChangeRecord, budget: number): string {
   const head = /^[0-9a-f]{7,64}$/.test(record.head) ? ` · Commit ${mdCode(record.head.slice(0, 7))}` : "";
   const scope = record.scope === "turn"
@@ -248,13 +325,14 @@ export function composeChangeRecord(record: ChangeRecord, budget: number): strin
   const footer = [
     scope,
     ...(record.truncated ? ["The pull request lists more files than were matched."] : []),
-    ...record.notes,
+    ...record.notes.map(mdText),
     "Approver names come from git settings and are not verified. Per-turn records are in Andromity.",
   ].join(" ");
-  for (const limits of [{ items: MAX_ITEMS, listed: MAX_LISTED }, { items: 5, listed: 3 }, { items: 0, listed: 0 }]) {
+  for (const limits of [{ items: MAX_ITEMS, listed: MAX_LISTED }, { items: 5, listed: 3 }, { items: 2, listed: 1 }]) {
     const table = rows(record, limits).map(([label, value]) => `| **${label}** | ${cell(value)} |`);
-    const text = [RECORD_START, "---", "", `**AI change record** · Generated from Andromity session records${head}`, "", "| | |", "|---|---|", ...table, "", `<sub>${footer}</sub>`, RECORD_END].join("\n");
-    if (text.length <= budget) return text;
+    const out = [RECORD_START, "---", "", `**AI change record** · Generated from Andromity session records${head}`, "", "| | |", "|---|---|", ...table, "", `<sub>${footer}</sub>`, RECORD_END].join("\n");
+    if (out.length <= budget) return out;
   }
-  return [RECORD_START, "---", "", `**AI change record**${head}`, "", "<sub>The record is too long for this pull request. It is in Andromity.</sub>", RECORD_END].join("\n");
+  const short = [RECORD_START, "---", "", `**AI change record**${head}`, "", "<sub>The record is too long for this pull request. It is in Andromity.</sub>", RECORD_END].join("\n");
+  return short.length <= budget ? short : "";
 }
