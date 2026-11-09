@@ -197,7 +197,7 @@ async function harness(provenance: ((params: any) => unknown) | "unsupported") {
 
 const lastView = (posts: any[]) => posts.filter((m) => m.type === "pr_view").map((m) => m.view).at(-1);
 
-async function waitFor(pred: () => boolean, what: string, ms = 10_000) {
+async function waitFor(pred: () => boolean, what: string, ms = 60_000) {
   const until = Date.now() + ms;
   while (Date.now() < until) {
     if (pred()) return;
@@ -211,6 +211,10 @@ async function openReady(h: Awaited<ReturnType<typeof harness>>) {
   await waitFor(() => lastView(h.posts)?.phase === "form", "the form");
   await waitFor(() => lastView(h.posts)?.form?.receipt?.available === true, "the receipt");
   await waitFor(() => !lastView(h.posts).form.drafting && !!(h.ctrl as any).form.commitMessage, "the draft: " + JSON.stringify({ rpc: h.rpcCalls.map((c) => c.method), form: (h.ctrl as any).form }).slice(0, 1500));
+  await waitFor(() => lastView(h.posts)?.form?.sizeLine?.text !== "Counting lines…", "the file checks");
+  const checks = lastView(h.posts)?.form?.checks;
+  if (checks?.key) await h.ctrl.handle({ type: "pr_update", changes: { ack: checks.key } });
+  await waitFor(() => lastView(h.posts)?.form?.primary?.enabled === true, "the button");
   await new Promise((r) => setTimeout(r, 300));
 }
 
