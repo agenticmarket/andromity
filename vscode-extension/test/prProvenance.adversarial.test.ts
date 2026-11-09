@@ -9,82 +9,13 @@ import * as path from "node:path";
 import { installVscodeStub, resetState, state } from "./helpers/prVscodeStub.js";
 import { FakeGitHub } from "./helpers/prFakes.js";
 import { CliApiRepository, makeSandbox, gitOk, type Sandbox } from "./helpers/prRealGit.js";
-import {
-  GITHUB_BODY_LIMIT, PROVENANCE_END, PROVENANCE_START, closeOpenBlocks, composeProvenance,
-  type Provenance, type ProvenanceRow,
-} from "../src/integrations/pullRequest/body.js";
+import { GITHUB_BODY_LIMIT } from "../src/integrations/pullRequest/body.js";
+import { RECORD_START as PROVENANCE_START } from "../src/integrations/pullRequest/changeRecord.js";
 import { GitHubClient, GitHubError } from "../src/integrations/pullRequest/github.js";
 
 const vscodeStub: any = installVscodeStub();
 const { PullRequestController } = require("../src/panels/pullRequestController.js") as typeof import("../src/panels/pullRequestController.js");
 const { ChatViewProvider } = require("../src/providers/ChatViewProvider.js");
-
-// ── composeProvenance ───────────────────────────────────────────────────────────────────────────────────────────
-
-function row(p: string, coverage: ProvenanceRow["coverage"] = "covered", turns = ["turn 1"]): ProvenanceRow {
-  return { path: p, oldPath: null, additions: 3, deletions: 1, binary: false, coverage, turns };
-}
-
-function prov(rows: ProvenanceRow[], receipts: Provenance["receipts"] = []): Provenance {
-  return {
-    rows, receipts, missing: [], head: "a".repeat(40), truncated: false,
-    totals: { files: rows.length, covered: rows.filter((r) => r.coverage === "covered").length,
-      partial: rows.filter((r) => r.coverage === "partial").length, edited: rows.filter((r) => r.coverage === "edited").length },
-  };
-}
-
-describe("composeProvenance", () => {
-  it("stays within the budget it is given, table included", () => {
-    const rows = Array.from({ length: 100 }, (_, i) => row(`services/billing/internal/handlers/v2/generated/${i}/handler_${i}.py`, "covered",
-      ["turn 9 · chat 3", "turn 8 · chat 3", "turn 7 · chat 2", "turn 6 · chat 2", "turn 5 · chat 1", "turn 4 · chat 1"]));
-    const budget = 6000;
-    const { text } = composeProvenance(prov(rows), budget);
-    assert.ok(text.length <= budget, `section is ${text.length} chars for a budget of ${budget}`);
-  });
-
-  it("never goes over GitHub's limit with long paths", () => {
-    const rows = Array.from({ length: 100 }, (_, i) => ({ ...row(`${"deep/".repeat(190)}f${i}.ts`), oldPath: `${"old/".repeat(240)}f${i}.ts` }));
-    const { text } = composeProvenance(prov(rows), GITHUB_BODY_LIMIT - 512);
-    assert.ok(text.length <= GITHUB_BODY_LIMIT, `section is ${text.length} chars; GitHub refuses more than ${GITHUB_BODY_LIMIT}`);
-  });
-
-  it("a shortened receipt doesn't leave a code fence open over the rest of the section", () => {
-    const long = ["### Andromity receipt", "", "**Commands**", "", "```", ...Array.from({ length: 4000 }, (_, i) => `npm run step-${i} --flag value`), "```", "", "end"].join("\n");
-    const receipts = [
-      { label: "turn 2", files: 1, needsEyes: false, markdown: long },
-      { label: "turn 1", files: 1, needsEyes: true, markdown: "### Andromity receipt\n\n**Needs your eyes**\n- High · secret" },
-    ];
-    const { text } = composeProvenance(prov([row("a.py", "covered", ["turn 1", "turn 2"])], receipts), 30_000);
-    assert.ok(text.endsWith(PROVENANCE_END));
-    assert.ok(closeOpenBlocks(text) === text, "something is still open at the end of the section, so </details> and the end marker are swallowed: " + closeOpenBlocks(text).slice(text.length));
-  });
-
-  it("file paths can't break the table or open HTML", () => {
-    const hostile = ["a|b.py", "`tick`.md", "x``y`.txt", "<details><summary>hi</summary>", "--> <!-- x", "new\nline.py", "\\|.py", "<!-- /andromity-receipts -->"];
-    const { text } = composeProvenance(prov(hostile.map((p) => row(p))), 60_000);
-    const table = text.split("\n").filter((line) => line.startsWith("|"));
-    assert.equal(table.length, hostile.length + 2, "one table line per file plus the header");
-    for (const line of table.slice(2)) {
-      const cells = line.replace(/\\\|/g, "").split("|").length - 2;
-      assert.equal(cells, 3, line);
-    }
-  });
-
-  it("never says covered for partial or edited files, and the counts match the rows", () => {
-    const rows = [row("a.py", "partial", ["turn 2"]), row("b.py", "edited", ["turn 1"]), row("c.py", "none", [])];
-    const { text } = composeProvenance(prov(rows), 60_000);
-    assert.match(text, /covered by a receipt: \*\*0 of 3\*\*/);
-    assert.ok(!/as the turn left it|nothing in between/.test(text), text);
-  });
-
-  it("many large receipts stay within the budget", () => {
-    const big = "### Andromity receipt\n\n" + Array.from({ length: 3000 }, (_, i) => `- step ${i} did something`).join("\n");
-    const receipts = Array.from({ length: 8 }, (_, i) => ({ label: `turn ${i + 1}`, files: 2, needsEyes: false, markdown: big }));
-    const budget = GITHUB_BODY_LIMIT - 512;
-    const { text } = composeProvenance(prov([row("a.py")], receipts), budget);
-    assert.ok(text.length <= budget, `${text.length}`);
-  });
-});
 
 // ── GraphQL errors ──────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -303,7 +234,8 @@ describe("controller: receipts when the pull request already exists at create ti
     assert.ok(!api.calls.some((c) => c.method === "POST" && c.path.endsWith("/pulls")), "no second pull request");
     const comments = api.calls.filter((c) => c.method === "POST" && c.path === "/repos/test/orders/issues/77/comments");
     assert.equal(comments.length, 1, "the receipt was dropped: nothing was added to the existing pull request");
-    assert.match(comments[0].body.body, /Andromity receipt for turn 1/);
+    assert.match(comments[0].body.body, /AI change record/);
+    assert.match(comments[0].body.body, /Only the turn this pull request was created from was matched/);
   });
 
   it("the description the user wrote isn't silently dropped", async () => {
@@ -332,7 +264,7 @@ describe("controller: a receipts comment that GitHub refuses", { timeout: 120_00
     await waitFor(() => lastView(h.posts)?.phase === "done" || lastView(h.posts)?.phase === "failed", "the run");
     assert.ok(api.calls.some((c) => c.method === "POST" && c.path === "/repos/test/orders/issues/77/comments"), "the comment was tried");
     const shown = JSON.stringify({ view: lastView(h.posts), warnings: state.warnings, infos: state.infos });
-    assert.match(shown, /receipt/i, "nothing tells the user the receipts never reached the pull request");
+    assert.match(shown, /receipt|AI change record/i, "nothing tells the user the receipts never reached the pull request");
     assert.ok(/couldn.t|could not|failed|wasn.t|not added/i.test(shown), shown.slice(0, 2000));
   });
 });
@@ -357,8 +289,8 @@ describe("controller: the published body", { timeout: 120_000 }, () => {
     await h.ctrl.handle({ type: "pr_submit", action: "primary" });
     await waitFor(() => lastView(h.posts)?.phase === "done" || lastView(h.posts)?.phase === "failed", "the run");
     const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
-    assert.match(create.body.body, /Receipt for Andromity turn 1/);
-    assert.ok(!create.body.body.includes(PROVENANCE_START));
+    assert.match(create.body.body, /AI change record/);
+    assert.match(create.body.body, /Only the turn this pull request was created from was matched/);
   });
 
   it("asks the engine about the base branch on the remote it pushes to", async () => {

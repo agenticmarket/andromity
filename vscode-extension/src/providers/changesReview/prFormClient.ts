@@ -110,7 +110,7 @@ export function prFormClient(vscode: PrVsCodeApi, hooks: PrClientHooks): void {
       ? '<div class="pr-branch"><span class="pr-chip">new branch</span><input class="pr-input" id="prf-branch" spellcheck="false" maxlength="100" aria-label="New branch name"></div>'
       : '<div class="pr-branch"><code id="prf-current-branch"></code><button type="button" class="pr-link-btn" data-pr-new-branch>Create a new branch instead</button></div>';
     const pull = form.showPullFields
-      ? '<section class="pr-section"><div class="pr-label">' + (form.update ? "Receipt" : "Pull request") + "</div>" +
+      ? '<section class="pr-section"><div class="pr-label">' + (form.update ? "AI change record" : "Pull request") + "</div>" +
         '<div class="pr-field"><div class="pr-field-label">Title</div><input class="pr-input" id="prf-title-input" maxlength="256" aria-label="Pull request title"></div>' +
         '<div class="pr-field"><div class="pr-field-label"><span>Description</span><span class="pr-ai" id="prf-desc-ai"></span></div>' +
         '<textarea class="pr-textarea" id="prf-desc" rows="7" aria-label="Pull request description"></textarea>' +

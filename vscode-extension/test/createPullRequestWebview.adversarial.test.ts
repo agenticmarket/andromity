@@ -68,7 +68,7 @@ function formView(overrides: Record<string, unknown> = {}): any {
     descriptionHint: null,
     chips: [],
     reviewers: { show: true, suggestions: ["priya"], problems: [] },
-    receipt: { show: true, available: true, reason: null, attach: true, label: "Attach this turn's receipt", summary: "Receipt · turn 1", preview: "### Receipt" },
+    receipt: { show: true, available: true, reason: null, attach: true, label: "Add an AI change record", summary: "Receipt · turn 1", preview: "### Receipt" },
     publicNote: null,
     draft: { show: true, on: false },
     checks: null,
