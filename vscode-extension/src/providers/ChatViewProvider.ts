@@ -18,16 +18,21 @@ import { SettingsPanel } from "../panels/SettingsPanel.js";
 import { SessionTabPanel } from "../panels/SessionTabPanel.js";
 import { WaterfallPanel } from "../panels/WaterfallPanel.js";
 import { FingerprintPanel } from "../panels/FingerprintPanel.js";
+import { ReceiptPanel } from "../panels/ReceiptPanel.js";
 import { BackgroundTaskPanel } from "../panels/BackgroundTaskPanel.js";
 import { ChangesReviewPanel } from "../panels/ChangesReviewPanel.js";
+import type { TurnRef } from "../panels/pullRequestController.js";
+import { warnIfOnSnapshotBranch } from "../integrations/snapshotBranchWarning.js";
+import { reviewTargetFromLabel, type ReviewHost, type ReviewTarget } from "../integrations/pullRequest/reviewPullRequest.js";
 import { PythonBridge } from "../server/PythonBridge.js";
 import { RpcClient } from "../server/RpcClient.js";
 import { handleInputMessage } from "../server/inputBridge.js";
+import { maybeShowPullRequestsTip } from "../panels/repoView/repoViewTip.js";
 import { handleInteractionMessage, reportDisconnectedAction } from "../server/interactionBridge.js";
 import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck, supportsKeyTests, unverifiedNotice } from "../server/keyCheck.js";
 import { SessionHydration } from "../server/sessionHydration.js";
 import {
-  allowOpenPath,
+  checkOpenPath,
   clampPromptMode,
   confirmAndromityTrust,
   confirmPermissionMode,
@@ -119,6 +124,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _workspaceIndex: Promise<{ files: string[]; dirs: string[] }> | null = null;
   private _workspaceIndexTimer: NodeJS.Timeout | null = null;
   private _latestTurnFiles: Set<string> = new Set<string>();
+  /** The session and turn number of _latestTurnFiles; the number arrives with the turn's receipt. */
+  private _latestTurn: TurnRef | null = null;
+  /** GitHub text waiting to go with one prompt in the review's own new chat, keyed by that chat. */
+  private _pendingExternal = new Map<string, { prompt: string; external: { source: string; text: string }; target: ReviewTarget | null }[]>();
+  /** Chats that review a pull request. */
+  private _reviewSessions = new Map<string, ReviewTarget>();
   private _hydration = new SessionHydration();
 
   public async undoSession(sessionId: string, turnIndex?: number, turnsToUndo?: number): Promise<SessionUndoResult | undefined> {
@@ -542,6 +553,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._isExecuting = false;
     this._runningSessions.clear();
     void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+    ChangesReviewPanel.setAgentRunning(false);
   }
 
   public isSessionRunning(sessionId?: string): boolean {
@@ -873,38 +885,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         cleanPath = match[1];
         if (!line) line = parseInt(match[2], 10);
       }
-      if (!(await allowOpenPath(cleanPath))) return;
-      const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      let resolvedPath = path.isAbsolute(cleanPath) ? cleanPath : (ws ? path.join(ws, cleanPath) : cleanPath);
-
-      if (!fs.existsSync(resolvedPath)) {
-        let found = false;
-        if (vscode.workspace.workspaceFolders) {
-          for (const wf of vscode.workspace.workspaceFolders) {
-            const candidate = path.join(wf.uri.fsPath, cleanPath);
-            if (fs.existsSync(candidate)) {
-              resolvedPath = candidate;
-              found = true;
-              break;
-            }
-          }
-        }
-        if (!found) {
-          const matchDir = this._findWorkspaceDirectory(cleanPath);
-          if (matchDir) {
-            resolvedPath = matchDir;
-            found = true;
-          }
-        }
-        if (!found) {
-          const files = await vscode.workspace.findFiles(`**/${cleanPath}`, "**/node_modules/**", 1);
-          if (files && files.length > 0) {
-            resolvedPath = files[0].fsPath;
-            found = true;
-          }
-        }
-      }
-
+      const resolvedPath = await this._chatLinkTarget(cleanPath);
+      if (!resolvedPath) return;
       const uri = vscode.Uri.file(resolvedPath);
 
       // If directory/folder: reveal in Explorer sidebar view
@@ -930,6 +912,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to open: ${err.message}`);
     }
+  }
+
+  /** The real path a chat link opens: the path itself, then the same path under
+   *  each workspace folder, then a folder or file of that name in the workspace.
+   *  Every candidate goes through the open-path policy and the first one that
+   *  exists decides. */
+  private async _chatLinkTarget(cleanPath: string): Promise<string | null> {
+    let check = await checkOpenPath(cleanPath);
+    for (const wf of vscode.workspace.workspaceFolders ?? []) {
+      if (check.status !== "missing") break;
+      check = await checkOpenPath(path.join(wf.uri.fsPath, cleanPath));
+    }
+    if (check.status === "missing") {
+      const found = this._findWorkspaceDirectory(cleanPath)
+        ?? (await vscode.workspace.findFiles(`**/${cleanPath}`, "**/node_modules/**", 1))[0]?.fsPath;
+      if (found) check = await checkOpenPath(found);
+    }
+    if (check.status === "open") return check.path;
+    if (check.status === "missing") vscode.window.showErrorMessage(`Could not find ${cleanPath}.`);
+    return null;
   }
 
   private _findWorkspaceDirectory(dirName: string): string | null {
@@ -1314,15 +1316,112 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Open the dedicated Changes Review Webview tab.
    *  `turnFiles: null` means the caller has no turn scope (e.g. an edit row in a
    *  still-running turn), so the latest completed turn must not be substituted. */
-  public openReviewWebview(filePath?: string, turnFiles?: string[] | null) {
+  public openReviewWebview(filePath?: string, turnFiles?: string[] | null, turn?: TurnRef | null, openPullRequest = false) {
+    ChangesReviewPanel.setSessionLookup(() => this._currentSessionId || null);
+    const useLatest = turnFiles === undefined && this._latestTurnFiles.size > 0;
     const effectiveTurnFiles = turnFiles === null
       ? undefined
-      : (turnFiles ?? (this._latestTurnFiles.size > 0 ? Array.from(this._latestTurnFiles) : undefined));
+      : (turnFiles ?? (useLatest ? Array.from(this._latestTurnFiles) : undefined));
+    const effectiveTurn = useLatest ? this._latestTurn : turn ?? null;
+    const scoped = !!effectiveTurn || openPullRequest;
     if (this._diffManager) {
-      this._diffManager.openReviewWebview(filePath, effectiveTurnFiles);
+      if (scoped) this._diffManager.openReviewWebview(filePath, effectiveTurnFiles, effectiveTurn, openPullRequest);
+      else this._diffManager.openReviewWebview(filePath, effectiveTurnFiles);
     } else if (this._context) {
-      ChangesReviewPanel.createOrShow(this._extensionUri, this._rpcClient, filePath, effectiveTurnFiles);
+      if (scoped) ChangesReviewPanel.createOrShow(this._extensionUri, this._rpcClient, filePath, effectiveTurnFiles, effectiveTurn, openPullRequest);
+      else ChangesReviewPanel.createOrShow(this._extensionUri, this._rpcClient, filePath, effectiveTurnFiles);
     }
+  }
+
+  /** The turn an answer's files belong to, when the chat knows its number. */
+  public turnRefFrom(message: any, sessionId = this._currentSessionId): TurnRef | null {
+    return sessionId && Array.isArray(message?.turnFiles) && Number.isSafeInteger(message?.turnIndex) && message.turnIndex >= 0
+      ? { sessionId, turnIndex: message.turnIndex }
+      : null;
+  }
+
+  /** The GitHub text waiting for this exact prompt in this chat. The webview can't supply it. It is taken while the
+   *  prompt is sent, kept once the engine accepts it, and put back if sending fails, so a retry still carries it. */
+  private _claimPendingExternal(prompt: string, sessionId: string | undefined): {
+    external: { source: string; text: string };
+    confirm(): void;
+    release(retryPrompt?: string): void;
+  } | null {
+    if (!sessionId) return null;
+    const queue = this._pendingExternal?.get(sessionId);
+    const at = queue ? queue.findIndex((entry) => entry.prompt === prompt) : -1;
+    if (!queue || at < 0) return null;
+    const [entry] = queue.splice(at, 1);
+    if (!queue.length) this._pendingExternal.delete(sessionId);
+    let settled = false;
+    return {
+      external: entry.external,
+      confirm: () => {
+        if (settled) return;
+        settled = true;
+        if (entry.target) this._reviewSessions?.set(sessionId, entry.target);
+      },
+      release: (retryPrompt?: string) => {
+        if (settled) return;
+        settled = true;
+        const again = this._pendingExternal.get(sessionId) ?? [];
+        again.unshift({ ...entry, prompt: retryPrompt ?? entry.prompt });
+        this._pendingExternal.set(sessionId, again);
+      },
+    };
+  }
+
+  /** What the pull request review commands need from the chat. */
+  public reviewHost(): ReviewHost {
+    return {
+      startExternalTask: async (prompt, external, taskName, target, projectPath) => {
+        if (!this._rpcClient) throw new Error("Andromity's engine isn't running.");
+        const folders = vscode.workspace.workspaceFolders ?? [];
+        const inWorkspace = projectPath && folders.some((folder) => {
+          const relative = path.relative(folder.uri.fsPath, projectPath);
+          return relative === "" || (relative.split(/[\\/]/)[0] !== ".." && !path.isAbsolute(relative));
+        });
+        const created = await this._rpcClient.call<SessionInfo>("session.create", {
+          name: taskName,
+          project_path: inWorkspace ? projectPath : folders[0]?.uri.fsPath,
+        });
+        if (!created?.id) throw new Error("The review chat couldn't be created.");
+        this._sessionNames.set(created.id, created.name || taskName);
+        const queue = this._pendingExternal.get(created.id) ?? [];
+        queue.push({ prompt, external, target });
+        this._pendingExternal.set(created.id, queue);
+        void this.fetchAndPostSessions();
+        await this.sendPromptFromExternal(prompt, undefined, { taskName, targetSessionId: created.id, forkSessionIfBusy: false });
+      },
+      reviewIn: async (sessionId) => {
+        const sid = sessionId || this._currentSessionId;
+        if (!sid) return null;
+        const known = this._reviewSessions.get(sid);
+        if (known) return { sessionId: sid, target: known };
+        if (!this._rpcClient) return null;
+        const data = await this._rpcClient.call<any>("session.get", { session_id: sid }).catch(() => null);
+        const target = reviewTargetFromLabel(data?.external_review);
+        if (!target) return null;
+        this._reviewSessions.set(sid, target);
+        return { sessionId: sid, target };
+      },
+      lastAnswer: async (sessionId) => {
+        if (!this._rpcClient) return null;
+        const data = await this._rpcClient.call<any>("session.get", { session_id: sessionId }).catch(() => null);
+        const messages: any[] = Array.isArray(data?.messages) ? data.messages : [];
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const message = messages[i];
+          if (message?.role === "assistant" && typeof message.content === "string" && message.content.trim()) return message.content;
+        }
+        return null;
+      },
+      modelLabel: () => this._currentModel || "the chat's model",
+    };
+  }
+
+  /** Opens Changes Review on the latest turn with the Create pull request form. */
+  public createPullRequest() {
+    this.openReviewWebview(undefined, undefined, undefined, true);
   }
 
   /** Refresh config and models from daemon without wiping chat messages */
@@ -1486,7 +1585,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._isExecuting = true;
       }
       this._latestTurnFiles.clear();
+      this._latestTurn = null;
+      void warnIfOnSnapshotBranch();
       void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
+      ChangesReviewPanel.setAgentRunning(true);
       this._postToWebview({ type: "agent_started", ...params });
       if (sid && this._context) {
         const config = vscode.workspace.getConfiguration("andromity");
@@ -1677,9 +1779,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("mcp/statusChanged", () => this._refreshSidePanel(["mcp"]));
 
+    bind("receipt/ready", (params: any) => {
+      this._postToWebview({ type: "receipt_ready", ...params });
+      const latest = this._latestTurn;
+      if (latest && latest.turnIndex === null && params?.session_id === latest.sessionId && Number.isSafeInteger(params?.turn_index)) {
+        this._latestTurn = { sessionId: latest.sessionId, turnIndex: params.turn_index };
+        ChangesReviewPanel.currentPanel?.updateTurnIndex(latest.sessionId, params.turn_index);
+      }
+    });
+
     bind("agent/done", (params: any) => {
       const sid = params?.session_id || this._currentSessionId;
-      if (params?.error_action === "join_waitlist") void this._waitlist?.markOffered();
+      if (params?.outcome === "error" && params?.error_type === "quota_exceeded" && params?.error_action === "join_waitlist") {
+        void this._waitlist?.markOffered();
+      }
       this._noteWhileAway("reply", params);
       this._refreshSidePanel(["changes"]);
       if (sid) {
@@ -1690,17 +1803,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       if (this._runningSessions.size === 0) {
         void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+        ChangesReviewPanel.setAgentRunning(false);
       }
 
       const turnFiles: string[] | undefined = params?.turn_files;
       if (Array.isArray(turnFiles)) {
         this._latestTurnFiles = new Set(turnFiles);
+        this._latestTurn = sid ? { sessionId: sid, turnIndex: null } : null;
         if (ChangesReviewPanel.currentPanel) {
-          ChangesReviewPanel.currentPanel.setTurnFiles(turnFiles);
+          ChangesReviewPanel.currentPanel.setTurnFiles(turnFiles, this._latestTurn);
         }
       }
 
       this._postToWebview({ type: "agent_done", ...params, turn_files: turnFiles });
+      const review = sid ? this._reviewSessions?.get(sid) : undefined;
+      if (review && params?.outcome === "success") {
+        void vscode.window.showInformationMessage(`The review of #${review.number} is ready in the chat.`, "Edit and post").then((choice) => {
+          if (choice) void vscode.commands.executeCommand("andromity.postPullRequestReview", sid);
+        });
+      } else if (params?.outcome === "success" && !params?.scheduled && Array.isArray(turnFiles) && turnFiles.length) {
+        void maybeShowPullRequestsTip(this._context);
+      }
       // Scheduled runs report through their own cron notification instead.
       if (this.isSoundEnabled("done") && !params?.scheduled) {
         this._postToWebview({ type: "play_sound", kind: "done" });
@@ -1730,6 +1853,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       if (this._runningSessions.size === 0) {
         void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+        ChangesReviewPanel.setAgentRunning(false);
       }
       this._postToWebview({ type: "agent_cancelled", ...params });
     });
@@ -1744,6 +1868,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       if (this._runningSessions.size === 0) {
         void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+        ChangesReviewPanel.setAgentRunning(false);
       }
       this._postToWebview({ type: "agent_error", ...params });
     });
@@ -2484,7 +2609,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     if (message.type === "open_diff" || message.type === "open_review_tab" || message.type === "open_changes_review") {
-      this.openReviewWebview(message.filePath, message.turnFiles);
+      this.openReviewWebview(message.filePath, message.turnFiles, this.turnRefFrom(message));
       return;
     }
 
@@ -2516,11 +2641,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    if (this._rpcClient && await handleInputMessage(this._rpcClient, message, this._currentSessionId || "", (event) => {
-      const data = event as { type: string; session_id?: string };
-      if (data.type === "input_session" && data.session_id) this._currentSessionId = data.session_id;
-      this._postToWebview(event);
-    }, this._currentMode)) return;
+    const queuedExternal = message?.type === "submit_input" && this._rpcClient
+      ? this._claimPendingExternal(typeof message.prompt === "string" ? message.prompt : "", message.sessionId || this._currentSessionId)
+      : null;
+    let handled = false;
+    try {
+      handled = !!this._rpcClient && await handleInputMessage(this._rpcClient, message, this._currentSessionId || "", (event) => {
+        const data = event as { type: string; session_id?: string };
+        if (data.type === "input_session" && data.session_id) this._currentSessionId = data.session_id;
+        if (data.type === "input_accepted") queuedExternal?.confirm();
+        if (data.type === "input_rejected") queuedExternal?.release();
+        this._postToWebview(event);
+      }, this._currentMode, queuedExternal?.external ?? null);
+    } finally {
+      queuedExternal?.release();
+    }
+    if (handled) return;
 
     if (await handleInteractionMessage(this._rpcClient, message, this._currentSessionId, (event) => this._postToWebview(event))) return;
     if (await handlePromptImageMessage(this._rpcClient, message, this._currentSessionId, (event) => this._postToWebview(event))) return;
@@ -2558,6 +2694,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "send_prompt": {
         let promptText = message.prompt || "";
+        const pendingSid = message.sessionId || this._currentSessionId;
+        const pendingQueue = this._pendingExternal?.get(pendingSid);
+        const pendingAt = pendingQueue ? pendingQueue.findIndex((entry) => entry.prompt === promptText) : -1;
+        const pendingExternal = pendingQueue && pendingAt >= 0 ? pendingQueue[pendingAt] : undefined;
+        let pendingClaim: ReturnType<ChatViewProvider["_claimPendingExternal"]> = null;
         console.log('[Andromity ext] send_prompt recv:', promptText.slice(0,120), 'sess', this._currentSessionId, 'hasClient', !!this._rpcClient);
         try {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -2589,6 +2730,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               this._isExecuting = true;
             }
             void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
+            ChangesReviewPanel.setAgentRunning(true);
           }
           void this._rpcClient.call("telemetry.recordFeature", {
             feature: "prompt_sent",
@@ -2603,9 +2745,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }).catch(() => {});
           }
 
+          if (pendingExternal && activeSid !== pendingSid) {
+            throw new Error("The review's chat changed before its prompt was sent. Start the review again.");
+          }
+          if (pendingExternal) pendingClaim = this._claimPendingExternal(pendingExternal.prompt, pendingSid);
           await this._rpcClient.call("agent.prompt", {
             session_id: activeSid,
             prompt: promptText,
+            ...(pendingExternal ? { external_context: pendingExternal.external } : {}),
             project_path: workspaceFolder,
             profile: message.profile || this._currentProfile,
             model: cleanModel,
@@ -2614,9 +2761,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             reasoning_effort: message.reasoningEffort || this._currentReasoning,
             image_uris: message.images || [],
           }, 600000);
+          pendingClaim?.confirm();
         } catch (err: any) {
           const activeSid = message.sessionId || this._currentSessionId;
           const msg = err.message || String(err);
+          if (msg.includes("RPC timeout")) pendingClaim?.confirm();
+          else if (msg.includes("already running a turn") || msg.includes("-32603") || msg.includes("AGENT_BUSY")) pendingClaim?.release(promptText);
+          else pendingClaim?.release();
           const lowerMsg = msg.toLowerCase();
 
           // Error category only; no message text or paths
@@ -2653,6 +2804,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               }
               if (this._runningSessions.size === 0) {
                 void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+                ChangesReviewPanel.setAgentRunning(false);
               }
             }
             this._postToWebview({ type: "agent_error", error: msg });
@@ -3176,6 +3328,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
           if (this._runningSessions.size === 0) {
             void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+            ChangesReviewPanel.setAgentRunning(false);
           }
         }
         try {
@@ -3251,7 +3404,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "open_review_tab":
       case "open_changes_review": {
         recordFeatureUse("changes_review_opened", { sessionId: this._currentSessionId, oncePerSession: true });
-        this.openReviewWebview(message.filePath, message.turnFiles);
+        this.openReviewWebview(message.filePath, message.turnFiles, this.turnRefFrom(message));
         break;
       }
 
@@ -3327,6 +3480,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this._rpcClient,
             this._context!
           );
+        }
+        break;
+      }
+
+      case "open_receipt": {
+        const sid = typeof message.sessionId === "string" && message.sessionId ? message.sessionId : this.getCurrentSessionId();
+        const turn = Number.isSafeInteger(message.turnIndex) && message.turnIndex >= 0 ? message.turnIndex : null;
+        if (sid) {
+          ReceiptPanel.createOrShow(this._extensionUri, sid, this._sessionNames.get(sid) || "Chat Session", this._rpcClient, turn);
         }
         break;
       }
@@ -3665,7 +3827,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "open_diff": {
         void this._rpcClient?.call("telemetry.recordFeature", { feature: "open_diff", session_id: this._currentSessionId }).catch(() => {});
-        this.openReviewWebview(message.filePath, message.turnFiles);
+        this.openReviewWebview(message.filePath, message.turnFiles, this.turnRefFrom(message));
         break;
       }
 

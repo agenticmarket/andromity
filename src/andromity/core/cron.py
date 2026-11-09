@@ -563,7 +563,7 @@ def cron_tool_decision(job: "CronJob", tool_name: str, args: Dict[str, Any], tru
         from andromity.core.security import is_command_allowlisted
         command = str(args.get("command", "")).strip()
         allowed = effective_allowed_commands(job, default_allowed)
-        if is_command_allowlisted(command, allowed):
+        if is_command_allowlisted(command, allowed, job.project_path):
             return True, None
         listed = ", ".join(allowed) if allowed else "none"
         return False, (

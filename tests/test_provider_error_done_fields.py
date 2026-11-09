@@ -274,20 +274,22 @@ async def test_an_error_event_during_the_stream_fills_every_field(serve):
     assert len(endpoint.requests) == 1, "text was already shown, so the turn is not sent again"
 
 
-async def test_a_gateway_error_event_during_the_stream_still_carries_the_action(serve):
+async def test_a_typed_error_event_during_a_gateway_stream_chooses_no_card_or_action(serve):
+    """The gateway refuses at the daily limit with a 429 before any token. An error event inside its stream is a
+    provider's, so its type and action are not the gateway's and must not choose the card or offer the waitlist."""
     event = {"error": {"message": GATEWAY_LIMIT_MESSAGE, "type": "quota_exceeded", "action": "join_waitlist"}}
     serve(_stream("Hel", then=event), name="andromity", key=None, remote=False)
     text, done = await _call("andromity")
-    assert done.error_type == "quota_exceeded" and done.error_action == "join_waitlist"
+    assert done.error_type != "quota_exceeded" and done.error_action is None
     assert done.error_detail.startswith("gateway_") and DETAIL.fullmatch(done.error_detail)
-    assert 'data-error-action="join_waitlist"' in text
+    assert "data-error-action" not in text
 
 
 @pytest.mark.parametrize("name,event,requests,expected", [
     ("acme", {"error": {"message": "Rate limit reached, slow down", "code": 429}}, 4,
      {"error_type": "rate_limit", "error_action": None}),
-    ("andromity", {"error": {"message": GATEWAY_LIMIT_MESSAGE, "type": "quota_exceeded", "action": "join_waitlist"}}, 1,
-     {"error_type": "quota_exceeded", "error_action": "join_waitlist"}),
+    ("andromity", {"error": {"message": GATEWAY_LIMIT_MESSAGE, "type": "quota_exceeded", "action": "join_waitlist"}}, 4,
+     {"error_action": None}),
 ])
 async def test_an_error_event_before_any_text_ends_with_one_full_done(serve, name, event, requests, expected):
     endpoint = serve(_stream(then=event), name=name, key=None if name == "andromity" else OWN_KEY,

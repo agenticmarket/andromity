@@ -20,6 +20,7 @@ import type { WaitlistController } from "../engagement/waitlistController.js";
 import { DOCS, INTEGRATIONS_URL } from "../docsLinks.js";
 import { CONNECTOR_ICONS } from "./connectorIcons.js";
 import { CONNECTOR_GUIDE_SLUGS } from "./connectorGuides.js";
+import { applyGitSetting, getGitSettingsPane, gitSettingsClient, gitSettingsState, signInToGitHub } from "./settings/gitSettings.js";
 
 // Hub actions recorded as anonymous feature use (the action name only, never the values).
 const HUB_FEATURES: Record<string, string> = {
@@ -993,6 +994,26 @@ export class SettingsPanel {
         });
         break;
       }
+
+      case "git_settings_get":
+        this._panel.webview.postMessage({ type: "git_settings", state: await gitSettingsState() });
+        break;
+
+      case "git_settings_set": {
+        const error = await applyGitSetting(message.key, message.value);
+        if (error) {
+          this._panel.webview.postMessage({ type: "git_settings_error", key: message.key, error });
+        } else {
+          if (typeof message.key === "string") recordFeatureUse("pref_git_" + message.key.replace(/^pullRequest\./, "pr_"));
+          this._panel.webview.postMessage({ type: "git_settings", state: await gitSettingsState() });
+        }
+        break;
+      }
+
+      case "git_sign_in":
+        await signInToGitHub();
+        this._panel.webview.postMessage({ type: "git_settings", state: await gitSettingsState() });
+        break;
 
       case "toggle_coauthor": {
         const config = vscode.workspace.getConfiguration("andromity");
@@ -2850,9 +2871,53 @@ export class SettingsPanel {
     .connector-icon.small { width: 20px; height: 20px; border-radius: 4px; }
     .connector-icon.small svg { width: 12px; height: 12px; }
     .connector-icon.small.connector-icon-letter { font-size: 10px; }
-    .connector-category { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin: 12px 0 6px; }
-    .connector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
-    .connector-tile { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--card-border); border-radius: 4px; min-width: 0; }
+    .catalog-filter {
+      background: var(--input-bg);
+      color: var(--input-fg);
+      border: 1px solid var(--input-border);
+      font: inherit;
+      font-size: 12px;
+      padding: 4px 8px;
+      max-width: 100%;
+    }
+    #connectors-search-row { flex-wrap: wrap; }
+    #connectors-search-row .search-input-wrap { min-width: min(100%, 220px); }
+    .catalog-filter:focus-visible { outline: 1px solid var(--card-hover-border); }
+    .catalog-feature {
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) minmax(0, 1fr);
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      margin: 12px 0 18px;
+    }
+    .catalog-feature-art {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 16px;
+      background: radial-gradient(ellipse at center, rgba(0, 127, 212, .23), transparent 75%), var(--bg);
+      color: var(--card-hover-border);
+    }
+    .catalog-feature-art .connector-icon { width: 32px; height: 32px; }
+    .catalog-feature-art .connector-icon.feature-icon { width: 46px; height: 46px; outline: 2px solid var(--card-hover-border); outline-offset: 3px; }
+    .catalog-feature-copy { padding: 15px; }
+    .catalog-feature-copy h3 { margin: 3px 0 4px; font-size: 16px; }
+    .catalog-feature-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .connector-category { font-size: 14px; font-weight: 600; margin: 16px 0 5px; }
+    .connector-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0 14px;
+    }
+    .connector-tile:hover { background: var(--vscode-list-hoverBackground, rgba(var(--tint), .04)); }
+    @media (max-width: 680px) {
+      .connector-grid { grid-template-columns: minmax(0, 1fr); }
+    }
+    @media (max-width: 420px) {
+      .catalog-feature { grid-template-columns: minmax(0, 1fr); }
+    }
+    .connector-grid { display: grid; }
+    .connector-tile { display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-bottom: 1px solid var(--card-border); min-width: 0; }
     .connector-text { flex: 1; min-width: 0; }
     .connector-name { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
     .connector-desc { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
@@ -3310,6 +3375,8 @@ export class SettingsPanel {
     .usage-share-controls select { background:var(--input-bg, #111); color:inherit; border:1px solid var(--card-border); border-radius:5px; padding:7px; max-width:100%; }
     .usage-share-preview-wrap { padding:16px; background:rgba(0,0,0,.15); border-radius:8px; text-align:center; }
     #usage-share-preview { max-width:100%; max-height:420px; object-fit:contain; border-radius:8px; }
+    .setting-group-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); margin: 18px 0 8px; }
+    .git-setting-error { color: var(--vscode-errorForeground); }
   </style>
 </head>
 <body>
@@ -3359,6 +3426,10 @@ export class SettingsPanel {
       <button class="nav-tab" data-tab="trust" id="tab-btn-trust" data-tooltip="Trust & Security" aria-label="Trust & Security">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
         <span class="nav-tab-label">Trust & Security</span>
+      </button>
+      <button class="nav-tab" data-tab="git" id="tab-btn-git" data-tooltip="Git & Pull Requests" aria-label="Git & Pull Requests">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><line x1="6" y1="9" x2="6" y2="21"></line></svg>
+        <span class="nav-tab-label">Git & Pull Requests</span>
       </button>
       <button class="nav-tab" data-tab="general" id="tab-btn-general" data-tooltip="Preferences" aria-label="Preferences">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
@@ -3704,6 +3775,7 @@ export class SettingsPanel {
             </svg>
             <input type="text" class="search-input" id="connectors-search" placeholder="Search apps by name or category (e.g. email, issues, payments)...">
           </div>
+          <select class="catalog-filter" id="connectors-category-filter" aria-label="Connector category"><option value="">All categories</option></select>
         </div>
       </div>
       <div id="mcp-view-yours">
@@ -4034,17 +4106,10 @@ export class SettingsPanel {
           </div>
         </div>
 
-        <div class="settings-card">
-          <label class="checkbox-row">
-            <input type="checkbox" id="setting-coauthor">
-            <div>
-              <div class="setting-label">Git Co-Author Attribution</div>
-              <div class="setting-desc">Append <code>Co-authored-by: Andromity &lt;333054755+andromity-bot@users.noreply.github.com&gt;</code> trailer to AI-generated commit messages and to commits the agent creates.</div>
-            </div>
-          </label>
-        </div>
       </div>
     </div>
+
+    ${getGitSettingsPane(DOCS.preferences)}
 
     <!-- ── TAB: PERSONALISATION ───────────────────────────────────── -->
     <div class="tab-pane" id="pane-personalisation">
@@ -4623,6 +4688,7 @@ SOFTWARE.</pre>
       renderConnectors();
     });
 
+    document.getElementById("connectors-category-filter")?.addEventListener("change", renderConnectors);
     const btnSkillsInstalled = document.getElementById("filter-skills-installed");
     const btnSkillsRegistry = document.getElementById("filter-skills-registry");
 
@@ -5928,6 +5994,7 @@ SOFTWARE.</pre>
     }
 
     ${getUsageScript()}
+    (${gitSettingsClient.toString()})(vscode);
 
     function renderUsageChart(sessions, range) {
       const container = document.getElementById("usage-bar-chart-container");
@@ -6224,6 +6291,10 @@ SOFTWARE.</pre>
       return remote && remote.version && remote.version !== installed.version ? remote : null;
     }
 
+    function catalogOption(value, label) {
+      return '<option value="' + escapeHtml(value) + '">' + escapeHtml(label) + '</option>';
+    }
+
     function skillChip(action, value, label, active, count) {
       return '<button type="button" class="chip' + (active ? ' active' : '') + '" data-action="' + action + '" data-value="' + escapeHtml(value) + '">' +
         escapeHtml(label) + (count === undefined ? '' : '<span class="chip-count">' + count + '</span>') + '</button>';
@@ -6503,8 +6574,15 @@ SOFTWARE.</pre>
         return;
       }
       const query = connectorQuery.trim().toLowerCase();
-      const matches = allConnectors.filter(c => !query ||
-        [c.name, c.description, c.category].some(v => String(v || "").toLowerCase().includes(query)));
+      const categoryFilter = document.getElementById("connectors-category-filter");
+      const categoryLabel = category => category === "Google" ? "Google Workspace" : category;
+      const categories = [...new Set(allConnectors.map(c => c.category))];
+      const category = categories.includes(categoryFilter.value) ? categoryFilter.value : "";
+      categoryFilter.innerHTML = catalogOption("", "All categories") +
+        categories.map(value => catalogOption(value, categoryLabel(value))).join("");
+      categoryFilter.value = category;
+      const matches = allConnectors.filter(c => (!category || c.category === category) && (!query ||
+        [c.name, c.description, categoryLabel(c.category)].some(v => String(v || "").toLowerCase().includes(query))));
       if (matches.length === 0) {
         list.innerHTML = '<div class="section-desc">No apps match your search. Use Add MCP Server for any other MCP server URL.</div>';
         return;
@@ -6515,8 +6593,20 @@ SOFTWARE.</pre>
         if (!group) { group = { category: c.category, items: [] }; groups.push(group); }
         group.items.push(c);
       });
-      list.innerHTML = groups.map(g =>
-        '<div class="connector-category">' + escapeHtml(g.category) + '</div>' +
+      const featured = !query && !category && matches.find(c => c.id === "linear");
+      const spotlight = featured
+        ? '<section class="catalog-feature"><div class="catalog-feature-art" aria-hidden="true">' +
+          ["notion", "linear", "google-drive"].map(id => connectorIcon(id, id, id === "linear" ? "feature-icon" : "")).join("") +
+          '</div><div class="catalog-feature-copy"><span class="chip-label">Featured connector</span><h3>' + escapeHtml(featured.name) + '</h3>' +
+          '<p class="section-desc">' + escapeHtml(featured.description) + '</p><div class="catalog-feature-actions">' +
+          (featured.connected ? '<span class="badge green">Connected</span>'
+            : '<button class="btn" data-action="connector_connect" data-id="' + escapeHtml(featured.id) + '">Connect</button>') +
+          (CONNECTOR_GUIDE_SLUGS[featured.id] ? '<a href="#" class="connector-guide" data-action="open_connector_guide" data-slug="' + escapeHtml(CONNECTOR_GUIDE_SLUGS[featured.id]) + '">Setup guide</a>' : '') +
+          '</div></div></section>'
+        : "";
+      list.innerHTML = spotlight + groups.map(g =>
+        '<h3 class="connector-category">' + escapeHtml(categoryLabel(g.category)) +
+          ' <span class="chip-count">(' + g.items.length + ')</span></h3>' +
         '<div class="connector-grid">' + g.items.map(c =>
           '<div class="connector-tile">' +
             connectorIcon(c.id, c.name, "") +

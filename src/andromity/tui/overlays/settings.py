@@ -583,7 +583,7 @@ SettingsScreen {
                             yield Switch(id="setting-dryrun")
                         with Horizontal(classes="adv-row"):
                             yield Label(
-                                "Anonymous Telemetry  [dim](session start/end · provider · model name · OS · version — never prompts or paths)[/]",
+                                "Usage Telemetry  [dim](random install ID · sessions · features · provider · model · OS · version — never prompts, code or paths)[/]",
                                 classes="adv-label")
                             yield Switch(id="setting-telemetry")
                         with Horizontal(classes="adv-row"):

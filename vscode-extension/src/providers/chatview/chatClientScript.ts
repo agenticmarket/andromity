@@ -250,9 +250,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const refreshingProviders = new Set();
     let sessionDisplayLimit = 10;
     const sessionsState = {};
+    const COMPACTION_ACKNOWLEDGEMENTS = [
+      'Understood. I have the context of our earlier discussion and will continue from here.',
+      'Understood. I have the context from our previous conversation and will continue from here.',
+    ];
     const sessionLiveBuffer = new Map(); // sessionId -> Array<raw msg> for replay when switching to a live session
     let turnEditedFiles = new Set();
     let globalDiffStats = {};
+    let finishedTurnFileStats = null;
     let lastTurnPrompt = null;
     const btnScrollBottom = document.getElementById('btn-scroll-bottom');
     const scrollUnreadBadge = document.getElementById('scroll-unread-badge');
@@ -1181,6 +1186,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     // Per-agent counter so a subagent calling the same tool multiple times renders
     // one item per invocation instead of collapsing into a single line.
     const subToolSeqCounts = {};
+
+    // Engine timestamps are epoch seconds. Anything else, or a time well in the future, falls back to now.
+    function toolStartMs(ts) {
+      const now = Date.now();
+      if (typeof ts !== 'number' || !Number.isFinite(ts) || ts < 1e9 || ts * 1000 > now + 60000) return now;
+      return Math.min(now, ts * 1000);
+    }
 
     function ensureToolSequence() {
       if (currentToolSequence && !toolSeqFinished) return currentToolSequence;
@@ -4566,6 +4578,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'next-step-new-session':
           startNextStepInNewSession();
           break;
+        case 'next-step-select':
+          selectNextStepOption(target.getAttribute('data-opt-idx'));
+          break;
+        case 'next-step-expand':
+          toggleNextStepPrompt();
+          break;
+        case 'next-step-edit':
+          acceptNextStepIntoInput(target.getAttribute('data-opt-idx'));
+          promptInput.focus();
+          break;
         case 'next-step-dismiss':
           dismissNextStep('dismissed');
           promptInput.focus();
@@ -4664,7 +4686,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             } catch (err) {}
           }
           const fPath = target.getAttribute('data-file-path') || target.closest('[data-file-path]')?.getAttribute('data-file-path');
-          vscode.postMessage({ type: 'open_review_tab', filePath: fPath, turnFiles: turnFiles });
+          let reviewTurnIndex = null;
+          const reviewWrap = target.closest('.message-wrap');
+          const reviewKeyed = reviewWrap ? reviewWrap.querySelector('[data-turn-key]') : null;
+          const reviewKey = reviewKeyed ? reviewKeyed.getAttribute('data-turn-key') : null;
+          const reviewState = reviewKey ? ownSessionState(currentSessionId) : null;
+          const reviewReceipts = reviewState && reviewState.receipts && typeof reviewState.receipts === 'object' ? reviewState.receipts : null;
+          const reviewEntry = reviewReceipts && Object.prototype.hasOwnProperty.call(reviewReceipts, reviewKey) ? reviewReceipts[reviewKey] : null;
+          if (reviewEntry && Number.isSafeInteger(reviewEntry.turn_index) && reviewEntry.turn_index >= 0) reviewTurnIndex = reviewEntry.turn_index;
+          const reviewMessage = { type: 'open_review_tab', filePath: fPath, turnFiles: turnFiles };
+          if (reviewTurnIndex !== null) reviewMessage.turnIndex = reviewTurnIndex;
+          vscode.postMessage(reviewMessage);
           break;
         }
         case 'toggle-timeline':
@@ -5062,6 +5094,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'copy-message':
           copyMessageText(target);
           break;
+        case 'open-receipt': {
+          const receiptTurn = parseInt(target.getAttribute('data-turn') || '', 10);
+          vscode.postMessage({ type: 'open_receipt', sessionId: currentSessionId, turnIndex: isNaN(receiptTurn) ? turnIndexForElement(target) : receiptTurn });
+          break;
+        }
         case 'approve-tool':
         case 'approve-tool-once':
           window.approveTool(target.getAttribute('data-approval-id'), 'once', target.getAttribute('data-tool'));
@@ -7402,6 +7439,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     var FOOTER_CLOCK_ICON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
     var FOOTER_COPY_ICON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
     var FOOTER_CHECK_ICON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    var FOOTER_RECEIPT_ICON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"></path><path d="M9 7h6"></path><path d="M9 11h6"></path><path d="M9 15h4"></path></svg>';
 
     /**
      * Single source of truth for the post-response meta strip:
@@ -7430,17 +7468,224 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       metaHtml += '<span class="message-time">' + timeStr + '</span></span>';
 
-      var actionsHtml = '';
+      var buttons = '';
       if (opts.copyAction) {
         var copyTitle = opts.copyTitle || 'Copy';
-        actionsHtml = '<span class="message-actions">' +
-          '<button type="button" class="msg-copy-btn" data-action="' + opts.copyAction + '" title="' + copyTitle + '" aria-label="' + copyTitle + '">' +
+        buttons += '<button type="button" class="msg-copy-btn" data-action="' + opts.copyAction + '" title="' + copyTitle + '" aria-label="' + copyTitle + '">' +
           FOOTER_COPY_ICON + '<span class="msg-action-label">Copy</span>' +
-          '</button></span>';
+          '</button>';
       }
+      if (opts.receiptAction) {
+        var turnKey = typeof opts.receiptTurnKey === 'string' && /^[0-9a-f]{32}$/.test(opts.receiptTurnKey) ? ' data-turn-key="' + opts.receiptTurnKey + '"' : '';
+        buttons += '<button type="button" class="msg-copy-btn msg-receipt-btn" data-action="open-receipt"' + turnKey + ' title="What this turn read, changed and ran" aria-label="Open the receipt for this turn" hidden>' +
+          FOOTER_RECEIPT_ICON + '<span class="msg-action-label">Receipt</span>' +
+          '</button>';
+      }
+      var actionsHtml = buttons ? '<span class="message-actions">' + buttons + '</span>' : '';
 
       footer.innerHTML = metaHtml + actionsHtml;
       return footer;
+    }
+
+    function turnIndexForElement(el) {
+      for (var node = el.closest('.message-wrap'); node; node = node.previousElementSibling) {
+        if (node.matches && node.matches('.message-wrap.user:not([data-steering])')) {
+          var value = parseInt(node.getAttribute('data-turn-index') || '', 10);
+          return isNaN(value) ? null : value;
+        }
+      }
+      return null;
+    }
+
+    var RECEIPT_TURN_KEY = /^[0-9a-f]{32}$/;
+
+    function isSafeStateKey(id) {
+      return typeof id === 'string' && id !== '' && id !== '__proto__' && id !== 'constructor' && id !== 'prototype';
+    }
+
+    function receiptCount(value) {
+      return Number.isInteger(value) && value >= 0 && value < 1000 ? value : null;
+    }
+
+    function receiptTally(value) {
+      return Number.isInteger(value) && value >= 0 && value < 1000000 ? value : null;
+    }
+
+    /** A receipt turn as the engine reported it, or null when the data is malformed. */
+    function receiptEntry(raw) {
+      if (!raw || !Number.isSafeInteger(raw.turn_index) || raw.turn_index < 0) return null;
+      var key = typeof raw.turn_key === 'string' && RECEIPT_TURN_KEY.test(raw.turn_key) ? raw.turn_key : null;
+      var attention = receiptCount(raw.attention);
+      return {
+        turn_index: raw.turn_index, turn_key: key, attention: attention,
+        high: attention === null ? null : receiptCount(raw.high),
+        files: receiptTally(raw.files_changed), commands: receiptTally(raw.commands), failed: receiptTally(raw.commands_failed),
+      };
+    }
+
+    function ownSessionState(sessionId) {
+      if (!isSafeStateKey(sessionId) || !Object.prototype.hasOwnProperty.call(sessionsState, sessionId)) return null;
+      var state = sessionsState[sessionId];
+      return state && typeof state === 'object' ? state : null;
+    }
+
+    function receiptStateFor(sessionId) {
+      if (!isSafeStateKey(sessionId)) return null;
+      var state = ownSessionState(sessionId) || (sessionsState[sessionId] = {});
+      if (!state.receipts || typeof state.receipts !== 'object') state.receipts = Object.create(null);
+      return state;
+    }
+
+    function receiptButtons() {
+      return Array.prototype.slice.call(chatContainer.querySelectorAll('.msg-receipt-btn'));
+    }
+
+    function receiptButtonForTurn(turnIndex) {
+      var prompt = null;
+      chatContainer.querySelectorAll('.message-wrap.user:not([data-steering])').forEach(function (wrap) {
+        if (wrap.getAttribute('data-turn-index') === String(turnIndex)) prompt = wrap;
+      });
+      var found = null;
+      for (var el = prompt ? prompt.nextElementSibling : null; el; el = el.nextElementSibling) {
+        if (el.matches('.message-wrap.user:not([data-steering])')) break;
+        var buttons = el.querySelectorAll('.msg-receipt-btn');
+        if (buttons.length) found = buttons[buttons.length - 1];
+      }
+      return found;
+    }
+
+    /** The button of a turn: by the turn's key when the engine gave one, else (older engines) by counting prompts. */
+    function receiptButtonForEntry(entry) {
+      if (entry.turn_key) {
+        var keyed = receiptButtons().filter(function (button) { return button.getAttribute('data-turn-key') === entry.turn_key; });
+        return keyed.length ? keyed[keyed.length - 1] : null;
+      }
+      return receiptButtonForTurn(entry.turn_index);
+    }
+
+    /** The newest answer's button when it belongs to the newest prompt and no turn has claimed it yet. */
+    function newestUnclaimedReceiptButton() {
+      var buttons = receiptButtons();
+      var newest = buttons[buttons.length - 1];
+      if (!newest || newest.getAttribute('data-turn-key') || newest.getAttribute('data-turn')) return null;
+      var prompts = chatContainer.querySelectorAll('.message-wrap.user:not([data-steering])');
+      var lastPrompt = prompts[prompts.length - 1];
+      return lastPrompt && (lastPrompt.compareDocumentPosition(newest) & Node.DOCUMENT_POSITION_FOLLOWING) ? newest : null;
+    }
+
+    function receiptPlural(count, one, many) {
+      return count + ' ' + (count === 1 ? one : many);
+    }
+
+    /** What a turn did, as words: "Changed 2 files and ran 3 commands", and how many of those commands failed. */
+    function receiptWork(entry) {
+      var parts = [];
+      if (entry.files !== null && entry.files > 0) parts.push('changed ' + receiptPlural(entry.files, 'file', 'files'));
+      var ran = entry.commands !== null && entry.commands > 0;
+      if (ran) parts.push('ran ' + receiptPlural(entry.commands, 'command', 'commands'));
+      var did = parts.join(' and ');
+      return {
+        did: did ? did.charAt(0).toUpperCase() + did.slice(1) : '',
+        failed: ran && entry.failed ? entry.failed + ' failed' : '',
+      };
+    }
+
+    function receiptVerdict(count, high) {
+      if (count === 0) return 'Nothing to check.';
+      return receiptPlural(count, 'thing', 'things') + ' to check' + (high > 0 ? ', ' + Math.min(high, count) + ' high' : '') + '.';
+    }
+
+    /** A sentence under an answer whose turn changed files, ran commands or has something to check, built only from counts.
+     *  It takes the footer link's place, so each answer has one way into its receipt. */
+    function applyReceiptLine(button, entry, count, high) {
+      var footer = button.closest('.message-footer');
+      if (!footer || !footer.parentNode) return null;
+      var before = footer.previousElementSibling;
+      var line = before && before.classList.contains('receipt-line') ? before : null;
+      var work = receiptWork(entry);
+      if (!work.did && count === 0) {
+        if (line) line.remove();
+        return null;
+      }
+      if (!line) {
+        line = document.createElement('button');
+        line.type = 'button';
+        line.className = 'receipt-line';
+        line.setAttribute('data-action', 'open-receipt');
+        line.innerHTML = '<span class="receipt-line-verdict"></span><span class="receipt-line-did"></span>' +
+          '<span class="receipt-line-failed"></span><span class="receipt-line-stop"></span>';
+        footer.parentNode.insertBefore(line, footer);
+      }
+      line.setAttribute('data-turn', String(entry.turn_index));
+      if (entry.turn_key) line.setAttribute('data-turn-key', entry.turn_key);
+      var verdict = receiptVerdict(count, high);
+      var did = work.did ? ' ' + work.did + (work.failed ? '; ' : '') : '';
+      var stop = work.did ? '.' : '';
+      line.querySelector('.receipt-line-verdict').textContent = verdict;
+      line.querySelector('.receipt-line-did').textContent = did;
+      line.querySelector('.receipt-line-failed').textContent = work.failed;
+      line.querySelector('.receipt-line-stop').textContent = stop;
+      line.classList.toggle('has-attention', count > 0);
+      line.classList.toggle('has-high', count > 0 && high > 0);
+      line.title = 'Open the receipt: what this turn read, changed and ran, and who approved it';
+      line.setAttribute('aria-label', 'Open the receipt for this turn: ' + verdict + did + work.failed + stop);
+      return line;
+    }
+
+    function applyReceiptBadge(button, entry) {
+      if (!button || !entry) return;
+      button.setAttribute('data-turn', String(entry.turn_index));
+      if (entry.turn_key) button.setAttribute('data-turn-key', entry.turn_key);
+      var count = entry.attention === null ? 0 : entry.attention;
+      var high = entry.high === null ? 0 : entry.high;
+      button.classList.toggle('has-attention', count > 0);
+      button.classList.toggle('has-high', count > 0 && high > 0);
+      var label = button.querySelector('.msg-action-label');
+      if (label) label.textContent = count > 0 ? 'Receipt \u00b7 ' + count + ' to check' : 'Receipt';
+      button.title = count > 0
+        ? count + (count === 1 ? ' thing' : ' things') + ' in this turn ' + (count === 1 ? 'needs' : 'need') + ' your eyes'
+        : 'What this turn read, changed and ran';
+      button.hidden = Boolean(applyReceiptLine(button, entry, count, high));
+    }
+
+    /** Replace what the chat knows with the engine's list; counts seen live are kept only where the engine has none. */
+    function rememberReceiptTurns(sessionId, turns) {
+      var state = receiptStateFor(sessionId);
+      if (!state || !Array.isArray(turns)) return;
+      var previous = state.receipts;
+      var next = Object.create(null);
+      turns.forEach(function (raw) {
+        var entry = receiptEntry(raw);
+        if (!entry) return;
+        var id = entry.turn_key || ('#' + entry.turn_index);
+        var seen = previous[id];
+        if (seen && entry.attention === null && seen.attention !== null) {
+          entry.attention = seen.attention;
+          entry.high = seen.high;
+        }
+        ['files', 'commands', 'failed'].forEach(function (name) {
+          if (seen && entry[name] === null && Number.isInteger(seen[name])) entry[name] = seen[name];
+        });
+        next[id] = entry;
+      });
+      state.receipts = next;
+    }
+
+    function rememberReceiptReady(message) {
+      var entry = receiptEntry(message);
+      var state = entry && receiptStateFor(message.session_id);
+      if (!state) return null;
+      state.receipts[entry.turn_key || ('#' + entry.turn_index)] = entry;
+      return entry;
+    }
+
+    function applyStoredReceiptBadges() {
+      var state = ownSessionState(currentSessionId);
+      var receipts = state && state.receipts ? state.receipts : {};
+      Object.keys(receipts).forEach(function (id) {
+        var entry = receipts[id];
+        applyReceiptBadge(receiptButtonForEntry(entry), entry);
+      });
     }
 
     /** Pins the meta strip of the newest turn; every older strip stays hover-only. */
@@ -7949,13 +8194,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const nextStepDismissed = new Set();
     let nextStepDefaultPlaceholder = null;
 
+    function cutNextStepText(text, max) {
+      const cut = text.slice(0, max);
+      return /[\\uD800-\\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+    }
+
     function normalizeNextStepOption(raw) {
       if (!raw || typeof raw !== 'object') return null;
       let title = String(raw.title || '').trim().split(/\\s+/).join(' ');
       const prompt = String(raw.prompt || '').trim();
       if (!title || !prompt) return null;
-      if (title.length > 60) title = title.slice(0, 59).trim() + '…';
-      return { title, prompt: prompt.slice(0, 2000), new_session: raw.new_session === true };
+      if (title.length > 60) title = cutNextStepText(title, 59).trim() + '…';
+      return { title, prompt: cutNextStepText(prompt, 2000), new_session: raw.new_session === true };
     }
 
     // One step, or a short question with 2-3 options; title/prompt/new_session are the first option.
@@ -8049,9 +8299,34 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       vscode.postMessage({ type: 'next_step_event', event: event || 'dismissed', sessionId: currentSessionId });
     }
 
-    function renderNextStep() {
+    const NEXT_STEP_SVG = '<svg class="next-step-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">';
+    const NEXT_STEP_ICONS = {
+      sparkle: NEXT_STEP_SVG + '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg>',
+      pencil: NEXT_STEP_SVG + '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>',
+      send: NEXT_STEP_SVG + '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>',
+      newSession: NEXT_STEP_SVG + '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>',
+    };
+    let nextStepPromptObserver = null;
+
+    function selectedNextStepIndex(step) {
+      const i = Number(step.selected);
+      return Number.isInteger(i) && i >= 0 && i < step.options.length ? i : 0;
+    }
+
+    // An index that names no option means the one the card shows.
+    function nextStepOption(step, index) {
+      const i = index == null || index === '' ? NaN : Number(index);
+      return Number.isInteger(i) && i >= 0 && i < step.options.length ? step.options[i] : step.options[selectedNextStepIndex(step)];
+    }
+
+    // The card shows the exact text Send delivers for the selected option.
+    function renderNextStep(focusAction) {
       const existing = document.getElementById('next-step-card');
       if (existing) existing.remove();
+      if (nextStepPromptObserver) {
+        nextStepPromptObserver.disconnect();
+        nextStepPromptObserver = null;
+      }
       const input = document.getElementById('prompt-input');
       if (input && nextStepDefaultPlaceholder === null) nextStepDefaultPlaceholder = input.getAttribute('placeholder') || '';
       const step = currentNextStep();
@@ -8060,48 +8335,92 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (input) input.setAttribute('placeholder', nextStepDefaultPlaceholder || '');
         return;
       }
+      const choices = step.options.length > 1;
+      const sel = selectedNextStepIndex(step);
+      const option = step.options[sel];
+      const elsewhere = choices && option.new_session;
+      const heading = choices ? step.question || 'Choose what to do next' : step.title;
       const card = document.createElement('div');
       card.id = 'next-step-card';
       card.className = 'next-step-card';
+      if (choices) card.classList.add('has-choices');
       card.setAttribute('role', 'group');
       card.setAttribute('aria-label', 'Suggested next step');
-      const choices = step.options.length > 1;
-      if (choices) card.classList.add('has-choices');
-      // One step reads "Do it"; a choice shows each option as its own button, the recommended one first.
-      const buttons = choices
-        ? step.options.map((o, i) => '<button class="next-step-btn' + (i === 0 ? ' primary' : '') + '" data-action="next-step-run" data-opt-idx="' + i + '"' +
-            ' title="' + escapeHtml(o.prompt) + (o.new_session ? ' (runs in a new session)' : '') + '">' + escapeHtml(o.title) +
-            (o.new_session ? '<span class="next-step-new-tag">new session</span>' : '') + '</button>').join('')
-        : '<button class="next-step-btn primary" data-action="next-step-run">Do it</button>' +
-          (step.new_session ? '<button class="next-step-btn" data-action="next-step-new-session" title="Start this in a new session">New session</button>' : '');
-      // The buttons send these prompts as if typed, so the exact text is one click away before sending.
-      const requestHtml = choices
-        ? step.options.map(o => '<div class="next-step-request-item"><span class="next-step-request-name">' + escapeHtml(o.title) + '</span>' + escapeHtml(o.prompt) + '</div>').join('')
-        : escapeHtml(step.prompt);
-      card.innerHTML = '<div class="next-step-text">' +
-          '<div class="next-step-label">Suggested next step</div>' +
-          '<div class="next-step-title" title="' + escapeHtml(choices ? step.question || step.title : step.prompt) + '">' +
-            escapeHtml(choices ? step.question || 'Choose what to do next' : step.title) + '</div>' +
-          '<details class="next-step-request"><summary>See the exact request</summary><div class="next-step-request-body">' + requestHtml + '</div></details>' +
-        '</div>' +
-        '<div class="next-step-actions">' + buttons +
+      const optionsHtml = choices
+        ? '<div class="next-step-options" role="group" aria-label="Options">' + step.options.map((o, i) =>
+            '<button class="next-step-option" data-action="next-step-select" data-opt-idx="' + i + '" aria-pressed="' + (i === sel) + '">' +
+              escapeHtml(o.title) +
+              (o.new_session ? NEXT_STEP_ICONS.newSession + '<span class="sp-sr-only">, runs in a new session</span>' : '') +
+            '</button>').join('') + '</div>'
+        : '';
+      const actions =
+        (!choices && step.new_session ? '<button class="next-step-btn ghost" data-action="next-step-new-session" title="Start this in a new session">' + NEXT_STEP_ICONS.newSession + 'New session</button>' : '') +
+        '<button class="next-step-btn ghost" data-action="next-step-edit" data-opt-idx="' + sel + '" title="Put it in the input to edit first (Tab)">' + NEXT_STEP_ICONS.pencil + 'Edit</button>' +
+        '<button class="next-step-btn primary" data-action="next-step-run" data-opt-idx="' + sel + '">' +
+          (elsewhere ? 'Start session' + NEXT_STEP_ICONS.newSession : 'Send' + NEXT_STEP_ICONS.send) + '</button>';
+      card.innerHTML =
+        '<div class="next-step-head">' +
+          '<span class="next-step-label">' + NEXT_STEP_ICONS.sparkle +
+            '<span class="next-step-kicker">Suggested</span><span class="next-step-sep" aria-hidden="true">·</span>' +
+            '<span class="next-step-title" title="' + escapeHtml(heading) + '">' + escapeHtml(heading) + '</span></span>' +
           '<button class="next-step-dismiss" data-action="next-step-dismiss" aria-label="Dismiss suggestion" title="Dismiss (Esc)">&times;</button>' +
+        '</div>' +
+        optionsHtml +
+        '<div class="next-step-prompt' + (step.expanded ? ' expanded' : '') + '" id="next-step-prompt">' + escapeHtml(option.prompt) + '</div>' +
+        '<div class="next-step-foot">' +
+          '<button class="next-step-more" data-action="next-step-expand" aria-controls="next-step-prompt" aria-expanded="' + Boolean(step.expanded) + '">' +
+            (step.expanded ? 'Show less' : 'Show all') + '</button>' +
+          '<div class="next-step-actions">' + actions + '</div>' +
         '</div>';
       const tipCard = document.getElementById('feature-tip-card');
       if (tipCard) chatContainer.insertBefore(card, tipCard);
       else chatContainer.appendChild(card);
-      if (input) input.setAttribute('placeholder', step.title + '  ·  Tab to use');
+      watchNextStepPrompt(card, step);
+      if (input) input.setAttribute('placeholder', option.title + '  ·  Tab to use');
       if (!step.reported) {
         step.reported = true;
         vscode.postMessage({ type: 'next_step_event', event: 'shown', sessionId: currentSessionId });
       }
+      if (focusAction) {
+        const target = card.querySelector('[data-action="' + focusAction + '"]' + (focusAction === 'next-step-select' ? '[aria-pressed="true"]' : ''));
+        const focusable = target && !target.hidden ? target : card.querySelector('[data-action="next-step-run"]');
+        if (focusable) focusable.focus();
+      }
       scrollToBottomIfNeeded();
+    }
+
+    // "Show all" appears only while the clamped prompt hides text, re-checked as the view resizes.
+    function watchNextStepPrompt(card, step) {
+      const promptEl = card.querySelector('.next-step-prompt');
+      const more = card.querySelector('.next-step-more');
+      if (!promptEl || !more) return;
+      const fit = () => { more.hidden = !step.expanded && promptEl.scrollHeight <= promptEl.clientHeight + 1; };
+      fit();
+      if (typeof ResizeObserver !== 'undefined') {
+        nextStepPromptObserver = new ResizeObserver(fit);
+        nextStepPromptObserver.observe(promptEl);
+      }
+    }
+
+    function selectNextStepOption(index) {
+      const step = currentNextStep();
+      const i = Number(index);
+      if (!step || !Number.isInteger(i) || i < 0 || i >= step.options.length) return;
+      step.selected = i;
+      renderNextStep('next-step-select');
+    }
+
+    function toggleNextStepPrompt() {
+      const step = currentNextStep();
+      if (!step) return;
+      step.expanded = !step.expanded;
+      renderNextStep('next-step-expand');
     }
 
     function runNextStep(index) {
       const step = currentNextStep();
       if (!step) return;
-      const option = step.options[Number(index) || 0] || step.options[0];
+      const option = nextStepOption(step, index);
       if (step.options.length > 1 && option.new_session) {
         startNextStepInNewSession(index);
         return;
@@ -8122,16 +8441,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function startNextStepInNewSession(index) {
       const step = currentNextStep();
       if (!step) return;
-      const option = step.options[Number(index) || 0] || step.options[0];
+      const option = nextStepOption(step, index);
       nextStepDismissed.add(step.key);
       setNextStep(currentSessionId, null);
       vscode.postMessage({ type: 'start_next_step_session', title: option.title, prompt: option.prompt, sessionId: currentSessionId });
     }
 
-    function acceptNextStepIntoInput() {
+    function acceptNextStepIntoInput(index) {
       const step = currentNextStep();
       if (!step) return false;
-      promptInput.value = step.prompt;
+      const option = nextStepOption(step, index);
+      const draft = promptInput.value.replace(/\\s+$/, '');
+      promptInput.value = draft ? draft + '\\n\\n' + option.prompt : option.prompt;
       promptInput.style.height = 'auto';
       promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
       promptInput.selectionStart = promptInput.selectionEnd = promptInput.value.length;
@@ -9020,6 +9341,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         sessionsState[currentSessionId].isRunning = true;
       }
       turnEditedFiles.clear();
+      finishedTurnFileStats = null;
       cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
       cancelBtn.disabled = false;
       cancelBtn.style.opacity = '';
@@ -9086,6 +9408,37 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       accumulatedAssistantText = previous._rawMarkdown ? previous._rawMarkdown + String.fromCharCode(10, 10) : '';
     }
 
+    function resumeRunningTurn(startedAtMs, editedFiles, toolSeqStartedAtMs) {
+      resumeAssistantTurn(startedAtMs);
+      if (editedFiles) editedFiles.forEach((file) => turnEditedFiles.add(file));
+      adoptResumedToolSequence(toolSeqStartedAtMs);
+    }
+
+    // A reply drawn from history can end in the running turn's tool group; tools still to come belong in it.
+    function adoptResumedToolSequence(startedAtMs) {
+      const reply = currentTurnAssistantDiv;
+      if (!reply) return;
+      let last = reply.lastElementChild;
+      while (last && last.id === 'turn-loading-indicator') last = last.previousElementSibling;
+      if (!last || !last.classList.contains('tool-sequence-wrap')) return;
+      const seq = last.querySelector(':scope > .tool-sequence');
+      const body = seq ? seq.querySelector(':scope > .tool-seq-body') : null;
+      if (!seq || !body) return;
+      const rows = Array.from(body.children).filter((el) => !el.classList.contains('thinking-card'));
+      currentToolSequence = seq;
+      toolSeqFinished = false;
+      toolSeqUserToggled = false;
+      toolSeqCount = rows.length;
+      toolSeqDoneTools = new Set(rows.map((_, index) => 'history:' + index));
+      toolSeqStartTime = startedAtMs > 0 ? Math.min(Date.now(), startedAtMs) : (currentTurnStartTime || Date.now());
+      lastToolName = '';
+      lastToolRunning = false;
+      seq.classList.remove('collapsed');
+      if (toolSeqTimer) clearInterval(toolSeqTimer);
+      toolSeqTimer = setInterval(updateToolSeqHeader, 1000);
+      updateToolSeqHeader();
+    }
+
     function getLangBadgeHtml(filePath) {
       const parts = filePath.split('.');
       const ext = parts.length > 1 ? parts.pop().toLowerCase().trim() : '';
@@ -9094,7 +9447,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return '<span class="files-changed-lang-tag ' + safeClass + '">' + escapeHtml(displayExt) + '</span>';
     }
 
-    function createFilesChangedCard(filePathsSet) {
+    function statForPath(stats, path) {
+      if (!Array.isArray(stats) || typeof path !== 'string') return null;
+      const find = (wanted, key) => {
+        let best = null;
+        for (const entry of stats) {
+          if (!entry || typeof entry.path !== 'string' || !entry.path) continue;
+          const name = key(entry.path);
+          if ((wanted === name || wanted.endsWith('/' + name)) && (!best || entry.path.length > best.path.length)) best = entry;
+        }
+        return best;
+      };
+      const slashes = (value) => value.split(String.fromCharCode(92)).join('/');
+      return find(slashes(path), slashes) || find(slashes(path).toLowerCase(), (value) => slashes(value).toLowerCase());
+    }
+
+    function createFilesChangedCard(filePathsSet, turnStats) {
       if (!filePathsSet) return null;
       const seen = new Map();
       Array.from(filePathsSet).forEach(filePath => {
@@ -9135,19 +9503,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const normalizedKey = filePath.replace(/\\\\/g, '/').trim();
         const filename = normalizedKey.split('/').pop() || filePath;
 
-        let stat = globalDiffStats[normalizedKey];
-        if (!stat) {
-          for (const k in globalDiffStats) {
-            const normK = k.replace(/\\\\/g, '/');
-            if (normalizedKey.endsWith(normK) || normK.endsWith(normalizedKey) || normalizedKey.endsWith('/' + normK) || normK.endsWith('/' + normalizedKey)) {
-              stat = globalDiffStats[k];
-              break;
-            }
-          }
-        }
+        const stat = statForPath(turnStats, normalizedKey);
 
         let statsHtml = '';
-        if (stat && (stat.additions > 0 || stat.deletions > 0)) {
+        if (stat && Number.isInteger(stat.additions) && Number.isInteger(stat.deletions) && (stat.additions > 0 || stat.deletions > 0)) {
           if (stat.additions > 0) statsHtml += '<span class="files-stat-add">+' + stat.additions + '</span>';
           if (stat.deletions > 0) statsHtml += '<span class="files-stat-del">-' + stat.deletions + '</span>';
           statsHtml += '<span class="chip-diff-label" style="margin-left:4px;">Diff</span>';
@@ -9173,10 +9532,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         moreBtn.textContent = '... Show ' + (files.length - MAX_PREVIEW) + ' more';
         card.appendChild(moreBtn);
       }
-
-      try {
-        vscode.postMessage({ type: 'get_file_diff_stats' });
-      } catch {}
 
       return card;
     }
@@ -9216,9 +9571,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       cancelBtn.style.display = 'none';
       sendBtn.style.display = 'flex';
 
+      const turnFileStats = finishedTurnFileStats;
+      finishedTurnFileStats = null;
       if (currentTurnAssistantDiv) {
         if (turnEditedFiles.size > 0) {
-          const card = createFilesChangedCard(turnEditedFiles);
+          const card = createFilesChangedCard(turnEditedFiles, turnFileStats);
           if (card) currentTurnAssistantDiv.appendChild(card);
         }
         turnEditedFiles.clear();
@@ -9230,6 +9587,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           timestamp: Date.now(),
           copyAction: 'copy-message',
           copyTitle: 'Copy response',
+          receiptAction: true,
         }));
         pinLatestMessageFooter();
         scrollToBottomIfNeeded();
@@ -9485,41 +9843,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
         case 'set_mascot_enabled': {
           setMascotEnabled(msg.enabled !== false);
-          break;
-        }
-        case 'file_diff_stats_result': {
-          if (msg.stats) {
-            globalDiffStats = Object.assign(globalDiffStats || {}, msg.stats);
-            document.querySelectorAll('.files-changed-row').forEach(row => {
-              const fPath = row.getAttribute('data-file-path');
-              if (!fPath) return;
-              const normalized = fPath.replace(/\\\\/g, '/').trim();
-              let s = globalDiffStats[normalized];
-              if (!s) {
-                for (const k in globalDiffStats) {
-                  const normK = k.replace(/\\\\/g, '/');
-                  if (normalized.endsWith(normK) || normK.endsWith(normalized) || normalized.endsWith('/' + normK) || normK.endsWith('/' + normalized)) {
-                    s = globalDiffStats[k];
-                    break;
-                  }
-                }
-              }
-              if (s) {
-                const statsEl = row.querySelector('.files-changed-row-stats');
-                if (statsEl) {
-                  let html = '';
-                  if (s.additions > 0) html += '<span class="files-stat-add">+' + s.additions + '</span>';
-                  if (s.deletions > 0) html += '<span class="files-stat-del">-' + s.deletions + '</span>';
-                  if (s.additions > 0 || s.deletions > 0) {
-                    html += '<span class="chip-diff-label" style="margin-left:4px;">Diff</span>';
-                  } else {
-                    html += '<span class="chip-diff-label">Diff</span>';
-                  }
-                  if (html) statsEl.innerHTML = html;
-                }
-              }
-            });
-          }
           break;
         }
         case 'init_state':
@@ -9897,6 +10220,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           );
           const runningTurnPrompt = ((msg.session && msg.session.messages) || []).filter((m) => m && m.role === 'user').pop();
           const runningTurnStart = runningTurnPrompt && runningTurnPrompt.ts ? Date.parse(runningTurnPrompt.ts) || 0 : 0;
+          let resumedTurnEditedFiles = null;
+          let lastHistoryToolSeqStart = 0;
           sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
           sessionsState[currentSessionId].isRunning = sessionIsRunning;
           if (sessionIsRunning) {
@@ -9928,7 +10253,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session && Array.isArray(msg.session.messages) && msg.session.messages.length > 0) {
             allMessages = allMessages.concat(msg.session.messages.filter(m => {
               if (m.role === 'system') return false;
-              if (m.role === 'assistant' && extractMessageText(m.content).trim() === 'Understood. I have the context of our earlier discussion and will continue from here.') {
+              if (m.role === 'assistant' && COMPACTION_ACKNOWLEDGEMENTS.indexOf(extractMessageText(m.content).trim()) !== -1) {
                 return false;
               }
               return true;
@@ -9950,6 +10275,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               appendCompactedHistoryBanner(msg.session.compacted_history.length);
             }
             let lastUserMsgTs = null;
+            let currentTurnKey = null;
             let currentAssistantWrap = null;
             let currentTurnToolSeq = null;
             let currentTurnToolBody = null;
@@ -9972,7 +10298,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 turnEditedFilesForLoad = new Set();
 
                 const uContent = extractMessageText(m.content).trim();
+                if (!m.steering) currentTurnKey = typeof m.turn_key === 'string' ? m.turn_key : null;
                 if (uContent.startsWith('[Conversation summary') || uContent.startsWith('[Previous context summary')) {
+                  currentTurnKey = null;
                   appendCompactionSummaryCard(uContent);
                 } else {
                   try {
@@ -10022,6 +10350,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   if (!currentTurnToolSeq) {
                     currentTurnToolSeq = document.createElement('div');
                     currentTurnToolSeq.className = 'tool-sequence collapsed';
+                    lastHistoryToolSeqStart = m.ts ? Date.parse(m.ts) || 0 : 0;
                     currentTurnToolSeq.innerHTML = '<div class="tool-seq-header">' +
                       '<svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>' +
                       '<span class="tool-seq-title">0 tools · worked</span>' +
@@ -10178,12 +10507,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   }
                 }
 
-                if (!hasMoreAssistantInTurn) {
+                const turnStillRunning = !hasMoreAssistantInTurn && sessionIsRunning &&
+                  !allMessages.slice(i + 1).some(later => later && later.role === 'user');
+                if (turnStillRunning) {
+                  resumedTurnEditedFiles = new Set(turnEditedFilesForLoad);
+                } else if (!hasMoreAssistantInTurn) {
                   currentTurnToolSeq = null;
                   currentTurnToolBody = null;
                   currentTurnToolCount = 0;
                   if (turnEditedFilesForLoad.size > 0) {
-                    const card = createFilesChangedCard(turnEditedFilesForLoad);
+                    const storedTurn = (msg.session && Array.isArray(msg.session.receipt_turns) ? msg.session.receipt_turns : [])
+                      .find(function (t) { return t && currentTurnKey && t.turn_key === currentTurnKey; });
+                    const card = createFilesChangedCard(turnEditedFilesForLoad, storedTurn ? storedTurn.file_stats : null);
                     if (card) currentAssistantWrap.appendChild(card);
                   }
 
@@ -10199,6 +10534,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     timestamp: m.ts || Date.now(),
                     copyAction: 'copy-message',
                     copyTitle: 'Copy response',
+                    receiptAction: true,
+                    receiptTurnKey: currentTurnKey,
                   }));
                   currentAssistantWrap = null;
                 }
@@ -10234,7 +10571,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             if (buffered && buffered.length > 0) {
               // Ensure a live turn wrapper exists to append into
               const needTurn = !currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv);
-              if (needTurn) resumeAssistantTurn(runningTurnStart);
+              if (needTurn) resumeRunningTurn(runningTurnStart, resumedTurnEditedFiles, lastHistoryToolSeqStart);
               for (const ev of buffered) {
                 if (ev.t === 'thinking_delta') {
                   removeTurnLoader(); setTurnOrb(null);
@@ -10264,8 +10601,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 } else if (ev.t === 'tool_start') {
                   setTurnOrb(null);
                   removeTurnLoader(); finishCurrentThinking(); currentAssistantContent = null;
-                  const seq = ensureToolSequence(); toolSeqCount++; lastToolName = ev.tool_name||'tool'; lastToolRunning=true; updateToolSeqHeader();
-                  const td = document.createElement('div'); td.className='tool-card expanded'; td.id='tool-'+ev.tool_id; td.setAttribute('data-tool-name', ev.tool_name||'');
+                  const seq = ensureToolSequence(); const evStartedAt = toolStartMs(ev.ts); if (toolSeqCount === 0 || evStartedAt < toolSeqStartTime) toolSeqStartTime = evStartedAt; toolSeqCount++; lastToolName = ev.tool_name||'tool'; lastToolRunning=true; updateToolSeqHeader();
+                  const td = document.createElement('div'); td.className='tool-card expanded'; td.id='tool-'+ev.tool_id; td.setAttribute('data-tool-name', ev.tool_name||''); td.setAttribute('data-start-ts', String(toolStartMs(ev.ts)));
                   td.innerHTML = '<div class="tool-header"><div class="tool-title-group"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg><span>'+escapeHtml(ev.tool_name)+'</span></div><div style="display:flex; align-items:center;"><span class="tool-tag">RUNNING</span><svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div></div><div class="tool-body" id="args-'+escapeHtml(ev.tool_id)+'"></div>';
                   seq.querySelector('.tool-seq-body').appendChild(td);
                 } else if (ev.t === 'tool_delta') {
@@ -10281,7 +10618,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             }
           }
           if (sessionIsRunning && (!currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv))) {
-            resumeAssistantTurn(runningTurnStart);
+            resumeRunningTurn(runningTurnStart, resumedTurnEditedFiles, lastHistoryToolSeqStart);
           }
           if (runtime) handleBackendMessage({ type: 'session_runtime', session_id: currentSessionId, runtime });
           if (currentSessionId && !nextStepBySession[currentSessionId] && !sessionIsRunning &&
@@ -10294,6 +10631,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           renderNextStep();
           renderConversationTimeline();
+          rememberReceiptTurns(currentSessionId, msg.session && msg.session.receipt_turns);
+          applyStoredReceiptBadges();
           userScrolledUp = false;
           scrollToBottom(false);
           settleSessionScroll();
@@ -10442,7 +10781,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             sessionsState[msg.session_id].isRunning = true;
             sessionsState[msg.session_id].hasUnread = true;
             updateSessionActivityIndicator();
-            bufferLiveEvent(msg.session_id, { t:'tool_start', tool_id: msg.tool_id, tool_name: msg.tool_name });
+            bufferLiveEvent(msg.session_id, { t:'tool_start', tool_id: msg.tool_id, tool_name: msg.tool_name, ts: msg.ts });
             break;
           }
           removeTurnLoader();
@@ -10453,6 +10792,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           currentAssistantContent = null;
 
           const seq = ensureToolSequence();
+          const toolStartedAt = toolStartMs(msg.ts);
+          if (toolSeqCount === 0 || toolStartedAt < toolSeqStartTime) toolSeqStartTime = toolStartedAt;
           toolSeqCount++;
           lastToolName = msg.tool_name || 'tool';
           lastToolRunning = true;
@@ -10469,7 +10810,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (isWriteOrCmd && typeof window.renderAntigravityActivityRow === 'function') {
             const isCmd = /^(shell_exec|run_command|bash|exec|cmd)$/i.test(msg.tool_name);
             toolDiv.className = 'activity-row running';
-            toolDiv.setAttribute('data-start-ts', String(Date.now()));
+            toolDiv.setAttribute('data-start-ts', String(toolStartMs(msg.ts)));
             toolDiv.setAttribute('data-label-resolved', '0');
             toolDiv.innerHTML = '<span class="activity-action">' + (isCmd ? 'Running' : 'Editing') + '</span>' +
               '<span class="activity-filename" id="label-' + escapeHtml(msg.tool_id) + '">' + escapeHtml(msg.tool_name) + '…</span>' +
@@ -10478,7 +10819,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               '<div class="tool-body" id="args-' + escapeHtml(msg.tool_id) + '" style="display:none;"></div>';
           } else {
             toolDiv.className = 'tool-card expanded';
-            toolDiv.setAttribute('data-start-ts', String(Date.now()));
+            toolDiv.setAttribute('data-start-ts', String(toolStartMs(msg.ts)));
             toolDiv.innerHTML = '<div class="tool-header">' +
               '<div class="tool-title-group">' +
                 '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>' +
@@ -11275,6 +11616,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               if (tf) turnEditedFiles.add(tf);
             }
           }
+          finishedTurnFileStats = Array.isArray(msg.turn_file_stats) ? msg.turn_file_stats : null;
           const finishedTurn = unsentTurnSessions.delete(msg.session_id || currentSessionId) ? null : finishedTurnFacts(msg);
           endAssistantTurn();
           if (msg.outcome === 'error') enableEngineCardActions(msg.error_type, msg.error_action);
@@ -11293,6 +11635,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           flushQueue();
           renderNextStep();
           if (finishedTurn) vscode.postMessage(finishedTurn);
+          break; }
+
+        case 'receipt_ready': {
+          const readyEntry = rememberReceiptReady(msg);
+          if (readyEntry && msg.session_id === currentSessionId) {
+            applyReceiptBadge(receiptButtonForEntry(readyEntry) || newestUnclaimedReceiptButton(), readyEntry);
+          }
           break; }
 
         case 'feature_tip':

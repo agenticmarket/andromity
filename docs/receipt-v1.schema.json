@@ -1,0 +1,478 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/agenticmarket/andromity/docs/receipt-v1.schema.json",
+  "title": "Andromity turn receipt, version 1",
+  "description": "What one agent turn read, changed, ran and was stopped from doing. Built by Andromity's own code from its records; never written by the model. Contains no prompts, file contents or command output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "session_id",
+    "turn_index",
+    "started_at",
+    "ended_at",
+    "duration_seconds",
+    "models",
+    "mode",
+    "snapshot",
+    "summary",
+    "files_changed",
+    "edited_not_in_snapshot",
+    "files_read",
+    "commands",
+    "checks",
+    "web_hosts",
+    "mcp_servers",
+    "other_tools",
+    "needs_attention",
+    "approvers",
+    "cost_usd",
+    "tokens",
+    "notes",
+    "record_hash"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "command_chars": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "How many characters of each command this receipt keeps. Absent from receipts of turns sealed before commands were kept in full, whose commands are cut to 300 characters."
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "turn_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0 for the first turn of the session."
+    },
+    "started_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "ISO 8601 time the turn started."
+    },
+    "ended_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "ISO 8601 time the turn ended."
+    },
+    "duration_seconds": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "mode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Permission mode during the turn: safe, trust, full or yolo."
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before",
+        "after"
+      ],
+      "properties": {
+        "before": {
+          "$ref": "#/$defs/objectIdOrNull"
+        },
+        "after": {
+          "$ref": "#/$defs/objectIdOrNull"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "files_changed",
+        "lines_added",
+        "lines_deleted",
+        "files_read",
+        "searches",
+        "commands",
+        "commands_failed",
+        "blocked",
+        "denied",
+        "approved_by_person",
+        "denied_by_person",
+        "subagents",
+        "web_searches"
+      ],
+      "properties": {
+        "files_changed": {
+          "$ref": "#/$defs/count"
+        },
+        "lines_added": {
+          "$ref": "#/$defs/count"
+        },
+        "lines_deleted": {
+          "$ref": "#/$defs/count"
+        },
+        "files_read": {
+          "$ref": "#/$defs/count"
+        },
+        "searches": {
+          "$ref": "#/$defs/count"
+        },
+        "commands": {
+          "$ref": "#/$defs/count"
+        },
+        "commands_failed": {
+          "$ref": "#/$defs/count"
+        },
+        "blocked": {
+          "$ref": "#/$defs/count"
+        },
+        "denied": {
+          "$ref": "#/$defs/count"
+        },
+        "approved_by_person": {
+          "$ref": "#/$defs/count"
+        },
+        "denied_by_person": {
+          "$ref": "#/$defs/count"
+        },
+        "subagents": {
+          "$ref": "#/$defs/count"
+        },
+        "web_searches": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "files_changed": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "status",
+          "added",
+          "deleted",
+          "via"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Relative to the project folder, or absolute when outside it."
+          },
+          "status": {
+            "type": "string",
+            "pattern": "^[A-Z?]$",
+            "description": "git status letter; ? when the snapshots are gone."
+          },
+          "added": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "null for binary files."
+          },
+          "deleted": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "via": {
+            "enum": [
+              "edit",
+              "subagent",
+              "other"
+            ],
+            "description": "other: not made by the agent's or a subagent's file edits."
+          }
+        }
+      }
+    },
+    "edited_not_in_snapshot": {
+      "$ref": "#/$defs/strings"
+    },
+    "files_read": {
+      "$ref": "#/$defs/strings"
+    },
+    "commands": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "outcome",
+          "exit_code",
+          "background",
+          "check",
+          "by",
+          "decided_by_person",
+          "decided_by"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Redacted and shortened."
+          },
+          "outcome": {
+            "enum": [
+              "ok",
+              "failed",
+              "error",
+              "timeout",
+              "cancelled",
+              "denied",
+              "blocked",
+              "skipped",
+              "dry_run",
+              "no_result"
+            ]
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "check": {
+            "type": "boolean",
+            "description": "A test, lint, type-check or build command."
+          },
+          "by": {
+            "type": "string",
+            "description": "agent, or subagent <role>."
+          },
+          "decided_by_person": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "true approved, false declined, null nobody was asked."
+          },
+          "decided_by": {
+            "$ref": "#/$defs/personIdOrNull"
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "result",
+          "exit_code",
+          "failed_first",
+          "runs"
+        ],
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "failed_first": {
+            "type": "boolean",
+            "description": "Failed earlier in the turn and passed on the last run."
+          },
+          "runs": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "web_hosts": {
+      "$ref": "#/$defs/strings"
+    },
+    "mcp_servers": {
+      "$ref": "#/$defs/strings"
+    },
+    "other_tools": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "needs_attention": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "severity",
+          "detail"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "blocked",
+              "sensitive",
+              "outside_workspace",
+              "destructive",
+              "own_records",
+              "long_command",
+              "background",
+              "changed_outside_edits",
+              "runs_code",
+              "git_internals",
+              "hidden_change",
+              "check_failed",
+              "large_change",
+              "history_missing"
+            ]
+          },
+          "severity": {
+            "enum": [
+              "high",
+              "medium"
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "description": "Andromity's own words; never a name, path or command. When `approver` is set, show the person after it, set apart (the reader's own decisions get \"(you)\")."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The path or command the finding is about. Agent-controlled: show it apart from detail."
+          },
+          "approver": {
+            "$ref": "#/$defs/personId",
+            "description": "Id of the person who approved or declined; their name is in `approvers`."
+          }
+        }
+      }
+    },
+    "approvers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/personId"
+          },
+          "name": {
+            "type": "string",
+            "description": "From local git settings; not verified."
+          }
+        }
+      }
+    },
+    "cost_usd": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "tokens": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "notes": {
+      "$ref": "#/$defs/strings"
+    },
+    "sealed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hash",
+        "matches"
+      ],
+      "description": "Present when the receipt's checksum was kept when the turn ended.",
+      "properties": {
+        "hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "matches": {
+          "type": "boolean",
+          "description": "false when the session's records changed since the turn ended."
+        }
+      }
+    },
+    "record_hash": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "strings": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "string"
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "objectIdOrNull": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "personId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$",
+      "description": "Short hash of the approver's git email, or of name and OS user."
+    },
+    "personIdOrNull": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{16}$"
+    }
+  }
+}

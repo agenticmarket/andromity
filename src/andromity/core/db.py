@@ -172,7 +172,7 @@ def init_schema() -> None:
 
         for col_name, col_type in (("images", "TEXT"), ("duration", "REAL"), ("turn_id", "TEXT"),
                                    ("steering", "INTEGER NOT NULL DEFAULT 0"), ("image_files", "TEXT"),
-                                   ("images_skipped", "INTEGER")):
+                                   ("images_skipped", "INTEGER"), ("model", "TEXT"), ("turn_key", "TEXT")):
             try:
                 conn.execute(f"ALTER TABLE session_messages ADD COLUMN {col_name} {col_type};")
             except sqlite3.OperationalError:

@@ -8,7 +8,9 @@ Telemetry is **on by default** and can be turned off at any time (see [Turning i
 
 On first run, Andromity creates a random ID and stores it in `.telemetry_uuid` in its config folder (`%APPDATA%\andromity` on Windows, `~/.andromity` elsewhere, or `ANDROMITY_CONFIG_DIR` if set). Every event carries this ID, so events from the same installation can be linked together.
 
-The ID is not derived from your name, email, account, hostname or hardware. It is **pseudonymous, not anonymous**: it links your events to each other, but not to who you are. Deleting the file gives you a new ID.
+The ID is not derived from your name, email, account, hostname or hardware. It is **pseudonymous, not anonymous**: it links your events to each other, but not to who you are. Deleting the file gives you a new ID the next time Andromity starts.
+
+The first time the terminal app or `andromity run` sends telemetry, it shows a one-time notice explaining what is sent and how to turn it off. In VS Code, the extension follows VS Code's own telemetry setting.
 
 ## Where it goes
 
@@ -21,13 +23,41 @@ Every event includes the random ID, the client (`vscode`, `tui`, `cli` or `serve
 | Event | When | Additional fields |
 |---|---|---|
 | `session_start` | A chat session starts | Session ID; provider and model name; whether the provider is local or cloud; reasoning effort setting; number of MCP tools enabled; active profile; session duration so far |
-| `session_update` | During a session | Session ID; turn count; session duration |
-| `session_end` | A session ends | Session ID; provider and model name; local or cloud; turn count; whether an error occurred; session duration and a coarse duration bucket; counts of shell, file and web tool calls |
+| `session_update` | After each request | Session ID; turn count; session duration |
+| `session_end` | After each request, with the session's totals so far. The worker keeps one record per session, so the last one sent is the session's summary | Session ID; provider and model name; local or cloud; turn count; whether any request in the session had an error; session duration and a coarse duration bucket; counts of shell, file and web tool calls |
 | `task_started`, `task_finished` | A request to the agent starts and finishes | Session ID; a random run ID; provider and model name; outcome (`completed`, `failed` or `cancelled`); active seconds; time to first response in milliseconds |
 | `feature_use` | You use a feature (for example opening the waterfall) | Session ID when there is one; the feature's name only |
-| `weekly_summary` | At most once every 7 days | Names of features used that week (up to 20) |
 
-Model and provider names are the identifiers you configured (for example `anthropic` and `claude-sonnet-4-6`). Values are length-limited and stripped to safe characters before sending, and anything that looks like an API key is removed.
+Session duration is the time from the session's first request to its latest one, counted from when the session was last opened.
+
+Model and provider names are the identifiers you configured (for example `anthropic` and `claude-sonnet-4-6`). If a model is configured as the path of a model file (for example a `.gguf` or `.safetensors` file), only the file's name without its folder or extension is sent; any other path is sent as `local-path` and a URL as `url`. A provider name that looks like a path, URL or hostname is sent as `unknown`. Values are length-limited and stripped to safe characters before sending, and anything that looks like an API key is removed.
+
+Events that can't be sent right away wait in `.telemetry_outbox.json` in the config folder, for up to 7 days and at most 100 events, and are retried later. Events the worker refuses are dropped rather than retried.
+
+### Pull requests from Changes Review
+
+**Create pull request** in VS Code sends `feature_use` events whose names start with `pr_`, so we can see how far people get and which options they use. Each is a fixed name; none carries a repository, host name, branch, title, description, file name, reviewer, pull request number, link, secret or error text.
+
+| Names | Sent when |
+|---|---|
+| `pr_form_opened`, `pr_form_closed`, `pr_submitted` | The form opens, closes without shipping, or is submitted |
+| `pr_created`, `pr_updated`, `pr_host_page_opened`, `pr_pushed`, `pr_committed_only` | How it ended: a pull request opened, an existing one updated, another host's page opened, pushed only, or committed only |
+| `pr_time_under_1m`, `pr_time_1_to_5m`, `pr_time_over_5m` | Time from opening the form to the pull request, in one of three buckets |
+| `pr_host_github`, `pr_host_gitlab`, `pr_host_bitbucket`, `pr_host_azure`, `pr_host_gitea`, `pr_host_ghe`, `pr_host_other`, `pr_host_local`, `pr_host_none` | The kind of remote when the form opens |
+| `pr_mode_*`, `pr_scope_turn`, `pr_scope_all`, `pr_opt_*` | What was chosen at submit, for example a new branch, starting from the latest main, attaching the receipt or not, a draft, reviewers, a template, or whether the drafted description was edited |
+| `pr_check_*` | A check came up: high findings, a secret, a large change, staged files outside the selection, a sensitive file left out |
+| `pr_github_*`, `pr_blocked_*`, `pr_receipt_unavailable` | Sign-in state, why the form couldn't start, or that no receipt could be attached |
+| `pr_receipts_all_covered`, `pr_receipts_some_covered`, `pr_receipts_none_covered`, `pr_receipts_many_chats` | Whether the pushed files were all, partly or not changed with AI according to Andromity's records (for the AI change record), and whether those turns came from more than one chat. No file names or counts |
+| `pr_fail_<step>`, `pr_err_<kind>`, `pr_cancelled_running` | Which step failed and a fixed category, such as `pr_err_push_rejected` |
+| `pr_draft_ok`, `pr_draft_failed`, `pr_checks_changed`, `pr_sign_in`, `pr_sign_in_again`, `pr_sign_in_declined`, `pr_retry`, `pr_push_new_name`, `pr_switch_back`, `pr_open_link`, `pr_copy_link`, `pr_open_page`, `pr_publish`, `pr_reviewers_failed` | Drafting results and the buttons used after a step |
+
+### Pull request reviews
+
+**Review Pull Request** sends `feature_use` names starting with `pra_`: `pra_review_started`, `pra_review_posted`, `pra_review_no_prs`, `pra_review_diff_cut`, `pra_review_failed` and `pra_review_post_failed`. Like the `pr_` names, none carries a repository, pull request, author, review text or error text.
+
+### Pull Requests and Issues view
+
+**Pull Requests and Issues** sends `feature_use` names starting with `prv_`: `prv_opened`, `prv_tab_issues`, `prv_filter_foryou`, `prv_filter_all`, `prv_filter_assigned`, `prv_sort`, `prv_load_more`, `prv_open_item`, `prv_files`, `prv_open_github`, `prv_review`, `prv_ask`, `prv_tip_shown` and `prv_tip_opened` (the one-time tip that points at the view), and on failure `prv_fail_` followed by one of `signedout`, `notfound`, `sso`, `oauth`, `ratelimit`, `offline`, `error`, `nogit`, `norepo`, `noremote`, `otherhost`, `airgap`, `review` or `ask`. None carries a repository, number, title, author, question or error text.
 
 ## Feedback you send
 
@@ -59,7 +89,7 @@ Any one of these stops all telemetry:
 
 Telemetry is also off automatically in CI environments.
 
-When telemetry is off, Andromity also stops fetching tips, news and command content from `telemetry.agenticmarket.dev`.
+With telemetry off, Andromity deletes any events still waiting to be sent instead of sending them. When telemetry is off, Andromity also stops fetching tips, news and command content from `telemetry.agenticmarket.dev`.
 
 ## Deleting your data
 

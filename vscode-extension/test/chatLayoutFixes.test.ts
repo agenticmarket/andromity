@@ -27,7 +27,7 @@ it("puts a suggestion's question on its own row with the options below", () => {
     assert.ok(start >= 0, selector);
     return styles.slice(start, styles.indexOf("}", start));
   };
-  assert.match(block(".next-step-card.has-choices"), /flex-direction: column/);
   assert.match(block(".next-step-card.has-choices .next-step-title"), /white-space: normal/);
-  assert.match(block(".next-step-card.has-choices .next-step-actions"), /margin-left: 0/);
+  assert.match(block(".next-step-options"), /flex-wrap: wrap/);
+  assert.match(block(".next-step-actions"), /margin-left: auto/);
 });

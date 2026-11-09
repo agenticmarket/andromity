@@ -1,11 +1,16 @@
+import asyncio
+import dataclasses
 import json
 import sys
 import time
+from contextlib import aclosing
 from pathlib import Path
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 
 from andromity.core.provider import ERROR_KINDS, ERROR_SOURCES, stream_completion, sanitize_messages_for_api
-from andromity.core.session import Session, skipped_image_count
+from andromity.core.call_ids import UniqueCallIds, used_call_ids
+from andromity.core.identity import approver_record, local_identity
+from andromity.core.session import Session, skipped_image_count, tool_gate_kind
 from andromity.core.profiles import (
     filter_tools_for_profile, get_allowed_tools, get_system_prompt, load_project_instructions,
 )
@@ -23,6 +28,8 @@ from andromity.core.debug_log import get_logger
 from andromity.config import config
 
 log = get_logger("agent")
+
+_OUTWARD_TOOLS = {"web_search", "fetch_url", "session_answer_question"}
 
 _COLLAB_ACTION_VERBS = {
     "session_send_message": "send messages to other sessions", "session_ask_question": "ask other sessions questions",
@@ -160,6 +167,22 @@ _ERROR_FEATURE_NAMES = {
 }
 
 
+DEFAULT_MAX_TOOL_ROUNDS = 60
+
+
+def _max_tool_rounds() -> int:
+    """How many tool rounds one user turn may take before the agent stops and reports.
+
+    Without a bound, a model that answers every tool result with another tool call
+    runs until the context fills: spend, edits and commands with nobody watching.
+    """
+    try:
+        value = int(config.get("default", "max_tool_rounds", DEFAULT_MAX_TOOL_ROUNDS))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_TOOL_ROUNDS
+    return value if value > 0 else DEFAULT_MAX_TOOL_ROUNDS
+
+
 def error_feature_name(error_type: Optional[str]) -> str:
     kind = (error_type or "generic").strip().lower()
     if kind.startswith("error_"):
@@ -208,6 +231,8 @@ class Agent:
         if not next_step_suggestions:
             self.allowed_tools = [t for t in self.allowed_tools if t["function"]["name"] != "suggest_next_step"]
         self._empty_retried = False
+        self.max_tool_rounds = _max_tool_rounds()
+        self._approver_identity: Optional[Dict[str, str]] = None
         # Set when the current turn carries pasted images (see run()).
         self._turn_image_parts = None
         from andromity.core.inputs import InputQueue
@@ -220,8 +245,6 @@ class Agent:
         self._tool_usage_counts: Dict[str, int] = (
             session._tool_usage_counts if session is not None else {"bash": 0, "file": 0, "web": 0}
         )
-        # Session wall-clock start time for duration telemetry
-        self._session_start_time: float = time.time()
         # Turn counter for telemetry (incremented per user message)
         self._turn_count: int = 0
         # Register session so plan tools can store plan in it
@@ -231,11 +254,18 @@ class Agent:
         from andromity.core.subagent_orchestrator import SubAgentOrchestrator
         from andromity.core.session_bus import SessionBus
 
+        previous = getattr(self.session, "_orchestrator", None)
         self.orchestrator = SubAgentOrchestrator(
             parent_session_id=self.session.id,
             project_path=self.session.project_path,
             permission_mode=getattr(self.session, "permission_mode", None) or config.get("default", "permission_mode", "safe"),
         )
+        # Background sub-agents from earlier turns stay reachable, so Stop can end them too.
+        earlier = [o for o in getattr(self.session, "_earlier_orchestrators", None) or []
+                   if isinstance(o, SubAgentOrchestrator) and o.has_running()]
+        if isinstance(previous, SubAgentOrchestrator) and previous.has_running():
+            earlier.append(previous)
+        self.session._earlier_orchestrators = earlier
         self.session._orchestrator = self.orchestrator
 
         try:
@@ -284,6 +314,12 @@ class Agent:
 
     def _workspace_trusted(self) -> bool:
         return config.is_trusted(str(Path(self.session.project_path or Path.cwd()).resolve()))
+
+    async def _approver(self) -> Dict[str, str]:
+        if self._approver_identity is None:
+            project = getattr(self.session, "project_path", None) if self.session else None
+            self._approver_identity = approver_record(await asyncio.to_thread(local_identity, project))
+        return self._approver_identity
 
     def _refresh_prompt_if_stale(self) -> None:
         """Rewrite the prompt when something it states has changed mid-session.
@@ -479,9 +515,10 @@ class Agent:
             compaction_kwargs["model"] = self.model
 
         try:
-            async for event in stream_completion(summary_prompt, **compaction_kwargs):
-                if isinstance(event, TextDelta):
-                    summary_text += event.text
+            async with aclosing(stream_completion(summary_prompt, **compaction_kwargs)) as events:
+                async for event in events:
+                    if isinstance(event, TextDelta):
+                        summary_text += event.text
         except Exception as e:
             log.warning("Compaction summary stream failed: %s", e)
             yield TextDelta(text=f"*[Context compaction failed: {e}]*\n\n")
@@ -546,28 +583,42 @@ class Agent:
             return
         run_id = uuid.uuid4().hex
         self._telemetry_turn_start = time.monotonic()
+        if getattr(self.session, "_telemetry_started", None) is None:
+            self.session._telemetry_started = self._telemetry_turn_start
         first_response_ms = None
         outcome = None
         metadata = {"provider": self.provider, "model": self.model}
-        send_task_event("task_started", self.session.id, run_id, **metadata)
         try:
-            async for event in self._run(user_input, images, image_uris):
-                if first_response_ms is None and isinstance(event, TextDelta):
-                    first_response_ms = int((time.monotonic() - self._telemetry_turn_start) * 1000)
-                if isinstance(event, Done):
-                    outcome = "completed" if event.outcome == "success" else "failed"
-                yield event
+            send_task_event("task_started", self.session.id, run_id, **metadata)
+        except Exception:
+            pass
+        try:
+            async with aclosing(self._run(user_input, images, image_uris)) as events:
+                async for event in events:
+                    if first_response_ms is None and isinstance(event, TextDelta):
+                        first_response_ms = int((time.monotonic() - self._telemetry_turn_start) * 1000)
+                    if isinstance(event, Done):
+                        outcome = "completed" if event.outcome == "success" else "failed"
+                    yield event
         except asyncio.CancelledError:
             outcome = "cancelled"
+            raise
+        except GeneratorExit:
+            outcome = outcome or "cancelled"
             raise
         except Exception:
             outcome = "failed"
             raise
         finally:
+            if outcome == "failed":
+                self.session._telemetry_had_error = True
             if outcome is not None:
-                send_task_event("task_finished", self.session.id, run_id, outcome=outcome,
-                    active_seconds=time.monotonic() - self._telemetry_turn_start,
-                    first_response_ms=first_response_ms, **metadata)
+                try:
+                    send_task_event("task_finished", self.session.id, run_id, outcome=outcome,
+                        active_seconds=time.monotonic() - self._telemetry_turn_start,
+                        first_response_ms=first_response_ms, **metadata)
+                except Exception:
+                    pass
 
     async def _run(self, user_input: str, images: list = None, image_uris: list = None) -> AsyncGenerator[StreamEvent, None]:
         """Run one user turn.
@@ -621,6 +672,7 @@ class Agent:
                 effective_input += f"\n\n[Co-Agent Mailbox: {'; '.join(notices)}]"
         self.session.add_message("user", content=effective_input, images=thumb_uris, image_files=image_files,
                                  images_skipped=skipped_images or None)
+        self._call_ids = UniqueCallIds(used_call_ids(self.session))
         if self._turn_image_parts:
             message = self.session.messages[-1]
             self._message_images[id(message)] = (message, self._turn_image_parts)
@@ -691,6 +743,7 @@ class Agent:
 
             llm_start_time = time.time()
             first_token_time = None
+            self._call_ids.next_response()
             yield LLMCallStart(
                 turn_id=turn_id,
                 model=self.model or config.get("default", "model", ""),
@@ -699,40 +752,43 @@ class Agent:
                 ts=llm_start_time,
             )
 
-            async for event in stream_completion(
+            async with aclosing(stream_completion(
                 self._messages_for_api(),
                 **stream_kwargs,
-            ):
-                if first_token_time is None and isinstance(event, (TextDelta, ThinkingDelta, ToolCallStart)):
-                    first_token_time = time.time()
+            )) as events:
+                async for event in events:
+                    if isinstance(event, (ToolCallStart, ToolCallDelta, ToolCallEnd)):
+                        event = dataclasses.replace(event, tool_id=self._call_ids.map(event.tool_id))
+                    if first_token_time is None and isinstance(event, (TextDelta, ThinkingDelta, ToolCallStart)):
+                        first_token_time = time.time()
 
-                if isinstance(event, Done):
-                    last_usage = event.usage
-                    provider_outcome = event.outcome
-                    provider_error_type = event.error_type
-                    provider_error_action = event.error_action
-                    provider_error_detail = event.error_detail
-                else:
-                    yield event
-                if isinstance(event, TextDelta):
-                    assistant_content += event.text
-                elif isinstance(event, ThinkingDelta):
-                    assistant_thinking += event.text
-                elif isinstance(event, ToolCallStart):
-                    pending_tool_calls[event.tool_id] = {
-                        "name": event.tool_name,
-                        "args": "",
-                    }
-                elif isinstance(event, ToolCallDelta):
-                    if event.tool_id in pending_tool_calls:
-                        pending_tool_calls[event.tool_id]["args"] += event.args_json_chunk
-                elif isinstance(event, ToolCallEnd):
-                    if event.tool_id in pending_tool_calls:
-                        call_info = pending_tool_calls.pop(event.tool_id)
-                        tool_calls_to_execute.append({
-                            "id": event.tool_id, "type": "function",
-                            "function": {"name": call_info["name"], "arguments": call_info["args"]},
-                        })
+                    if isinstance(event, Done):
+                        last_usage = event.usage
+                        provider_outcome = event.outcome
+                        provider_error_type = event.error_type
+                        provider_error_action = event.error_action
+                        provider_error_detail = event.error_detail
+                    else:
+                        yield event
+                    if isinstance(event, TextDelta):
+                        assistant_content += event.text
+                    elif isinstance(event, ThinkingDelta):
+                        assistant_thinking += event.text
+                    elif isinstance(event, ToolCallStart):
+                        pending_tool_calls[event.tool_id] = {
+                            "name": event.tool_name,
+                            "args": "",
+                        }
+                    elif isinstance(event, ToolCallDelta):
+                        if event.tool_id in pending_tool_calls:
+                            pending_tool_calls[event.tool_id]["args"] += event.args_json_chunk
+                    elif isinstance(event, ToolCallEnd):
+                        if event.tool_id in pending_tool_calls:
+                            call_info = pending_tool_calls.pop(event.tool_id)
+                            tool_calls_to_execute.append({
+                                "id": event.tool_id, "type": "function",
+                                "function": {"name": call_info["name"], "arguments": call_info["args"]},
+                            })
 
             llm_end_time = time.time()
             ttfb_ms = round(((first_token_time or llm_end_time) - llm_start_time) * 1000, 2)
@@ -747,7 +803,7 @@ class Agent:
             pending_tool_calls.clear()
 
             if not tool_calls_to_execute and ("<atem:invoke" in assistant_content or "<atem:function_calls>" in assistant_content):
-                import re, uuid
+                import re
                 matches = re.finditer(r'<atem:invoke\s+name="([^"]+)">([\s\S]*?)</atem:invoke>', assistant_content)
                 for m in matches:
                     fn_name = m.group(1)
@@ -757,7 +813,7 @@ class Agent:
                         p_name = param_match.group(1)
                         p_val = param_match.group(2).strip()
                         args[p_name] = p_val
-                    call_id = f"call_{uuid.uuid4().hex[:8]}"
+                    call_id = self._call_ids.fresh()
                     tool_calls_to_execute.append({
                         "id": call_id,
                         "type": "function",
@@ -985,6 +1041,26 @@ class Agent:
 
                 # Hard Gate: Profile confinement (planner and reviewer cannot execute mutating tools)
                 prof = (self.profile or "").strip().lower()
+                if getattr(self.session, "external_review", None):
+                    from andromity.core.profiles import PROFILES
+                    if t_lower not in {name.lower() for name in PROFILES["reviewer"]["tools"]}:
+                        rejection = (
+                            f"TOOL BLOCKED: this chat holds text from GitHub written by someone else, so it is read-only. "
+                            f"'{tool_name}' is not allowed. Do NOT retry it. Answer from what you can read, and suggest "
+                            f"the user start a new chat to make changes."
+                        )
+                        final_results[tool_call["id"]] = rejection
+                        yield ToolResult(tool_id=tool_call["id"], result="[Blocked: read-only chat]", duration_ms=0.0, success=False, ts=time.time())
+                        continue
+                    if t_lower in _OUTWARD_TOOLS and (self.auto_approve or not self.on_tool_approval):
+                        rejection = (
+                            f"TOOL BLOCKED: this chat holds text from GitHub written by someone else, and '{tool_name}' "
+                            f"sends data out of this chat, so it needs a person to approve it, and nobody is asked here. "
+                            f"Do NOT retry it. Answer from what you can read locally."
+                        )
+                        final_results[tool_call["id"]] = rejection
+                        yield ToolResult(tool_id=tool_call["id"], result="[Blocked: read-only chat]", duration_ms=0.0, success=False, ts=time.time())
+                        continue
                 if prof in ("planner", "reviewer") and t_lower in _MUTATING_TOOLS:
                     rejection = (
                         f"TOOL BLOCKED: Profile '{self.profile}' is strictly restricted from executing mutating tool '{tool_name}'.\n"
@@ -1022,6 +1098,8 @@ class Agent:
                     elif isinstance(approval_res, dict):
                         is_approved = bool(approval_res.get("approved", False))
                         rejection_reason = approval_res.get("reason")
+                        if approval_res.get("by") == "person" and self.session is not None:
+                            self.session.record_tool_decision(tool_call.get("id"), is_approved, await self._approver())
                     else:
                         is_approved = bool(approval_res)
 
@@ -1050,6 +1128,13 @@ class Agent:
                     final_results[call["id"]] = "Not executed: superseded by a new user instruction."
                     yield ToolResult(tool_id=call["id"], result=final_results[call["id"]], success=False)
                 prepared.clear()
+
+            if self.session is not None:
+                accepted = {call["id"] for call, _, _ in prepared}
+                for call in other_calls:
+                    stopped = final_results.get(call["id"])
+                    if stopped is not None and call["id"] not in accepted:
+                        self.session.record_tool_gate(call["id"], tool_gate_kind(stopped))
 
             # ── Phase 2: run all accepted calls CONCURRENTLY. Results are
             # yielded as each call finishes so the UI can mark that tool's
@@ -1085,10 +1170,14 @@ class Agent:
                     t_run = (tool_name or "").strip().lower()
                     if prof_run in ("planner", "reviewer") and t_run in _MUTATING_TOOLS:
                         dur = round((time.time() - t0) * 1000, 2)
+                        if self.session is not None:
+                            self.session.record_tool_gate(tool_call["id"], "blocked")
                         return tool_call["id"], f"Error: Tool '{tool_name}' is forbidden for profile '{self.profile}'.", dur, False
                     p_dir = getattr(self.session, "project_path", "") if self.session else ""
                     if p_dir and not config.is_trusted(p_dir) and requires_workspace_trust(t_run):
                         dur = round((time.time() - t0) * 1000, 2)
+                        if self.session is not None:
+                            self.session.record_tool_gate(tool_call["id"], "blocked")
                         return tool_call["id"], f"Error: Workspace is untrusted. Tool '{tool_name}' is blocked.", dur, False
 
                     try:
@@ -1194,6 +1283,18 @@ class Agent:
                     break
                 resumed_for_steering = True
 
+            if iteration_idx >= self.max_tool_rounds:
+                notice = (
+                    f"\n**[Stopped after {iteration_idx} tool rounds]** This turn kept calling tools without "
+                    "finishing. Nothing further ran. Send the next instruction to continue, or raise "
+                    "`max_tool_rounds` in your config if the task genuinely needs more steps.\n"
+                )
+                self.session.add_message("assistant", content=notice, turn_id=turn_id, model=self._model_id())
+                yield TextDelta(text=notice)
+                yield Done(usage=last_usage, outcome="error", error_type="tool_round_limit")
+                self._fire_session_end(had_error=True, error_type="tool_round_limit")
+                break
+
     def _tools_for_this_call(self) -> list:
         """Collaboration tools only when another session is around or something is waiting for this one."""
         if collaboration_available(self.session):
@@ -1212,7 +1313,8 @@ class Agent:
         return sum(len(session.tools) for session in manager.sessions.values()) if manager else 0
 
     def _get_session_duration(self) -> float:
-        return max(0.0, time.monotonic() - getattr(self, "_telemetry_turn_start", time.monotonic()))
+        started = getattr(self.session, "_telemetry_started", None)
+        return 0.0 if started is None else max(0.0, time.monotonic() - started)
 
     def _fire_session_end(self, had_error: bool = False, error_type: Optional[str] = None,
                           error_detail: Optional[str] = None) -> None:
@@ -1229,6 +1331,7 @@ class Agent:
             _mod  = self.model  or config.get("default", "model", "")
             turns = self._get_turn_count()
             duration = self._get_session_duration()
+            self.session._telemetry_had_error = bool(getattr(self.session, "_telemetry_had_error", False) or had_error)
             # Send live session update so in-progress sessions reflect actual progress
             send_session_update(self.session.id, turn_count=turns, duration_sec=duration)
             # Update session end / event record
@@ -1237,7 +1340,7 @@ class Agent:
                 provider=_prov,
                 model=_mod,
                 turn_count=turns,
-                had_error=had_error,
+                had_error=self.session._telemetry_had_error,
                 duration_sec=duration,
                 tool_counts=dict(self._tool_usage_counts),
             )
@@ -1266,10 +1369,16 @@ class Agent:
             turn_id=getattr(self, "current_user_turn_id", None),
         )
 
-    def kill_subagents(self, reason: str = "agent_cancelled"):
-        """Terminate all active subagents spawned by this agent."""
-        if hasattr(self, "orchestrator") and self.orchestrator:
-            self.orchestrator.kill_all(reason=reason)
+    def kill_subagents(self, reason: str = "agent_cancelled") -> list[str]:
+        """Terminate every sub-agent this session started, in this turn or earlier ones. Returns their sessions' ids."""
+        from andromity.core.subagent_orchestrator import kill_session_subagents, session_orchestrators
+        own = getattr(self, "orchestrator", None)
+        reachable = session_orchestrators(self.session)
+        ids = kill_session_subagents(self.session, reason)
+        if own is not None and all(own is not o for o in reachable):
+            ids.extend(own.session_ids())
+            own.kill_all(reason=reason)
+        return ids
 
     async def await_subagents(self):
         """Wait for all active subagents to finish and return their results."""

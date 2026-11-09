@@ -14,7 +14,6 @@ from andromity.telemetry import (
     _provider_type,
     send_session_start,
     send_session_end,
-    maybe_send_weekly_ping,
 )
 from andromity.config import config
 
@@ -69,14 +68,6 @@ def test_session_end_noop_when_opted_out():
     with patch.dict(os.environ, {"ANDROMITY_NO_TELEMETRY": "1"}):
         with patch("andromity.telemetry._post") as mock_post:
             send_session_end("session-optout-123")
-            assert mock_post.call_count == 0
-
-
-def test_weekly_ping_noop_when_opted_out():
-    """When opted out, maybe_send_weekly_ping does not call _post."""
-    with patch.dict(os.environ, {"DO_NOT_TRACK": "1"}):
-        with patch("andromity.telemetry._post") as mock_post:
-            maybe_send_weekly_ping(["mcp", "subagent"])
             assert mock_post.call_count == 0
 
 

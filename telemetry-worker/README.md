@@ -23,6 +23,8 @@ The Cloudflare Worker behind `telemetry.agenticmarket.dev`. It receives Andromit
    ```
    On a database that already has the `feedback` table, run only `feedback-checkin.sql`, once. Until it runs, check-in answers are kept inside the note text.
 
+   On an existing database, run `collapse-session-end.sql` once after deploying the worker that keeps one `session_end` row per session. It merges each session's earlier `session_end` rows into one, so the panel stops counting those sessions more than once.
+
    On an existing database, run `waitlist.sql` once to open the waitlist. Until it runs, `POST /waitlist` answers 503 with `Waitlist is not available yet`, and the admin list returns `{"waitlist": [], "not_ready": true}`.
 
    Open the waitlist in this order:

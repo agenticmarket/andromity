@@ -391,7 +391,7 @@ export class WaterfallPanel {
       return;
     }
     this._rpcClient.call<any>("session.get", { session_id: this._sessionId }).then(
-      (sData) => finish(sData?.status === "running" || sData?.status === "compacting"),
+      (sData) => finish(sData?.runtime ? sData.runtime.is_running === true : (sData?.status === "running" || sData?.status === "compacting")),
       () => finish(false)
     );
   }
@@ -487,9 +487,13 @@ export class WaterfallPanel {
           // Build index of events already committed to the session to prevent duplicate spans.
           const committedToolIds = new Set<string>();
           const committedTurnIds = new Set<string>();
+          const finishedToolIds = new Set<string>();
           if (sessionData && Array.isArray(sessionData.messages)) {
             for (const m of sessionData.messages) {
-              if (m.tool_call_id) committedToolIds.add(m.tool_call_id);
+              if (m.tool_call_id) {
+                committedToolIds.add(m.tool_call_id);
+                finishedToolIds.add(m.tool_call_id);
+              }
               if (m.turn_id) committedTurnIds.add(m.turn_id);
               if (Array.isArray(m.tool_calls)) {
                 for (const tc of m.tool_calls) {
@@ -515,7 +519,9 @@ export class WaterfallPanel {
 
             // Skip tool events if this tool was already executed and saved in history
             if (ev.type === "tool_start" || ev.type === "tool_delta" || ev.type === "tool_end" || ev.type === "tool_result") {
-              if (ev.tool_id && committedToolIds.has(ev.tool_id)) continue;
+              if (ev.tool_id && finishedToolIds.has(ev.tool_id)) continue;
+              // History already drew a call that is still running, with its arguments; only its end is news.
+              if (ev.tool_id && committedToolIds.has(ev.tool_id) && (ev.type === "tool_start" || ev.type === "tool_delta")) continue;
             }
 
             this._postMessage(ev, true);

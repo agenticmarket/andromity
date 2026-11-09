@@ -2,6 +2,7 @@ import asyncio
 import re
 import threading
 import time
+from contextlib import aclosing
 from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -31,6 +32,15 @@ from andromity.tui.overlays.questions import QuestionPanel, format_question_answ
 from andromity.core.session import Session
 from andromity.core.session_context import prompt_as_written
 from andromity.core.agent import Agent, note_images_skipped
+from andromity.core.receipt import (
+    ReceiptUnavailable,
+    build_receipt,
+    close_turn_record,
+    render_text,
+    seal_receipt,
+    start_turn_record,
+    turn_started,
+)
 from andromity.core.events import (
     StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, SubAgentProgress
 )
@@ -75,7 +85,7 @@ def _apply_textual_workarounds() -> None:
 
 _apply_textual_workarounds()
 
-COMMANDS = ["/help", "/mode", "/model", "/profile", "/reason", "/update", "/context-menu", "/undo", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp", "/skills", "/compact", "/export", "/tips", "/news"]
+COMMANDS = ["/help", "/mode", "/model", "/profile", "/reason", "/update", "/context-menu", "/undo", "/receipt", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp", "/skills", "/compact", "/export", "/tips", "/news"]
 
 CSS = """\
 Screen { background: $surface; }
@@ -294,7 +304,10 @@ class AndromityApp(App):
             self.remove_class("hide-files")
 
     def on_mount(self):
-        from andromity.telemetry import send_feature_used
+        from andromity.telemetry import send_feature_used, take_first_run_notice
+        notice = take_first_run_notice()
+        if notice:
+            self.notify(notice, title="Telemetry", timeout=20, markup=False)
         send_feature_used("app_started")
         try:
             from andromity.core.db import init_schema
@@ -628,7 +641,7 @@ class AndromityApp(App):
         except Exception:
             pass
 
-    async def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
+    async def _on_tool_approval(self, tool_name: str, args: dict) -> bool | dict:
         if not config.is_trusted(self._project_path):
             from andromity.core.tools import requires_workspace_trust
             if requires_workspace_trust(tool_name):
@@ -683,7 +696,7 @@ class AndromityApp(App):
                 global_allowed = config.get("default", "allowed_commands", []) or []
                 session_allowed = getattr(self.session, "allowed_commands", []) if hasattr(self, "session") else []
                 allowed = list(set(global_allowed) | set(session_allowed))
-                if not is_command_allowlisted(command, allowed):
+                if not is_command_allowlisted(command, allowed, policy_root):
                     needs_approval = True
         elif tool_name == "shell_kill":
             if mode == "safe":
@@ -725,9 +738,55 @@ class AndromityApp(App):
             self._tool_approval_future = asyncio.Future()
             result = await self._tool_approval_future
             self._tool_approval_future = None
-            return result
+            return {"approved": result is True, "by": "person"}
             
         return True
+
+    async def _seal_turn_receipt(self, record: dict, after_hash: str | None) -> None:
+        """Keep a finished turn's receipt checksum and point out anything that needs a look."""
+        session = self.session
+        if not turn_started(session, record):
+            if record in session.undo_stack:
+                session.undo_stack.remove(record)
+            return
+        record["after_hash"] = after_hash
+        if not after_hash:
+            session.save()
+            return
+        try:
+            receipt = await asyncio.to_thread(seal_receipt, session, record)
+            session.save()
+        except Exception as exc:
+            log.debug("Receipt for turn %s not built: %s", record.get("turn_index"), exc)
+            return
+        findings = (receipt or {}).get("needs_attention") or []
+        if findings:
+            count = len(findings)
+            self.query_one(ChatPanel).add_system_message(
+                f"[yellow]Receipt: {count} {'thing' if count == 1 else 'things'} in this turn "
+                f"{'needs' if count == 1 else 'need'} your eyes.[/] Type [bold]/receipt[/] to see what it read, changed and ran.")
+
+    async def _show_receipt(self, argument: str) -> None:
+        """/receipt [turn]: what one turn read, changed and ran, built from Andromity's own records."""
+        from andromity.core.identity import local_identity
+        chat = self.query_one(ChatPanel)
+        turn = None
+        if argument:
+            if not argument.isdigit() or int(argument) < 1:
+                chat.add_system_message("Usage: /receipt [turn number], for example /receipt 2", markup=False)
+                return
+            turn = int(argument) - 1
+        if not config.is_trusted(str(self._project_path)):
+            chat.add_system_message("Trust this folder with /trust to read its receipts.", markup=False)
+            return
+        try:
+            receipt = await asyncio.to_thread(build_receipt, self.session, turn)
+        except ReceiptUnavailable as exc:
+            chat.add_system_message(str(exc), markup=False)
+            return
+        viewer = await asyncio.to_thread(local_identity, str(self._project_path))
+        title, _, body = render_text(receipt, viewer).partition("\n")
+        chat.add_system_message(f"[bold]{escape(title)}[/bold]\n{escape(body)}")
 
     def _resolve_tool_approval(self, approved: bool) -> None:
         """Called to resolve a pending tool approval (e.g. from UI buttons or panel closing)."""
@@ -943,6 +1002,8 @@ class AndromityApp(App):
             except Exception as e:
                 exc = e
                 log.exception("Cron run error for '%s': %s", cron.name, e)
+            finally:
+                self._end_subagents(cron_session)
 
             try:
                 cron_session.flush()
@@ -1302,9 +1363,13 @@ class AndromityApp(App):
         if self._esc_count >= 2:
             self._esc_count = 0
             if self._current_task and not self._current_task.done():
+                from andromity.core.subagent_orchestrator import kill_session_subagents
                 from andromity.core.tools import stop_session_commands
-                stop_session_commands(getattr(self.session, "id", ""))
                 self._current_task.cancel()
+                stopping = list(dict.fromkeys([getattr(self.session, "id", ""), *kill_session_subagents(self.session, "cancelled")]))
+                # taskkill can take seconds per session; keep the terminal responsive while it runs.
+                threading.Thread(target=lambda: [stop_session_commands(sid) for sid in stopping],
+                                 daemon=True, name="andromity-stop").start()
                 self.query_one(ChatPanel).add_system_message("[Cancelled]")
                 self.query_one(InputBar).clear_input()
                 self.query_one(InputBar).query_one("#input-field").focus()
@@ -1410,6 +1475,7 @@ class AndromityApp(App):
         # write-tree, commit-tree) to the OS thread pool so the event loop
         # and TUI stay fully responsive while the snapshot is created.
         snapshot_hash: str | None = None
+        self.session.turn_key = None
         try:
             def _take_snapshot() -> str | None:
                 from andromity.core.git_ops import ensure_git_tracking, create_pre_edit_snapshot
@@ -1430,97 +1496,99 @@ class AndromityApp(App):
         self._pre_turn_snapshot = snapshot_hash
         if len(self._undo_stack) > 20:
             self._undo_stack.pop(0)
+        receipt_record = start_turn_record(self.session, snapshot_hash) if snapshot_hash else None
 
         try:
-            async for event in self.agent.run(prompt, images=images or None):
-                if isinstance(event, InputApplied):
-                    chat.end_assistant_message()
-                    chat.add_user_message(event.prompt, image_count=len(event.image_uris or []))
-                    chat.start_assistant_message()
-                    first_text_seen = False
-                elif isinstance(event, ImagesSkipped):
-                    notice = images_skipped_notice(event.count)
-                    if event.prompt_added:
-                        chat.add_reply_notice(notice)
-                    else:
-                        chat.add_inline_notice(notice)
-                        self._restore_attachments(event.images or [])
+            async with aclosing(self.agent.run(prompt, images=images or None)) as events:
+                async for event in events:
+                    if isinstance(event, InputApplied):
+                        chat.end_assistant_message()
+                        chat.add_user_message(event.prompt, image_count=len(event.image_uris or []))
+                        chat.start_assistant_message()
                         first_text_seen = False
-                elif isinstance(event, ThinkingDelta):
-                    if not hasattr(chat, "_thinking") or not getattr(chat, "_thinking", None):
-                        chat.start_thinking_message()
-                    chat.append_thinking(event.text)
-                    estimated_tokens += len(event.text) // 4
-                elif isinstance(event, TextDelta):
-                    if not first_text_seen:
-                        first_text_seen = True
-                        chat.stop_thinking_message()
-                    chat.append_text(event.text)
-                    estimated_tokens += len(event.text) // 4
-                elif isinstance(event, NextStepSuggested):
-                    next_step = event
-                elif isinstance(event, ToolCallStart) and event.tool_name == "suggest_next_step":
-                    next_step_tool_ids.add(event.tool_id)
-                elif getattr(event, "tool_id", None) in next_step_tool_ids:
-                    pass
-                elif isinstance(event, ToolCallStart):
-                    tools_used.add(event.tool_name)
-                    tool_calls_count += 1
-                    log.debug("TOOL START: %s", event.tool_name)
-                    if self._debug_mode:
-                        chat.add_system_message(f"[dim]▶ tool: {event.tool_name}[/]")
-                    chat.show_tool_start(event.tool_name, event.tool_id)
-                elif isinstance(event, ToolCallDelta):
-                    chat.append_tool_args(event.tool_id, event.args_json_chunk)
-                elif isinstance(event, ToolCallEnd):
-                    log.debug("TOOL END: %s", event.tool_id)
-                    chat.show_tool_end(event.tool_id)
-                elif isinstance(event, ToolResult):
-                    log.debug("TOOL RESULT: %s", event.tool_id)
-                    chat.show_tool_result(event.tool_id, event.result)
-                    
-                    # Look up this tool's own args from its indicator — with
-                    # parallel tool calls, active_tool_name/args only hold the
-                    # last tool that started.
-                    try:
-                        from andromity.tui.panels.chat import ToolIndicator
-                        for ind in chat.query(ToolIndicator):
-                            if ind.tool_id == event.tool_id:
-                                if ind.tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec"):
-                                    import json
-                                    try:
-                                        args = json.loads(ind._args_json)
-                                        target_path = args.get("path") or args.get("target_path") or args.get("target_file")
-                                        if target_path:
-                                            abs_path = Path(target_path).absolute()
-                                            # Track if this write_file created a genuinely new file
-                                            # (didn't exist before the tool ran — needs tree rebuild)
-                                            if ind.tool_name == "write_file" and not abs_path.exists():
-                                                new_files_created = True
-                                            if ind.tool_name == "delete_file":
-                                                new_files_created = True
-                                            self.query_one(FileTreePanel).highlight_recent_change(abs_path)
-                                    except Exception:
-                                        pass
-                                break
-                    except Exception:
+                    elif isinstance(event, ImagesSkipped):
+                        notice = images_skipped_notice(event.count)
+                        if event.prompt_added:
+                            chat.add_reply_notice(notice)
+                        else:
+                            chat.add_inline_notice(notice)
+                            self._restore_attachments(event.images or [])
+                            first_text_seen = False
+                    elif isinstance(event, ThinkingDelta):
+                        if not hasattr(chat, "_thinking") or not getattr(chat, "_thinking", None):
+                            chat.start_thinking_message()
+                        chat.append_thinking(event.text)
+                        estimated_tokens += len(event.text) // 4
+                    elif isinstance(event, TextDelta):
+                        if not first_text_seen:
+                            first_text_seen = True
+                            chat.stop_thinking_message()
+                        chat.append_text(event.text)
+                        estimated_tokens += len(event.text) // 4
+                    elif isinstance(event, NextStepSuggested):
+                        next_step = event
+                    elif isinstance(event, ToolCallStart) and event.tool_name == "suggest_next_step":
+                        next_step_tool_ids.add(event.tool_id)
+                    elif getattr(event, "tool_id", None) in next_step_tool_ids:
                         pass
-                elif isinstance(event, SubAgentProgress):
-                    chat.show_subagent_progress(event)
-                elif isinstance(event, PlanApprovalRequired):
-                    log.info("Plan approval required. Pausing agent loop.")
-                    self._plan_approval_future = asyncio.Future()
-                    await self._inputs().interaction(self._plan_approval_future, False, self.agent.steering_adds_input)
-                    self._plan_approval_future = None
-                elif isinstance(event, Done):
-                    if event.outcome != "success":
-                        self._inputs().pause()
-                    log.info("DONE usage=%s", event.usage)
-                    self._update_status()
-                    estimated_tokens = 0
+                    elif isinstance(event, ToolCallStart):
+                        tools_used.add(event.tool_name)
+                        tool_calls_count += 1
+                        log.debug("TOOL START: %s", event.tool_name)
+                        if self._debug_mode:
+                            chat.add_system_message(f"[dim]▶ tool: {event.tool_name}[/]")
+                        chat.show_tool_start(event.tool_name, event.tool_id)
+                    elif isinstance(event, ToolCallDelta):
+                        chat.append_tool_args(event.tool_id, event.args_json_chunk)
+                    elif isinstance(event, ToolCallEnd):
+                        log.debug("TOOL END: %s", event.tool_id)
+                        chat.show_tool_end(event.tool_id)
+                    elif isinstance(event, ToolResult):
+                        log.debug("TOOL RESULT: %s", event.tool_id)
+                        chat.show_tool_result(event.tool_id, event.result)
+                    
+                        # Look up this tool's own args from its indicator — with
+                        # parallel tool calls, active_tool_name/args only hold the
+                        # last tool that started.
+                        try:
+                            from andromity.tui.panels.chat import ToolIndicator
+                            for ind in chat.query(ToolIndicator):
+                                if ind.tool_id == event.tool_id:
+                                    if ind.tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec"):
+                                        import json
+                                        try:
+                                            args = json.loads(ind._args_json)
+                                            target_path = args.get("path") or args.get("target_path") or args.get("target_file")
+                                            if target_path:
+                                                abs_path = Path(target_path).absolute()
+                                                # Track if this write_file created a genuinely new file
+                                                # (didn't exist before the tool ran — needs tree rebuild)
+                                                if ind.tool_name == "write_file" and not abs_path.exists():
+                                                    new_files_created = True
+                                                if ind.tool_name == "delete_file":
+                                                    new_files_created = True
+                                                self.query_one(FileTreePanel).highlight_recent_change(abs_path)
+                                        except Exception:
+                                            pass
+                                    break
+                        except Exception:
+                            pass
+                    elif isinstance(event, SubAgentProgress):
+                        chat.show_subagent_progress(event)
+                    elif isinstance(event, PlanApprovalRequired):
+                        log.info("Plan approval required. Pausing agent loop.")
+                        self._plan_approval_future = asyncio.Future()
+                        await self._inputs().interaction(self._plan_approval_future, False, self.agent.steering_adds_input)
+                        self._plan_approval_future = None
+                    elif isinstance(event, Done):
+                        if event.outcome != "success":
+                            self._inputs().pause()
+                        log.info("DONE usage=%s", event.usage)
+                        self._update_status()
+                        estimated_tokens = 0
                 
-                # Token count is updated at Done (real usage from API).
-                # No mid-stream status rebuilds needed.
+                    # Token count is updated at Done (real usage from API).
+                    # No mid-stream status rebuilds needed.
 
         except asyncio.CancelledError:
             next_step = None
@@ -1549,9 +1617,13 @@ class AndromityApp(App):
         finally:
             if not _prompt_added(self.session, msg_count_before, summarized_before):
                 self._undo_stack = [checkpoint for checkpoint in self._undo_stack if checkpoint is not turn_checkpoint]
-            elif snapshot_hash:
+            if snapshot_hash:
                 from andromity.core.git_ops import create_pre_edit_snapshot
+                if receipt_record is not None:
+                    receipt_record.update(close_turn_record(self.session))
                 turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(self._project_path))
+            if receipt_record is not None:
+                await self._seal_turn_receipt(receipt_record, turn_checkpoint.get("after_hash"))
             self._current_task = None
             self._is_streaming = False
             status_bar.set_streaming(False)
@@ -1807,9 +1879,36 @@ class AndromityApp(App):
 
     def _apply_mode_change(self):
         mode = "yolo" if self._yolo_session else config.get("default", "permission_mode", "safe")
+        self._mode_for_subagents(mode)
         self._update_status()
         chat = self.query_one(ChatPanel)
         chat.add_system_message(f"Permission mode set to [bold]{mode.upper()}[/]")
+
+    def _mode_for_subagents(self, mode: str, lower_only: bool = False) -> None:
+        """Apply a mode to this session and its sub-agents. Running sub-agents are only ever lowered. With lower_only, a
+        looser mode waits (for the current response to end) and only a stricter one applies at once."""
+        from andromity.core.subagent import MODE_RANK, normalize_mode
+        from andromity.core.subagent_orchestrator import restrict_session_subagents
+        mode = normalize_mode(mode)
+        if getattr(self, "session", None) is None:
+            return
+        restrict_session_subagents(self.session, mode)
+        current = normalize_mode(getattr(self.session, "permission_mode", None))
+        if lower_only and MODE_RANK[mode] >= MODE_RANK[current]:
+            return
+        self.session.permission_mode = mode
+        orchestrator = getattr(getattr(self, "agent", None), "orchestrator", None)
+        if orchestrator is not None:
+            orchestrator.permission_mode = mode
+
+    def _end_subagents(self, session: Any) -> None:
+        """End every sub-agent a session started and stop their commands, off the UI thread."""
+        from andromity.core.subagent_orchestrator import kill_session_subagents
+        from andromity.core.tools import stop_session_commands
+        stray = kill_session_subagents(session, "run_ended")
+        if stray:
+            threading.Thread(target=lambda: [stop_session_commands(sid) for sid in stray],
+                             daemon=True, name="andromity-stop").start()
 
     async def _generate_ai_session_name(self, prompt: str):
         try:
@@ -1820,8 +1919,9 @@ class AndromityApp(App):
             if not provider or not model:
                 return
                 
-            from andromity.core.connections import provider_request
-            kwargs = {**provider_request(provider, model), "stream": False}
+            from andromity.core.connections import TITLE_MAX_TOKENS, TITLE_TIMEOUT_SECONDS, provider_request
+            kwargs = {**provider_request(provider, model), "stream": False,
+                      "max_tokens": TITLE_MAX_TOKENS, "timeout": TITLE_TIMEOUT_SECONDS}
 
             messages = [
                 {"role": "system", "content": """You are a title generator. You output ONLY a thread title. Nothing else.
@@ -1863,7 +1963,8 @@ Your output must be:
             ]
             kwargs["messages"] = messages
             
-            response = await litellm.acompletion(**kwargs)
+            async with asyncio.timeout(TITLE_TIMEOUT_SECONDS + 5):
+                response = await litellm.acompletion(**kwargs)
             if response.choices:
                 name = response.choices[0].message.content.strip().strip('"').strip("'")
                 if name:
@@ -2052,6 +2153,9 @@ Your output must be:
 
                 if mode == "yolo":
                     self._yolo_session = True
+                    self._mode_for_subagents("yolo", lower_only=self._is_streaming)
+                    if self._is_streaming:
+                        self._pending_mode_change = True
                     self._update_status()
                     chat.add_system_message(
                         "⚡ [bold red]YOLO mode enabled for this session only.[/]\n"
@@ -2060,6 +2164,7 @@ Your output must be:
                 elif mode in ("safe", "trust", "full"):
                     self._yolo_session = False
                     config.set("default", "permission_mode", mode)
+                    self._mode_for_subagents(mode, lower_only=True)
                     if self._is_streaming:
                         self._pending_mode_change = True
                         chat.add_system_message(f"⚡ [yellow]Mode change to {mode.upper()} pending...[/] (Will apply after current response)")
@@ -2249,6 +2354,8 @@ Your output must be:
                 )
         elif command == "/undo":
             self._run_undo()
+        elif command == "/receipt":
+            self.run_worker(self._show_receipt(parts[1].strip() if len(parts) > 1 else ""))
         elif command in ("/tips", "/tip"):
             subtag = parts[1].strip().lstrip("#") if len(parts) > 1 and parts[1].strip() else None
             self.run_worker(self._handle_tip_command(subtag))
@@ -2507,7 +2614,10 @@ Your output must be:
                 return
 
             prompt_message = self.session.messages[cutoff]
+            undone = {id(record) for record in self.session.turn_records_from(cutoff)}
             self.session.messages = self.session.messages[:cutoff]
+            self.session.undo_stack = [record for record in (self.session.undo_stack or [])
+                                       if id(record) not in undone]
             try:
                 from andromity.core.agent import _estimate_tokens as _est2
                 self.session.context_tokens = _est2(self.session.messages)

@@ -10,6 +10,7 @@ import { SettingsPanel } from "./panels/SettingsPanel.js";
 import { PlanEditorPanel } from "./panels/PlanEditorPanel.js";
 import { WaterfallPanel, WaterfallTraceStore } from "./panels/WaterfallPanel.js";
 import { FingerprintPanel } from "./panels/FingerprintPanel.js";
+import { ReceiptPanel } from "./panels/ReceiptPanel.js";
 import { ChangesReviewPanel } from "./panels/ChangesReviewPanel.js";
 import { SessionTabPanel } from "./panels/SessionTabPanel.js";
 import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
@@ -20,6 +21,8 @@ import { WaitlistController } from "./engagement/waitlistController.js";
 import { AttentionKind, BackgroundSessions, describeToolActivity } from "./backgroundSessions.js";
 import { confirmTurnOnAirGap, currentAirGap } from "./airgapState.js";
 import { airGapStatusLine } from "./airgap.js";
+import { openReviewForPosting, postActiveReview, reviewPullRequest } from "./integrations/pullRequest/reviewPullRequest.js";
+import { RepoViewPanel, targetFromTreeItem } from "./panels/RepoViewPanel.js";
 
 let pythonBridge: PythonBridge | null = null;
 let statusBarItem: vscode.StatusBarItem;
@@ -809,6 +812,36 @@ export async function activate(context: vscode.ExtensionContext) {
       chatProvider.openReviewWebview(typeof filePath === "string" ? filePath : undefined);
     }),
 
+    registerTrackedCommand("andromity.createPullRequest", () => {
+      chatProvider.createPullRequest();
+    }),
+
+    registerTrackedCommand("andromity.reviewPullRequest", async () => {
+      await reviewPullRequest(chatProvider.reviewHost());
+    }),
+
+    registerTrackedCommand("andromity.postPullRequestReview", async (sessionId?: unknown) => {
+      await openReviewForPosting(chatProvider.reviewHost(), typeof sessionId === "string" ? sessionId : undefined);
+    }),
+
+    registerTrackedCommand("andromity.postReviewDocument", async () => {
+      await postActiveReview();
+    }),
+
+    registerTrackedCommand("andromity.openPullRequestsView", () => {
+      RepoViewPanel.show(context.extensionUri, chatProvider.reviewHost());
+    }),
+
+    registerTrackedCommand("andromity.reviewFromGitHubTree", (node?: unknown) => {
+      const target = targetFromTreeItem(node);
+      RepoViewPanel.show(context.extensionUri, chatProvider.reviewHost(), target && target.kind === "pr" ? { ...target, sheet: "review" } : undefined);
+    }),
+
+    registerTrackedCommand("andromity.askFromGitHubTree", (node?: unknown) => {
+      const target = targetFromTreeItem(node);
+      RepoViewPanel.show(context.extensionUri, chatProvider.reviewHost(), target ? { ...target, sheet: "ask" } : undefined);
+    }),
+
     registerTrackedCommand("andromity.refreshSessions", () => {
       void chatProvider.fetchAndPostSessions();
     }),
@@ -851,6 +884,16 @@ export async function activate(context: vscode.ExtensionContext) {
       } else {
         vscode.window.showInformationMessage("No active session to open Fingerprint trace for.");
       }
+    }),
+
+    registerTrackedCommand("andromity.openReceipt", (item?: any) => {
+      const sessionId = item?.session?.id || item?.id || chatProvider.getCurrentSessionId();
+      const sessionName = item?.session?.name || item?.name || "Chat Session";
+      if (!sessionId) {
+        vscode.window.showInformationMessage("Start a chat first. Each finished turn gets a receipt.");
+        return;
+      }
+      ReceiptPanel.createOrShow(context.extensionUri, sessionId, sessionName, pythonBridge?.getClient() || null);
     }),
 
     registerTrackedCommand("andromity.fixNotebookCell", async (cell?: vscode.NotebookCell) => {

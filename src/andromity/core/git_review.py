@@ -2,7 +2,14 @@
 from pathlib import Path
 from typing import Any
 
-from andromity.core.git_ops import repository_path, status_entries, list_snapshots
+from andromity.core.git_ops import (
+    NO_REPO_PROGRAMS,
+    list_snapshots,
+    repository_path,
+    safe_git_command,
+    status_entries,
+    uses_disabled_filter,
+)
 
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -21,7 +28,7 @@ def show_file(repo: Any, path: str, ref: str = "HEAD") -> str:
     if ref == "EMPTY" or (ref == "HEAD" and not repo.head.is_valid()):
         return ""
     if ref == "INDEX":
-        return repo.git.show(":" + rel)
+        return repo.git.execute(["git", *NO_REPO_PROGRAMS, "show", ":" + rel])
     if ref == "SNAPSHOT":
         snapshots = list_snapshots(repo, limit=1)
         if not snapshots:
@@ -38,7 +45,7 @@ def file_diff(repo: Any, path: str) -> dict:
     full, rel = repository_path(repo, path)
     if full.is_file() and full.stat().st_size > 1_000_000:
         return {"diff": "", "notice": "Large file. Open the native diff to review it."}
-    diff = repo.git.diff("--no-ext-diff", "--no-renames", review_base(repo), "--", ":(literal)" + rel)
+    diff = repo.git.execute([*_worktree_diff(repo), review_base(repo), "--", ":(literal)" + rel])
     if not diff and any(e["path"] == rel and e["status"] == "U" for e in status_entries(repo)):
         data = full.read_bytes()
         if b"\0" in data[:4096]:
@@ -57,8 +64,17 @@ def file_diff(repo: Any, path: str) -> dict:
     return {"diff": diff, "base": "HEAD"}
 
 
+def _worktree_diff(repo: Any) -> list[str]:
+    return [*safe_git_command(repo), "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=dirty"]
+
+
+def full_diff(repo: Any) -> str:
+    """Every working-tree change against HEAD, for "view all changes" and commit messages."""
+    return repo.git.execute([*_worktree_diff(repo), review_base(repo)])
+
+
 def numstat(repo: Any) -> dict:
-    raw = repo.git.execute(["git", "diff", "--no-ext-diff", "--no-renames", "--numstat", "-z", review_base(repo)], stdout_as_string=False)
+    raw = repo.git.execute([*_worktree_diff(repo), "--numstat", "-z", review_base(repo)], stdout_as_string=False)
     stats: dict[str, dict] = {}
     for item in raw.decode("utf-8", errors="surrogateescape").split("\0"):
         if not item:
@@ -95,17 +111,23 @@ def revert_file(repo: Any, path: str) -> dict:
     entry = next((e for e in status_entries(repo) if e["path"] == rel), None)
     if entry and entry["status"] == "!":
         raise ValueError("Resolve this merge conflict in Git before discarding changes.")
-    if entry and entry.get("original_path"):
-        _, original = repository_path(repo, entry["original_path"])
-        repo.git.restore("--source=HEAD", "--staged", "--worktree", "--", ":(literal)" + original)
+    original = repository_path(repo, entry["original_path"])[1] if entry and entry.get("original_path") else None
+    for name in filter(None, (rel, original)):
+        driver = uses_disabled_filter(repo, name)
+        if driver:
+            raise ValueError(f"This file uses the git filter '{driver}'. Andromity doesn't run git filter "
+                             "programs, so discard this change with git.")
+    git = safe_git_command(repo)
+    if original:
+        repo.git.execute([*git, "restore", "--source=HEAD", "--staged", "--worktree", "--", ":(literal)" + original])
     try:
         in_head = repo.head.is_valid() and (repo.head.commit.tree / rel) is not None
     except KeyError:
         in_head = False
     if in_head:
-        repo.git.restore("--source=HEAD", "--staged", "--worktree", "--", ":(literal)" + rel)
+        repo.git.execute([*git, "restore", "--source=HEAD", "--staged", "--worktree", "--", ":(literal)" + rel])
         return {"success": True, "action": "checkout", "path": rel}
-    if repo.git.ls_files("--", ":(literal)" + rel).strip():
-        repo.git.rm("--cached", "--force", "--", ":(literal)" + rel)
+    if repo.git.execute(["git", *NO_REPO_PROGRAMS, "ls-files", "--", ":(literal)" + rel]).strip():
+        repo.git.execute([*git, "rm", "--cached", "--force", "--", ":(literal)" + rel])
     full.unlink(missing_ok=True)
     return {"success": True, "action": "deleted", "path": rel}

@@ -23,6 +23,7 @@ COMMAND_DESCRIPTIONS = {
     "/reason":   "Set model-specific effort; auto uses the provider default",
     "/mode":     "Set permission mode — safe / trust / full / yolo",
     "/undo":     "Undo last prompt & revert all file changes",
+    "/receipt":  "Show what the last turn read, changed and ran",
     "/keys":     "View status of all provider API keys",
     "/attach":   "Attach an image file (path) to the next message",
     "/settings": "Open master settings panel",

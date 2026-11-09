@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from contextlib import aclosing
 import click
 
 
@@ -56,6 +57,10 @@ def run(prompt, file, yes, dry_run, profile, provider, model):
     if not prompt:
         raise click.UsageError("Must provide PROMPT or --file")
     _tolerate_narrow_console()
+    from andromity.telemetry import take_first_run_notice
+    notice = take_first_run_notice()
+    if notice:
+        click.echo(notice, err=True)
     asyncio.run(_run_async(prompt, yes, dry_run, profile, provider, model))
 
 
@@ -134,6 +139,56 @@ def server_cmd(stdio, port, host):
         asyncio.run(start_stdio_server())
 
 
+@main.command(name="receipt")
+@click.argument("session_id", required=False)
+@click.option("--turn", type=click.IntRange(min=1), default=None,
+              help="Turn number, 1 for the first. Defaults to the latest finished turn.")
+@click.option("--json", "as_json", is_flag=True, help="Print the full receipt as JSON.")
+@click.option("--markdown", "as_markdown", is_flag=True, help="Print it as Markdown for a pull request.")
+@click.option("--project", type=click.Path(file_okay=False), default=None,
+              help="Project folder. Defaults to the current folder.")
+def receipt_cmd(session_id, turn, as_json, as_markdown, project):
+    """Show what one agent turn read, changed, ran and was stopped from doing."""
+    import json
+    import os
+    from pathlib import Path
+    from andromity.config import config
+    from andromity.core.identity import local_identity
+    from andromity.core.receipt import ReceiptUnavailable, build_receipt, render_markdown, render_text
+    from andromity.core.session import Session
+
+    if as_json and as_markdown:
+        raise click.UsageError("Choose --json or --markdown, not both.")
+    project_path = str(Path(project or os.getcwd()).resolve())
+    if session_id:
+        session = Session.load_by_id(session_id, project_path)
+    else:
+        recent = Session.list_sessions(project_path, limit=1)
+        session = Session.load_by_id(recent[0].id, project_path) if recent else None
+    if session is None:
+        raise click.ClickException("No session found for this folder. Run Andromity here first, or pass a session id.")
+    if not config.is_trusted(session.project_path):
+        raise click.ClickException("Trust this workspace in Andromity to read its receipts.")
+    try:
+        receipt = build_receipt(session, None if turn is None else turn - 1)
+    except ReceiptUnavailable as exc:
+        raise click.ClickException(str(exc))
+    if as_json:
+        _echo_safely(json.dumps(receipt, indent=2, ensure_ascii=False))
+    elif as_markdown:
+        _echo_safely(render_markdown(receipt))
+    else:
+        _echo_safely(render_text(receipt, local_identity(session.project_path)))
+
+
+def _echo_safely(text: str) -> None:
+    try:
+        click.echo(text)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        click.echo(text.encode(encoding, errors="replace").decode(encoding))
+
+
 
 def _maybe_show_feedback_hint():
     try:
@@ -159,7 +214,6 @@ async def _run_async(prompt, yes, dry_run, profile, provider=None, model=None):
         config.set_trusted(str(Path.cwd()))
     from andromity.core.session import Session
     from andromity.core.agent import Agent
-    from andromity.core.events import TextDelta, ToolCallStart, ToolCallEnd, Done
     from andromity.core.models import get_context_limit_for_model, get_ollama_num_ctx
     session = Session(name="headless-session")
     provider = provider or config.get("default", "provider", "")
@@ -171,7 +225,7 @@ async def _run_async(prompt, yes, dry_run, profile, provider=None, model=None):
     else:
         ctx_limit = get_context_limit_for_model(provider, model) if (provider and model) else 0
 
-    async def _cli_approval(tool_name: str, args: dict) -> bool:
+    async def _cli_approval(tool_name: str, args: dict) -> dict:
         import json as _json
         print(f"\n[Approval required] Tool: {tool_name}")
         print(_json.dumps(args, indent=2))
@@ -179,7 +233,7 @@ async def _run_async(prompt, yes, dry_run, profile, provider=None, model=None):
             answer = input("Allow? [y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             answer = "n"
-        return answer in ("y", "yes")
+        return {"approved": answer in ("y", "yes"), "by": "person"}
 
     agent = Agent(
         session,
@@ -191,55 +245,100 @@ async def _run_async(prompt, yes, dry_run, profile, provider=None, model=None):
         provider=provider,
         model=model,
     )
-    from andromity.core.events import TextDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, ToolResult, Done
-
     pending_calls = {}
+    record = await _start_cli_turn(session)
 
     print(f"\nUser: {prompt}\n")
     print("Andromity:", end=" ", flush=True)
-    async for event in agent.run(prompt):
-        if isinstance(event, TextDelta):
-            print(event.text, end="", flush=True)
-        elif isinstance(event, ToolCallStart):
-            pending_calls[event.tool_id] = {"name": event.tool_name, "args": ""}
-        elif isinstance(event, ToolCallDelta):
-            if event.tool_id in pending_calls:
-                pending_calls[event.tool_id]["args"] += event.args_json_chunk
-        elif isinstance(event, ToolCallEnd):
-            call_info = pending_calls.get(event.tool_id, {})
-            name = call_info.get("name", "tool")
-            args_str = call_info.get("args", "")
-            formatted_args = ""
-            try:
-                import json
-                parsed = json.loads(args_str)
-                parts = []
-                for k, v in parsed.items():
-                    if isinstance(v, str):
-                        val_str = v.replace("\n", "\\n")
-                        if len(val_str) > 60:
-                            val_str = val_str[:57] + "..."
-                        parts.append(f'{k}="{val_str}"')
-                    elif isinstance(v, (int, float, bool)):
-                        parts.append(f'{k}={v}')
-                    elif isinstance(v, list):
-                        parts.append(f'{k}=[{len(v)} items]')
-                    else:
-                        parts.append(f'{k}=...')
-                formatted_args = ", ".join(parts)
-            except Exception:
-                formatted_args = args_str[:60]
-            print(f"\n[Tool: {name}({formatted_args})]", end=" ", flush=True)
-        elif isinstance(event, ToolResult):
-            status = "Success" if event.success else "Failed"
-            dur = f"{event.duration_ms:.0f}ms"
-            preview = ""
-            if not event.success and event.result:
-                first_line = event.result.strip().split("\n")[0]
-                preview = f" - {first_line[:80]}"
-            print(f"-> [{status}, {dur}{preview}]", end=" ", flush=True)
+    try:
+        await _stream_cli_events(agent, prompt, pending_calls)
+    finally:
+        receipt = await _finish_cli_turn(session, record)
     print(f"\n\nTokens: {session.token_total} | Cost: ${session.cost_usd:.4f}")
+    if receipt is not None:
+        count = len(receipt["needs_attention"])
+        attention = f"{count} {'thing needs' if count == 1 else 'things need'} your eyes. " if count else ""
+        print(f"Receipt: {attention}See what this run read, changed and ran: andromity receipt {session.id}")
     _maybe_show_feedback_hint()
+
+
+async def _start_cli_turn(session):
+    """Snapshot a trusted git project before a headless run, so the run gets a receipt. Never creates a repo."""
+    from pathlib import Path
+    from andromity.config import config
+    from andromity.core.git_ops import create_pre_edit_snapshot, get_repo
+    from andromity.core.receipt import start_turn_record
+    session.turn_key = None
+    project = Path(session.project_path)
+    if not config.is_trusted(str(project)) or get_repo(project) is None:
+        return None
+    snapshot = await asyncio.to_thread(create_pre_edit_snapshot, project)
+    return start_turn_record(session, snapshot) if snapshot else None
+
+
+async def _finish_cli_turn(session, record):
+    from pathlib import Path
+    from andromity.core.git_ops import create_pre_edit_snapshot
+    from andromity.core.receipt import close_turn_record, seal_receipt, turn_started
+    if record is None:
+        return None
+    if not turn_started(session, record):
+        session.undo_stack.remove(record)
+        return None
+    record.update(close_turn_record(session))
+    record["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path))
+    try:
+        receipt = await asyncio.to_thread(seal_receipt, session, record) if record["after_hash"] else None
+    except Exception:
+        receipt = None
+    session.save()
+    return receipt
+
+
+async def _stream_cli_events(agent, prompt, pending_calls):
+    from andromity.core.events import TextDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, ToolResult
+    async with aclosing(agent.run(prompt)) as events:
+        async for event in events:
+            if isinstance(event, TextDelta):
+                print(event.text, end="", flush=True)
+            elif isinstance(event, ToolCallStart):
+                pending_calls[event.tool_id] = {"name": event.tool_name, "args": ""}
+            elif isinstance(event, ToolCallDelta):
+                if event.tool_id in pending_calls:
+                    pending_calls[event.tool_id]["args"] += event.args_json_chunk
+            elif isinstance(event, ToolCallEnd):
+                call_info = pending_calls.get(event.tool_id, {})
+                name = call_info.get("name", "tool")
+                args_str = call_info.get("args", "")
+                formatted_args = ""
+                try:
+                    import json
+                    parsed = json.loads(args_str)
+                    parts = []
+                    for k, v in parsed.items():
+                        if isinstance(v, str):
+                            val_str = v.replace("\n", "\\n")
+                            if len(val_str) > 60:
+                                val_str = val_str[:57] + "..."
+                            parts.append(f'{k}="{val_str}"')
+                        elif isinstance(v, (int, float, bool)):
+                            parts.append(f'{k}={v}')
+                        elif isinstance(v, list):
+                            parts.append(f'{k}=[{len(v)} items]')
+                        else:
+                            parts.append(f'{k}=...')
+                    formatted_args = ", ".join(parts)
+                except Exception:
+                    formatted_args = args_str[:60]
+                print(f"\n[Tool: {name}({formatted_args})]", end=" ", flush=True)
+            elif isinstance(event, ToolResult):
+                status = "Success" if event.success else "Failed"
+                dur = f"{event.duration_ms:.0f}ms"
+                preview = ""
+                if not event.success and event.result:
+                    first_line = event.result.strip().split("\n")[0]
+                    preview = f" - {first_line[:80]}"
+                print(f"-> [{status}, {dur}{preview}]", end=" ", flush=True)
 
 
 if __name__ == "__main__":

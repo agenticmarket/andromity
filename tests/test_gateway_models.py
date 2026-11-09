@@ -68,17 +68,25 @@ def test_gateway_models_without_metadata_keep_their_previous_shape(monkeypatch):
     assert plain["tags"] == ["cloud"]
 
 
+def _typed(err: Exception, action: str) -> Exception:
+    """The gateway's typed headers, kept by LiteLLM on the exception it raises."""
+    err.litellm_response_headers = {"x-andromity-error-type": "model_unavailable", "x-andromity-error-action": action}
+    return err
+
+
 def _unavailable(action: str, message: str, code: str = "any_reason") -> Exception:
     body = json.dumps({"error": {"message": message, "type": "model_unavailable", "code": code, "action": action}})
     err = Exception(f"litellm.PermissionDeniedError: OpenAIException - {body}")
     err.status_code = 403
-    return err
+    return _typed(err, action)
 
 
 def test_detects_only_model_unavailable_errors():
     assert gateway_model_unavailable(_unavailable("switch_model", "x"))["action"] == "switch_model"
     assert gateway_model_unavailable(Exception('OpenAIException - {"error": {"type": "invalid_request_error"}}')) is None
     assert gateway_model_unavailable(Exception("plain failure")) is None
+    untyped = json.dumps({"error": {"message": "x", "type": "model_unavailable", "action": "switch_model"}})
+    assert gateway_model_unavailable(Exception(f"OpenAIException - {untyped}")) is None, "a body without the header is not the gateway's"
 
 
 def test_sign_in_action_offers_sign_in_and_switch_model():
@@ -116,7 +124,7 @@ async def test_model_unavailable_is_not_retried(monkeypatch):
         nonlocal calls
         calls += 1
         body = json.dumps({"error": {"message": "Capacity for this model is used up today.", "type": "model_unavailable", "action": "switch_model"}})
-        raise Exception(f"litellm.APIError: OpenAIException - {body}")
+        raise _typed(Exception(f"litellm.APIError: OpenAIException - {body}"), "switch_model")
 
     monkeypatch.setattr(litellm, "acompletion", refusing_acompletion)
 

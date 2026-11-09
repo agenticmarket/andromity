@@ -62,13 +62,40 @@ export function describeCommandRisks(command: string): CommandRisk[] {
 }
 
 /**
- * Whether an approval for this command can be remembered. The server never allowlists a
- * command that contains shell control characters, so offering to remember one would only
- * store a rule that never matches.
+ * Whether an approval for this command can be remembered. The server allowlists only commands
+ * made of plain characters (letters, digits and _-.,:=+@/~ or a backslash), split by spaces or
+ * tabs, where a quote may wrap a whole word and nothing else; offering to remember anything else
+ * would only store a rule that never matches. Self-contained: its source is injected into the chat.
  */
 export function canRememberCommand(command: string): boolean {
-  if (typeof command !== "string" || !command.trim()) return false;
-  return !/[;&|`$(){}<>\n\r%^\x00]/.test(command.trim());
+  if (typeof command !== "string") return false;
+  const text = command.trim();
+  if (!text) return false;
+  const tab = String.fromCharCode(9);
+  const plain = (ch: string) =>
+    /^[A-Za-z0-9]$/.test(ch) || "_-.,:=+@/~".includes(ch) || ch === String.fromCharCode(92);
+  let quote = "";
+  let inWord = false;
+  let quotedWord = false;
+  for (const ch of text) {
+    if (quote) {
+      if (ch === quote) quote = "";
+      else if (!plain(ch) && ch !== " " && ch !== tab) return false;
+    } else if (ch === " " || ch === tab) {
+      inWord = false;
+      quotedWord = false;
+    } else if (ch === "'" || ch === '"') {
+      if (inWord) return false;
+      quote = ch;
+      inWord = true;
+      quotedWord = true;
+    } else if (quotedWord || !plain(ch)) {
+      return false;
+    } else {
+      inWord = true;
+    }
+  }
+  return !quote;
 }
 
 const HIDDEN_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;

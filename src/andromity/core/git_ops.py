@@ -10,6 +10,99 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("andromity.git_ops")
 SNAPSHOT_BRANCH = "andromity-snapshots"
+# Where snapshots go while someone has the snapshot branch checked out: moving that branch would commit
+# their working files onto the branch they are working on.
+CHECKED_OUT_SNAPSHOT_REF = "refs/andromity/snapshots"
+
+
+def snapshot_branch_checked_out(repo: "Repo") -> bool:
+    """True when this or any other worktree of the repository has the snapshot branch checked out, under any
+    capitalisation (Windows and macOS open the same ref for every case)."""
+    wanted = f"refs/heads/{SNAPSHOT_BRANCH}"
+    git = safe_git_command(repo)
+    try:
+        if repo.git.execute([*git, "symbolic-ref", "-q", "HEAD"]).strip().lower() == wanted:
+            return True
+    except Exception:
+        pass
+    try:
+        listing = repo.git.execute([*git, "worktree", "list", "--porcelain"])
+    except Exception:
+        return False
+    return any(line.strip().lower() == f"branch {wanted}" for line in listing.splitlines())
+
+
+def snapshot_ref(repo: "Repo") -> str:
+    """The ref new snapshots are recorded on: the snapshot branch, unless it is checked out."""
+    return CHECKED_OUT_SNAPSHOT_REF if snapshot_branch_checked_out(repo) else f"refs/heads/{SNAPSHOT_BRANCH}"
+# An empty core.fsmonitor disables it on every git version; "false" is read as a program name before 2.36.
+NO_REPO_PROGRAMS = ("-c", "core.fsmonitor=", "-c", f"core.hooksPath={os.devnull}")
+_FILTER_PROGRAMS = ("clean", "smudge", "process")
+_STANDARD_LFS = {
+    "clean": {"git-lfs clean -- %f"},
+    "smudge": {"git-lfs smudge -- %f", "git-lfs smudge --skip -- %f"},
+    "process": {"git-lfs filter-process", "git-lfs filter-process --skip"},
+}
+
+
+class UnsafeGitConfig(Exception):
+    """Git config defines a filter that cannot be neutralized; refuse rather than run it."""
+
+
+def disabled_filters(repo: "Repo") -> List[str]:
+    """Filter drivers whose programs Andromity's own git calls must not run: every configured driver except an
+    untouched standard Git LFS setup. Asks git, so includes, every config scope and old syntaxes are covered."""
+    from git.exc import GitCommandError
+    try:
+        raw = repo.git.execute(["git", "config", "--null", "--get-regexp", r"^filter\."], stdout_as_string=False)
+    except GitCommandError as exc:
+        if exc.status == 1:
+            return []
+        raise UnsafeGitConfig("Git configuration could not be read") from exc
+    drivers: dict[str, list[tuple[str, str]]] = {}
+    for entry in raw.decode("utf-8", errors="surrogateescape").split("\0"):
+        key, _, value = entry.partition("\n")
+        rest = key[len("filter."):]
+        if not key.startswith("filter.") or "." not in rest:
+            continue
+        name, _, variable = rest.rpartition(".")
+        drivers.setdefault(name, [])
+        if variable in _FILTER_PROGRAMS:
+            drivers[name].append((variable, value))
+    disabled = []
+    for name, programs in drivers.items():
+        if name == "lfs" and all(not value or value in _STANDARD_LFS[variable] for variable, value in programs):
+            continue
+        try:
+            name.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise UnsafeGitConfig("A git filter has a name that cannot be safely disabled") from exc
+        if not name or "=" in name:
+            raise UnsafeGitConfig("A git filter has a name that cannot be safely disabled")
+        disabled.append(name)
+    return disabled
+
+
+def safe_git_command(repo: "Repo") -> List[str]:
+    """`git` plus overrides so Andromity's own git calls never run hooks, fsmonitor or filter programs
+    configured in the repository or user config. The standard Git LFS filter is left alone.
+
+    Raises UnsafeGitConfig when the config can't be read or a filter name can't be overridden safely."""
+    command = ["git", *NO_REPO_PROGRAMS]
+    for name in disabled_filters(repo):
+        command += ["-c", f"filter.{name}.clean=", "-c", f"filter.{name}.smudge=",
+                    "-c", f"filter.{name}.process=", "-c", f"filter.{name}.required=false"]
+    return command
+
+
+def uses_disabled_filter(repo: "Repo", rel: str) -> Optional[str]:
+    """Name of the disabled filter driver a repository file is set to use, if any."""
+    names = set(disabled_filters(repo))
+    if not names:
+        return None
+    parts = repo.git.execute(["git", *NO_REPO_PROGRAMS, "check-attr", "-z", "filter", "--", rel]).split("\0")
+    value = parts[2] if len(parts) > 2 else ""
+    return value if value in names else None
 
 
 async def run_restoration(function: Callable[..., Any], *args: Any) -> Any:
@@ -77,8 +170,8 @@ def ensure_git_tracking(project_path: Path) -> tuple["Repo", bool]:
 
     # Stage everything and create baseline commit.
     try:
-        repo.git.add("-A")
-        repo.index.commit("andromity: baseline snapshot")
+        repo.git.execute([*safe_git_command(repo), "add", "-A"])
+        repo.index.commit("andromity: baseline snapshot", skip_hooks=True)
     except Exception:
         pass
 
@@ -119,9 +212,14 @@ def create_pre_edit_snapshot(
         work_dir = Path(repo.working_tree_dir)
         scope = Path(repo_or_path).resolve() if isinstance(repo_or_path, (str, Path)) else work_dir.resolve()
 
-        # Base commit: use latest snapshot on shadow branch if present, else HEAD
+        snap_ref = snapshot_ref(repo)
+        if snap_ref == CHECKED_OUT_SNAPSHOT_REF:
+            log.warning("%s is checked out; keeping this snapshot under %s so the checked-out branch doesn't move",
+                        SNAPSHOT_BRANCH, CHECKED_OUT_SNAPSHOT_REF)
+
+        # Base commit: use latest snapshot if present, else HEAD
         try:
-            snap_base = repo.git.rev_parse(f"refs/heads/{SNAPSHOT_BRANCH}").strip()
+            snap_base = repo.git.rev_parse(snap_ref).strip()
         except (GitCommandError, Exception):
             snap_base = head_commit
 
@@ -136,8 +234,9 @@ def create_pre_edit_snapshot(
             except OSError:
                 pass
             env = {**os.environ, "GIT_INDEX_FILE": tmp_index}
+            git = safe_git_command(repo)
             if target_files:
-                repo.git.execute(["git", "read-tree", head_commit], env=env)
+                repo.git.execute([*git, "read-tree", head_commit], env=env)
                 rel_targets = []
                 resolved_work = work_dir.resolve()
                 for tf in target_files:
@@ -151,16 +250,16 @@ def create_pre_edit_snapshot(
                     except (ValueError, Exception):
                         continue
                 if rel_targets:
-                    repo.git.execute(["git", "add", "-A", "--"] + [":(literal)" + name for name in rel_targets], env=env)
+                    repo.git.execute([*git, "add", "-A", "--"] + [":(literal)" + name for name in rel_targets], env=env)
             else:
                 # A workspace can be a subfolder of a larger repository.
                 if scope != work_dir.resolve():
-                    repo.git.execute(["git", "read-tree", head_commit], env=env)
-                    repo.git.execute(["git", "add", "-A", "--", ":(literal)" + scope.relative_to(work_dir.resolve()).as_posix()], env=env)
+                    repo.git.execute([*git, "read-tree", head_commit], env=env)
+                    repo.git.execute([*git, "add", "-A", "--", ":(literal)" + scope.relative_to(work_dir.resolve()).as_posix()], env=env)
                 else:
-                    repo.git.execute(["git", "add", "-A"], env=env)
+                    repo.git.execute([*git, "add", "-A"], env=env)
             # Write the tree from the temp index.
-            tree_hash = repo.git.execute(["git", "write-tree"], env=env).strip()
+            tree_hash = repo.git.execute([*git, "write-tree"], env=env).strip()
         finally:
             try:
                 os.unlink(tmp_index)
@@ -168,19 +267,12 @@ def create_pre_edit_snapshot(
                 pass
 
         # ── Create a real commit object on the shadow branch ────────────────
-        # Ensure shadow branch exists.
-        try:
-            repo.git.rev_parse(SNAPSHOT_BRANCH)
-        except GitCommandError:
-            repo.git.update_ref(f"refs/heads/{SNAPSHOT_BRANCH}", head_commit)
-
-        snap_hash = repo.git.commit_tree(
-            tree_hash,
-            "-p", snap_base,
-            "-m", "andromity: pre-turn snapshot",
+        git = safe_git_command(repo)
+        snap_hash = repo.git.execute(
+            [*git, "commit-tree", tree_hash, "-p", snap_base, "-m", "andromity: pre-turn snapshot"]
         ).strip()
 
-        repo.git.update_ref(f"refs/heads/{SNAPSHOT_BRANCH}", snap_hash)
+        repo.git.execute([*git, "update-ref", snap_ref, snap_hash])
         return snap_hash
 
     except Exception as e:
@@ -210,7 +302,8 @@ def repository_path(repo: "Repo", file_path: str) -> tuple[Path, str]:
 
 
 def status_entries(repo: "Repo") -> list[dict]:
-    raw = repo.git.execute(["git", "status", "--porcelain=v1", "-z", "-uall"], stdout_as_string=False)
+    raw = repo.git.execute([*safe_git_command(repo), "status", "--porcelain=v1", "-z", "-uall",
+                            "--ignore-submodules=dirty"], stdout_as_string=False)
     parts = raw.decode("utf-8", errors="surrogateescape").split("\0")
     entries = []
     i = 0
@@ -269,9 +362,10 @@ def restore_file_snapshot(repo: "Repo", commit_hash: str, rel_path: str) -> bool
                 parent.rmdir()
                 parent = parent.parent
         else:
-            repo.git.restore("--source=" + commit.hexsha, "--worktree", "--", ":(literal)" + rel)
+            repo.git.execute([*safe_git_command(repo), "restore", "--source=" + commit.hexsha, "--worktree", "--",
+                              ":(literal)" + rel])
         return True
-    except (GitCommandError, OSError, ValueError) as exc:
+    except (GitCommandError, OSError, ValueError, UnsafeGitConfig) as exc:
         log.warning("Failed to restore file %s: %s", rel_path, exc)
         return False
 
@@ -298,7 +392,8 @@ def rollback_recorded_turns(repo: "Repo", records: list[dict], project_path: Opt
         else:
             if not full.is_file():
                 return False
-            if full.read_bytes() != blob.data_stream.read() and repo.git.hash_object("--path=" + rel, "--", str(full)).strip() != blob.hexsha:
+            if full.read_bytes() != blob.data_stream.read() and repo.git.execute(
+                    [*safe_git_command(repo), "hash-object", "--path=" + rel, "--", str(full)]).strip() != blob.hexsha:
                 return False
     return restore_snapshot(repo, records[0]["snapshot_hash"], list(expected))
 
@@ -312,12 +407,13 @@ def checkpoint_changed_files(repo: "Repo", record: dict, project_path: str) -> l
 
 def list_snapshots(repo: Repo, limit: int = 20) -> List[dict]:
     from git.exc import GitCommandError
+    ref = snapshot_ref(repo)
     try:
-        repo.git.rev_parse(SNAPSHOT_BRANCH)
+        repo.git.rev_parse(ref)
     except (GitCommandError, Exception):
         return []
     try:
-        log_output = repo.git.log(SNAPSHOT_BRANCH, f"-{limit}", "--format=%H|%ai|%s")
+        log_output = repo.git.log(ref, f"-{limit}", "--format=%H|%ai|%s")
         snapshots = []
         for line in log_output.strip().split("\n"):
             if not line.strip():
@@ -334,7 +430,8 @@ def get_git_status(repo: Repo) -> dict:
     try:
         status = {}
         # Single efficient porcelain status call with -unormal (prevents crawling every single file in subdirs)
-        output = repo.git.status("--porcelain", "-unormal")
+        output = repo.git.execute([*safe_git_command(repo), "status", "--porcelain", "-unormal",
+                                   "--ignore-submodules=dirty"])
         for line in output.splitlines():
             if len(line) < 4:
                 continue
@@ -364,22 +461,24 @@ def get_file_diff(repo: Repo, rel_path: str) -> str:
     from git.exc import GitCommandError
     try:
         norm_path = rel_path.replace("\\", "/")
+        git = [*safe_git_command(repo), "diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=dirty"]
         # Try diff vs HEAD first
         try:
-            diff = repo.git.diff("HEAD", "--", norm_path)
+            diff = repo.git.execute([*git, "HEAD", "--", norm_path])
             if diff:
                 return diff
         except (GitCommandError, Exception):
             pass
 
         # Try unstaged diff
-        diff = repo.git.diff("--", norm_path)
+        diff = repo.git.execute([*git, "--", norm_path])
         if diff:
             return diff
 
         # If untracked, read current content
         try:
-            untracked = repo.git.ls_files("--others", "--exclude-standard", "--", norm_path)
+            untracked = repo.git.execute(["git", *NO_REPO_PROGRAMS, "ls-files", "--others", "--exclude-standard",
+                                          "--", norm_path])
             if untracked.strip():
                 full_path = Path(repo.working_tree_dir) / norm_path
                 with open(full_path, "r", encoding="utf-8", errors="replace") as f:

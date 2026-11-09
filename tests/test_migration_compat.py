@@ -141,3 +141,35 @@ def test_usage_tracker_aggregates_from_sqlite(isolated_env, monkeypatch):
     assert summary.total_sessions == 2
     assert summary.total_tokens == 450
     assert summary.total_cost_usd > 0
+
+
+def test_the_model_that_answered_survives_a_reload(isolated_env):
+    session = Session(session_id="model-persist", project_path=str(isolated_env))
+    session.add_message("user", content="hi")
+    session.add_message("assistant", content="hello", model="provider/model-a")
+    session.save()
+    reloaded = Session.load_by_id("model-persist", str(isolated_env))
+    assert [m.get("model") for m in reloaded.messages] == [None, "provider/model-a"]
+
+
+def test_an_older_database_without_the_model_column_still_loads(tmp_path):
+    import sqlite3
+    legacy = tmp_path / "legacy.db"
+    conn = sqlite3.connect(legacy)
+    conn.execute("""CREATE TABLE session_messages (session_id TEXT NOT NULL, seq INTEGER NOT NULL, role TEXT NOT NULL,
+                    content TEXT, tool_calls TEXT, thinking TEXT, name TEXT, tool_call_id TEXT, ts TEXT NOT NULL,
+                    images TEXT, duration REAL, PRIMARY KEY (session_id, seq))""")
+    conn.commit()
+    conn.close()
+    set_custom_db_path(legacy)
+    try:
+        init_schema()
+        columns = {row["name"] for row in get_conn().execute("PRAGMA table_info(session_messages)")}
+        assert {"model", "steering", "turn_id"} <= columns
+        session = Session(session_id="legacy-model", project_path=str(tmp_path))
+        session.add_message("assistant", content="hello", model="provider/model-b")
+        session.save()
+        assert Session.load_by_id("legacy-model", str(tmp_path)).messages[0]["model"] == "provider/model-b"
+    finally:
+        set_custom_db_path(None)
+        close_conn()

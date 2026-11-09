@@ -1,4 +1,4 @@
-import { ingestTelemetry } from './ingest.js';
+import { ingestTelemetry, modelName, providerName } from './ingest.js';
 import { buildStatsScope, measurementQueries } from './statsScope.js';
 import { cachedStats } from './statsCache.js';
 import { sessionSummaries, featureSummaries, ERROR_SOURCE_PREFIX } from './metricSummaries.js';
@@ -314,7 +314,16 @@ export default {
     }
 
     const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
-    if (contentLength > 16384) {
+    let body;
+    try {
+      body = contentLength > TELEMETRY_BODY_LIMIT ? null : await readCappedText(request, TELEMETRY_BODY_LIMIT);
+    } catch {
+      return new Response(JSON.stringify({ error: 'Bad Request' }), {
+        status: 400,
+        headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    if (body === null) {
       return new Response(JSON.stringify({ error: 'Payload too large' }), {
         status: 413,
         headers: { ...securityHeaders, 'Content-Type': 'application/json' },
@@ -322,7 +331,8 @@ export default {
     }
 
     try {
-      const data = await request.json();
+      const data = JSON.parse(body);
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new SyntaxError('Expected an object');
 
       // ── Shared field sanitisation ──────────────────────────────────────────
       const rawUserId = typeof data.user_id === 'string' ? data.user_id.trim() : '';
@@ -354,17 +364,8 @@ export default {
       const country = /^[A-Z]{2}$/.test(rawCountry) ? rawCountry : 'XX';
 
       // v2 — model/provider fields (safe, bounded)
-      let provider        = String(data.provider || 'unknown').slice(0, 32).replace(/[^a-zA-Z0-9._-]/g, '') || 'unknown';
-      let model           = String(data.model    || 'unknown').slice(0, 64).replace(/[^a-zA-Z0-9._:-]/g, '') || 'unknown';
-
-      // Drop values that look like API keys
-      const KEY_REGEX = /(?:sk-[a-zA-Z0-9_\-]{16,}|nvapi-[a-zA-Z0-9_\-]{16,}|gsk_[a-zA-Z0-9_\-]{16,}|AIza[a-zA-Z0-9_\-]{16,}|xai-[a-zA-Z0-9_\-]{16,}|key-[a-zA-Z0-9_\-]{16,})/;
-      if (KEY_REGEX.test(model) || (model.length >= 32 && /^[a-zA-Z0-9_\-]{32,}$/.test(model))) {
-        model = 'scrubbed_api_key';
-      }
-      if (KEY_REGEX.test(provider) || (provider.length >= 32 && /^[a-zA-Z0-9_\-]{32,}$/.test(provider))) {
-        provider = 'scrubbed_api_key';
-      }
+      const provider      = providerName(data.provider);
+      const model         = modelName(data.model);
 
       const providerTypeRaw = String(data.provider_type || 'cloud').toLowerCase();
       const providerType    = ['cloud', 'local'].includes(providerTypeRaw) ? providerTypeRaw : 'cloud';
@@ -409,6 +410,29 @@ export default {
   },
 };
 
+
+const TELEMETRY_BODY_LIMIT = 16384;
+
+export async function readCappedText(request, limit) {
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder().decode(bytes);
+}
 
 function timingSafeMatch(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
@@ -546,11 +570,11 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
         COALESCE(e.tool_file_count, 0) AS tool_file_count,
         COALESCE(e.tool_web_count, 0) AS tool_web_count,
         (COALESCE(e.tool_bash_count, 0) + COALESCE(e.tool_file_count, 0) + COALESCE(e.tool_web_count, 0)) AS total_tools_count,
-        (SELECT COUNT(*) FROM feature_events fe WHERE fe.session_id = s.session_id AND fe.feature_name = 'waterfall_manual') AS session_waterfall_count,
+        (SELECT COUNT(*) FROM feature_events fe WHERE fe.session_id = s.session_id AND fe.user_id = s.user_id AND fe.feature_name = 'waterfall_manual') AS session_waterfall_count,
         (SELECT COUNT(*) FROM feature_events fe WHERE fe.user_id = s.user_id AND fe.feature_name = 'waterfall_manual') AS user_waterfall_total,
         s.created_at
       FROM recent s
-      LEFT JOIN events e ON e.id = (SELECT MAX(latest.id) FROM events latest WHERE latest.session_id=s.session_id AND latest.event='session_end')
+      LEFT JOIN events e ON e.id = (SELECT MAX(latest.id) FROM events latest WHERE latest.session_id=s.session_id AND latest.user_id=s.user_id AND latest.event='session_end')
       ORDER BY s.created_at DESC
     `),
     prepare(`
@@ -586,15 +610,15 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
         UNION ALL
         SELECT user_id,session_id,COUNT(*) AS error_count FROM feature_events f WHERE feature_name LIKE 'error_%'
           AND substr(feature_name,1,10)<>'error_src_'
-          AND NOT EXISTS(SELECT 1 FROM task_runs t WHERE t.session_id=f.session_id AND t.date=f.date)
+          AND NOT EXISTS(SELECT 1 FROM task_runs t WHERE t.session_id=f.session_id AND t.user_id=f.user_id AND t.date=f.date)
           GROUP BY user_id,session_id,date
         UNION ALL
         SELECT e.user_id,e.session_id,e.error_count FROM (
           SELECT user_id,session_id,date,COUNT(*) AS error_count FROM events
           WHERE event='session_end' AND had_error=1 GROUP BY user_id,session_id,date
         ) e WHERE 1=1
-          AND NOT EXISTS(SELECT 1 FROM task_runs t WHERE t.session_id=e.session_id AND t.date=e.date)
-          AND NOT EXISTS(SELECT 1 FROM feature_events f WHERE f.session_id=e.session_id AND f.date=e.date AND f.feature_name LIKE 'error_%'
+          AND NOT EXISTS(SELECT 1 FROM task_runs t WHERE t.session_id=e.session_id AND t.user_id=e.user_id AND t.date=e.date)
+          AND NOT EXISTS(SELECT 1 FROM feature_events f WHERE f.session_id=e.session_id AND f.user_id=e.user_id AND f.date=e.date AND f.feature_name LIKE 'error_%'
             AND substr(f.feature_name,1,10)<>'error_src_')
       )`),
     prepare(`
@@ -608,7 +632,7 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
         COUNT(*) AS sessions,
         COUNT(DISTINCT s.user_id) AS users
       FROM sessions s
-      LEFT JOIN events e ON e.id = (SELECT MAX(latest.id) FROM events latest WHERE latest.session_id=s.session_id AND latest.event='session_end')
+      LEFT JOIN events e ON e.id = (SELECT MAX(latest.id) FROM events latest WHERE latest.session_id=s.session_id AND latest.user_id=s.user_id AND latest.event='session_end')
       GROUP BY category
       ORDER BY sessions DESC
     `)

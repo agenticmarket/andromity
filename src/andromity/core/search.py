@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Set
 
 from andromity.core.debug_log import get_logger
+from andromity.core.git_ops import NO_REPO_PROGRAMS
 
 log = get_logger("search")
 
@@ -415,7 +416,7 @@ def grep_search(
             for pat in expanded_patterns:
                 # FIX: Git explicitly forbids combining --no-index and --untracked (fatal exit 128).
                 # Inside a git worktree, use --untracked without --no-index.
-                cmd = ["git", "grep", "-n", "-I", "--untracked"]
+                cmd = ["git", *NO_REPO_PROGRAMS, "grep", "-n", "-I", "--untracked"]
                 if not case_sensitive:
                     cmd.append("-i")
                 cmd.extend(["-e", query, "--"])

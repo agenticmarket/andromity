@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { allowOpenPath } from "../server/securityPolicy.js";
+import { checkOpenPath } from "../server/securityPolicy.js";
 import * as os from "node:os";
 import * as path from "node:path";
 import { RpcClient } from "../server/RpcClient.js";
@@ -231,16 +231,12 @@ export class FingerprintPanel {
       case "open_file": {
         if (typeof message.filePath === "string" && message.filePath) {
           try {
-            if (!(await allowOpenPath(message.filePath))) break;
-            let fullPath = message.filePath;
-            if (!path.isAbsolute(fullPath)) {
-              const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-              if (ws) {
-                fullPath = path.resolve(ws, fullPath);
-              }
+            const check = await checkOpenPath(message.filePath);
+            if (check.status === "missing") {
+              vscode.window.showWarningMessage(`Could not open file ${message.filePath}: it was not found.`);
             }
-            const uri = vscode.Uri.file(fullPath);
-            const doc = await vscode.workspace.openTextDocument(uri);
+            if (check.status !== "open") break;
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(check.path));
             const line = Math.max(0, (message.line || 1) - 1);
             await vscode.window.showTextDocument(doc, {
               selection: new vscode.Range(line, 0, line, 0),

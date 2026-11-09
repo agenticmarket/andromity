@@ -99,6 +99,23 @@ Andromity operates on a strict, defense-in-depth 3-tier security gate hierarchy.
 | **FULL** | Auto-approved | Written directly, no review | Written directly, no review | Auto-approved |
 | **YOLO** | Auto-approved (shown as FYI) | Silent, no review | Silent, no review | Silent, no review |
 
+### What the command allowlist runs without asking
+
+An allowlist entry is a command prefix, and a command only runs unattended when
+Andromity can read it exactly as the shell will:
+
+- No expansion, substitution, pipe, chain, redirect or glob. A quote is allowed
+  only around a whole argument (`git commit -m "add parser tests"` runs;
+  `git commit -m "fix: (empty) input"` asks).
+- No argument that leaves the workspace, names a credential file, or resolves
+  through a link to somewhere outside the project.
+- A program whose work is named by an argument — a shell, an interpreter, `env`,
+  `xargs`, `sudo`, `find`, `ssh`, `docker`, a database client — runs unattended
+  only as the exact prefix on the allowlist, never with extra arguments.
+
+Everything else asks. The cases behind these rules are in `tests/safety`, which
+runs with `pytest tests/safety`.
+
 ---
 
 ## Profiles
@@ -161,7 +178,8 @@ Lives at `~/.andromity/config.toml`. Created automatically on first run.
 provider = "anthropic"
 model    = "claude-sonnet-4-5"
 profile  = "builder"
-telemetry = true   # set to false to opt out
+telemetry = true        # set to false to opt out
+max_tool_rounds = 60    # tool rounds one turn may take before the agent stops and reports
 
 [[providers]]
 name = "anthropic"

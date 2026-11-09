@@ -1,11 +1,13 @@
 import asyncio
 import json
 import time
-from dataclasses import dataclass, field
+from contextlib import aclosing
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from andromity.config import config
+from andromity.core.call_ids import UniqueCallIds, used_call_ids
 from andromity.core.debug_log import get_logger
 from andromity.core.events import (
     Done, StreamEvent, SubAgentDone, SubAgentFailed, SubAgentKilled,
@@ -19,6 +21,15 @@ from andromity.core.subagent_config import SubAgentConfigManager, SubAgentRoleCo
 from andromity.core.tools import CORE_TOOLS, execute_tool_async
 
 log = get_logger("subagent")
+
+
+MODE_RANK = {"safe": 0, "trust": 1, "full": 2, "yolo": 3}
+
+
+def normalize_mode(mode: Any) -> str:
+    """A permission mode as one of safe, trust, full or yolo. Anything else is safe, never a mode no check matches."""
+    value = str(mode or "").strip().lower()
+    return value if value in MODE_RANK else "safe"
 
 
 @dataclass
@@ -118,7 +129,7 @@ class SubAgent:
         self.role = role.lower().strip()
         self.task = task
         self.project_path = project_path
-        self.permission_mode = (permission_mode or config.get("default", "permission_mode", "safe")).lower().strip()
+        self.permission_mode = normalize_mode(permission_mode or config.get("default", "permission_mode", "safe"))
         self.depth = depth
         self.tool_id = tool_id
         self.progress_callback = progress_callback
@@ -281,6 +292,11 @@ class SubAgent:
         finally:
             self.finished_at = time.time()
             duration_ms = (self.finished_at - self.started_at) * 1000.0
+            # Saved now rather than on the debounce timer: the parent turn's receipt reads this session as it ends.
+            try:
+                self.session.save()
+            except Exception as exc:
+                log.debug("Subagent session not saved: %s", exc)
 
         compressed_summary = self._compress_summary(final_summary)
 
@@ -390,7 +406,7 @@ class SubAgent:
                 from andromity.config import config
                 cmd = str(targs.get("command", "")).strip()
                 allowed = config.get("default", "allowed_commands", []) or []
-                if not is_command_allowlisted(cmd, allowed):
+                if not is_command_allowlisted(cmd, allowed, self.project_path):
                     res_str = f"TOOL BLOCKED: Command '{cmd}' is not in allowlist or contains forbidden shell constructs for subagents in TRUST mode."
             elif self.permission_mode in ("safe", "trust") and tname in ("read_file", "view_file", "grep_search"):
                 from andromity.core.security import is_sensitive_path
@@ -417,9 +433,11 @@ class SubAgent:
             try:
                 from andromity.core.tools import register_session
                 register_session(self.session)
-                res_str = await execute_tool_async(tname, targs)
+                res_str = await execute_tool_async(tname, targs, tool_id=tcall_id)
             except Exception as ex:
                 res_str = f"Error: Tool {tname} failed: {ex}"
+        else:
+            self.session.record_tool_gate(tcall_id, "blocked")
         tool_dur_ms = (time.time() - t_start) * 1000.0
         act_desc = _format_tool_activity(tname, targs)
         tool_status = "error" if ("Error:" in res_str or "BLOCKED" in res_str) else "done"
@@ -455,6 +473,7 @@ class SubAgent:
                 "3. After tool calls, write your final summary as plain text prose."
             ),
         )
+        call_ids = UniqueCallIds(used_call_ids(self.session))
 
         for turn in range(max_turns):
             if self._killed:
@@ -480,39 +499,43 @@ class SubAgent:
             if turn > 0:
                 self._notify_progress(event_type="thinking", detail="Thinking...")
 
-            async for event in stream_completion(msgs, **stream_kwargs):
-                events_accum.append(event)
-                if isinstance(event, ThinkingDelta):
-                    self._notify_progress(event_type="thinking", detail="Thinking...")
-                elif isinstance(event, TextDelta):
-                    assistant_content += event.text
-                elif isinstance(event, ToolCallStart):
-                    pending_tool_calls[event.tool_id] = {
-                        "name": event.tool_name,
-                        "args": "",
-                    }
-                    # Do NOT emit here — wait for ToolCallEnd so args are available
-                elif isinstance(event, ToolCallDelta):
-                    if event.tool_id in pending_tool_calls:
-                        pending_tool_calls[event.tool_id]["args"] += event.args_json_chunk
-                elif isinstance(event, ToolCallEnd):
-                    if event.tool_id in pending_tool_calls:
-                        call_info = pending_tool_calls.pop(event.tool_id)
-                        tool_calls_to_execute.append({
-                            "id": event.tool_id,
-                            "type": "function",
-                            "function": {"name": call_info["name"], "arguments": call_info["args"]},
-                        })
-                        act_desc = _format_tool_activity(call_info["name"], call_info["args"])
-                        self._notify_progress(
-                            event_type="tool_call",
-                            tool_id=event.tool_id,
-                            tool_name=call_info["name"],
-                            tool_args=call_info["args"],
-                            detail=act_desc,
-                        )
-                elif isinstance(event, Done):
-                    last_usage = event.usage
+            call_ids.next_response()
+            async with aclosing(stream_completion(msgs, **stream_kwargs)) as events:
+                async for event in events:
+                    if isinstance(event, (ToolCallStart, ToolCallDelta, ToolCallEnd)):
+                        event = replace(event, tool_id=call_ids.map(event.tool_id))
+                    events_accum.append(event)
+                    if isinstance(event, ThinkingDelta):
+                        self._notify_progress(event_type="thinking", detail="Thinking...")
+                    elif isinstance(event, TextDelta):
+                        assistant_content += event.text
+                    elif isinstance(event, ToolCallStart):
+                        pending_tool_calls[event.tool_id] = {
+                            "name": event.tool_name,
+                            "args": "",
+                        }
+                        # Do NOT emit here — wait for ToolCallEnd so args are available
+                    elif isinstance(event, ToolCallDelta):
+                        if event.tool_id in pending_tool_calls:
+                            pending_tool_calls[event.tool_id]["args"] += event.args_json_chunk
+                    elif isinstance(event, ToolCallEnd):
+                        if event.tool_id in pending_tool_calls:
+                            call_info = pending_tool_calls.pop(event.tool_id)
+                            tool_calls_to_execute.append({
+                                "id": event.tool_id,
+                                "type": "function",
+                                "function": {"name": call_info["name"], "arguments": call_info["args"]},
+                            })
+                            act_desc = _format_tool_activity(call_info["name"], call_info["args"])
+                            self._notify_progress(
+                                event_type="tool_call",
+                                tool_id=event.tool_id,
+                                tool_name=call_info["name"],
+                                tool_args=call_info["args"],
+                                detail=act_desc,
+                            )
+                    elif isinstance(event, Done):
+                        last_usage = event.usage
 
             for tid, call_info in list(pending_tool_calls.items()):
                 tool_calls_to_execute.append({

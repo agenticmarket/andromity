@@ -2,6 +2,8 @@
  * Client-side script for the Andromity Changes Review Webview.
  * Handles tree rendering, interactive diff parsing, folding, and postMessage RPC.
  */
+import { prFormClient } from "./prFormClient.js";
+
 export function getReviewClientScript(): string {
   return `
   (function () {
@@ -12,6 +14,7 @@ export function getReviewClientScript(): string {
       branch: 'HEAD',
       files: [],
       turnFiles: null,
+      turnView: null,
       scope: 'turn',
       activeFilePath: null,
       fileDiffs: Object.create(null),
@@ -30,7 +33,22 @@ export function getReviewClientScript(): string {
     }
 
     function saveState() {
-      vscode.setState({ ...state, fileDiffs: {}, fileNotices: {} });
+      vscode.setState({ ...state, fileDiffs: {}, fileNotices: {}, turnView: null });
+    }
+
+    // The turn's own changes (from its before and after snapshots) when the host could read them.
+    function turnViewActive() {
+      return state.scope === 'turn' && !!state.turnView && Array.isArray(state.turnView.files);
+    }
+
+    function diffKey(filePath) {
+      return turnViewActive() ? 'turn:' + filePath : filePath;
+    }
+
+    function turnNowLabel(now) {
+      if (now === 'committed') return 'committed';
+      if (now === 'changed') return 'changed since this turn';
+      return '';
     }
 
     // ── DOM References ─────────────────────────────────────────
@@ -142,6 +160,9 @@ export function getReviewClientScript(): string {
       state.searchQuery = e.target.value.toLowerCase().trim();
       renderTree();
     });
+
+    const repoViewBtn = document.getElementById('repo-view-btn');
+    if (repoViewBtn) repoViewBtn.addEventListener('click', function () { vscode.postMessage({ type: 'open_repo_view' }); });
 
     refreshBtn.addEventListener('click', function () {
       refreshBtn.disabled = true;
@@ -280,6 +301,7 @@ export function getReviewClientScript(): string {
     }
 
     function getActiveFileList() {
+      if (turnViewActive()) return state.turnView.files;
       let list = state.files;
       if (state.scope === 'turn' && state.turnFiles) {
         list = list.filter(function (f) {
@@ -290,6 +312,8 @@ export function getReviewClientScript(): string {
     }
 
     function updateMetrics() {
+      const targetBadgeEl = document.getElementById('target-badge');
+      if (targetBadgeEl) targetBadgeEl.textContent = turnViewActive() ? 'Turn ' + (state.turnView.turnIndex + 1) + ': before → after' : '↔ Working Tree';
       const activeList = getActiveFileList();
       let adds = 0;
       let dels = 0;
@@ -303,11 +327,15 @@ export function getReviewClientScript(): string {
       totalAdditionsEl.textContent = '+' + adds + (incomplete ? '*' : '');
       totalDeletionsEl.textContent = '-' + dels;
 
-      if (state.turnFiles && scopeTogglesEl) {
+      if ((state.turnFiles || (state.turnView && Array.isArray(state.turnView.files))) && scopeTogglesEl) {
         scopeTogglesEl.style.display = 'inline-flex';
-        const turnCount = state.files.filter(function (f) {
-          return isTurnFile(f.path, state.turnFiles);
-        }).length;
+        const turnCount = state.turnView && Array.isArray(state.turnView.files)
+          ? state.turnView.files.length
+          : state.files.filter(function (f) { return isTurnFile(f.path, state.turnFiles); }).length;
+        if (btnScopeTurn) btnScopeTurn.title = state.turnView && Array.isArray(state.turnView.files)
+          ? 'What turn ' + (state.turnView.turnIndex + 1) + ' changed, from its own before and after snapshots'
+          : 'Show files changed in current agent turn';
+        if (btnScopeAll) btnScopeAll.title = 'All uncommitted changes in this repository';
         if (turnFilesCountEl) turnFilesCountEl.textContent = String(turnCount);
         if (allFilesCountEl) allFilesCountEl.textContent = state.files.length;
         if (state.scope === 'turn') {
@@ -402,6 +430,7 @@ export function getReviewClientScript(): string {
             '<span class="file-status-badge ' + file.status + '" title="' + statusLabel(file.status) + '" data-status="' + file.status + '">' + file.status + '</span>' +
             '<span class="codicon codicon-' + iconInfo.icon + '" style="font-size: 13px; color: ' + iconInfo.color + '; flex-shrink: 0;"></span>' +
             '<span class="file-name" title="' + escapeHtml(file.path) + '">' + escapeHtml(file.name) + '</span>' +
+            (turnViewActive() && turnNowLabel(file.now) ? '<span class="turn-now" title="Where this file stands now">' + escapeHtml(turnNowLabel(file.now)) + '</span>' : '') +
             '<span class="file-diff-pill">' + (fileNotice || addStr + ' ' + delStr) + '</span>';
 
           fileRow.addEventListener('click', function () {
@@ -426,9 +455,9 @@ export function getReviewClientScript(): string {
       renderTree();
 
       // If diff is not loaded yet, request from backend
-      if (!Object.prototype.hasOwnProperty.call(state.fileDiffs, filePath)) {
+      if (!Object.prototype.hasOwnProperty.call(state.fileDiffs, diffKey(filePath))) {
         showLoadingDiff(filePath);
-        vscode.postMessage({ type: 'get_file_diff', filePath: filePath });
+        vscode.postMessage({ type: turnViewActive() ? 'get_turn_file_diff' : 'get_file_diff', filePath: filePath });
       } else {
         renderActiveDiff();
       }
@@ -571,9 +600,12 @@ export function getReviewClientScript(): string {
         return;
       }
 
-      const fileObj = state.files.find(function (f) { return f.path === state.activeFilePath; });
-      const diffData = state.fileDiffs[state.activeFilePath] || '';
-      const notice = (state.fileNotices || {})[state.activeFilePath];
+      const inTurn = turnViewActive();
+      const fileObj = getActiveFileList().find(function (f) { return f.path === state.activeFilePath; });
+      const key = diffKey(state.activeFilePath);
+      const diffData = state.fileDiffs[key] || '';
+      const notice = (state.fileNotices || {})[key];
+      const canDiscard = !inTurn || (fileObj && fileObj.now === 'uncommitted');
 
       // Build Header
       const headerHtml =
@@ -582,18 +614,25 @@ export function getReviewClientScript(): string {
             '<span class="file-status-badge ' + (fileObj ? fileObj.status : 'M') + '">' + (fileObj ? fileObj.status : 'M') + '</span>' +
             '<span title="' + escapeHtml(state.activeFilePath) + '">' + escapeHtml(state.activeFilePath) + '</span>' +
             '<span class="change-kind">' + statusLabel(fileObj?.status) + '</span>' +
-            (fileObj ? '<span class="file-diff-pill"><span class="stat-add">+' + fileObj.additions + '</span> <span class="stat-del">-' + fileObj.deletions + '</span></span>' : '') +
+            (fileObj ? '<span class="file-diff-pill"><span class="stat-add">+' + (fileObj.additions || 0) + '</span> <span class="stat-del">-' + (fileObj.deletions || 0) + '</span></span>' : '') +
+            (inTurn ? '<span class="turn-badge" title="Only what this turn changed, from its own before and after snapshots">Turn ' + (state.turnView.turnIndex + 1) + ' · what this turn changed' + (fileObj && turnNowLabel(fileObj.now) ? ' · ' + escapeHtml(turnNowLabel(fileObj.now)) : '') + '</span>' : '') +
           '</div>' +
           '<div class="diff-file-actions">' +
             '<button class="action-btn" id="action-open-editor" title="Open file in editor" aria-label="Open file in editor">' +
               '<span class="codicon codicon-go-to-file"></span> Open file' +
             '</button>' +
+            (inTurn ? '' :
             '<button class="action-btn" id="action-native-diff" title="Open native diff" aria-label="Open native diff">' +
               '<span class="codicon codicon-diff-single"></span> Compare' +
-            '</button>' +
-            '<button class="action-btn discard-btn" id="action-revert-file" title="Discard all changes in this file" aria-label="Discard file changes">' +
-              '<span class="codicon codicon-discard"></span> Discard' +
-            '</button>' +
+            '</button>') +
+            (canDiscard ?
+            (inTurn
+              ? '<button class="action-btn discard-btn" id="action-revert-file" title="Put the file back to how it was before this turn; edits from before the turn stay" aria-label="Undo the change this turn made to the file">' +
+                  '<span class="codicon codicon-discard"></span> Undo turn change' +
+                '</button>'
+              : '<button class="action-btn discard-btn" id="action-revert-file" title="Discard all changes in this file" aria-label="Discard file changes">' +
+                  '<span class="codicon codicon-discard"></span> Discard' +
+                '</button>') : '') +
           '</div>' +
         '</div>';
 
@@ -611,8 +650,8 @@ export function getReviewClientScript(): string {
             diffContentHtml =
               '<div class="diff-scroll-area">' +
                 '<div class="split-diff-header">' +
-                  '<div class="split-pane-header left-pane-header">Base (Empty / Untracked)</div>' +
-                  '<div class="split-pane-header right-pane-header">Working Tree (New)</div>' +
+                  '<div class="split-pane-header left-pane-header">' + (inTurn ? 'Before this turn' : 'Base (Empty / Untracked)') + '</div>' +
+                  '<div class="split-pane-header right-pane-header">' + (inTurn ? 'After this turn' : 'Working Tree (New)') + '</div>' +
                 '</div>';
             rawLines.forEach(function (rl, idx) {
               diffContentHtml +=
@@ -656,8 +695,8 @@ export function getReviewClientScript(): string {
         diffContentHtml =
           '<div class="diff-scroll-area">' +
             '<div class="split-diff-header">' +
-              '<div class="split-pane-header left-pane-header">Base (HEAD)</div>' +
-              '<div class="split-pane-header right-pane-header">Working Tree (Modified)</div>' +
+              '<div class="split-pane-header left-pane-header">' + (inTurn ? 'Before this turn' : 'Base (HEAD)') + '</div>' +
+              '<div class="split-pane-header right-pane-header">' + (inTurn ? 'After this turn' : 'Working Tree (Modified)') + '</div>' +
             '</div>';
 
         hunks.forEach(function (hunk, hIdx) {
@@ -797,7 +836,7 @@ export function getReviewClientScript(): string {
       const revertFileBtn = document.getElementById('action-revert-file');
       if (revertFileBtn) {
         revertFileBtn.addEventListener('click', function () {
-          vscode.postMessage({ type: 'revert_file', filePath: state.activeFilePath });
+          vscode.postMessage({ type: turnViewActive() ? 'revert_turn_file' : 'revert_file', filePath: state.activeFilePath });
         });
       }
 
@@ -885,6 +924,28 @@ export function getReviewClientScript(): string {
           break;
         }
 
+        case 'set_turn_changes': {
+          const previous = state.turnView;
+          state.turnView = msg.turnView && Array.isArray(msg.turnView.files) ? msg.turnView : null;
+          if (!previous || !state.turnView || previous.turnIndex !== state.turnView.turnIndex) {
+            Object.keys(state.fileDiffs).forEach(function (k) { if (k.indexOf('turn:') === 0) { delete state.fileDiffs[k]; delete state.fileNotices[k]; } });
+          }
+          if (state.turnView && state.scope !== 'all') state.scope = 'turn';
+          updateMetrics();
+          const visibleNow = getActiveFileList();
+          if (state.activeFilePath && !visibleNow.some(function (f) { return f.path === state.activeFilePath; })) state.activeFilePath = visibleNow.length ? visibleNow[0].path : null;
+          if (!state.activeFilePath && visibleNow.length) state.activeFilePath = visibleNow[0].path;
+          renderTree();
+          if (state.activeFilePath) selectFile(state.activeFilePath); else renderActiveDiff();
+          break;
+        }
+
+        case 'set_turn_file_diff':
+          state.fileDiffs['turn:' + msg.filePath] = msg.diff || '';
+          state.fileNotices['turn:' + msg.filePath] = msg.notice || '';
+          if (turnViewActive() && state.activeFilePath === msg.filePath) renderActiveDiff();
+          break;
+
         case 'set_file_diff':
           state.fileDiffs[msg.filePath] = msg.diff || '';
           state.fileNotices[msg.filePath] = msg.notice || '';
@@ -907,6 +968,12 @@ export function getReviewClientScript(): string {
 
     updateViewButtons();
     searchInput.value = state.searchQuery;
+
+    (${prFormClient.toString()})(vscode, {
+      escapeHtml: escapeHtml,
+      scope: function () { return state.turnFiles && state.scope === 'turn' ? 'turn' : 'all'; },
+      selectFile: function (filePath) { if (state.files.some(function (f) { return f.path === filePath; })) selectFile(filePath); },
+    });
 
     // Notify extension host that webview is ready
     vscode.postMessage({ type: 'webview_ready' });

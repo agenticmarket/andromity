@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
 import { SessionUndoResult } from "../server/types.js";
 import { ChangesReviewPanel } from "../panels/ChangesReviewPanel.js";
+import type { TurnRef } from "../panels/pullRequestController.js";
 
 export const HEAD_SCHEME = "andromity-head";
 
@@ -66,8 +67,8 @@ export class DiffManager {
   }
 
   /** Open the dedicated Changes Review Webview tab. */
-  public openReviewWebview(filePath?: string, turnFiles?: string[]): void {
-    ChangesReviewPanel.createOrShow(this._context.extensionUri, this._rpcClient, filePath, turnFiles);
+  public openReviewWebview(filePath?: string, turnFiles?: string[], turn?: TurnRef | null, openPullRequest = false): void {
+    ChangesReviewPanel.createOrShow(this._context.extensionUri, this._rpcClient, filePath, turnFiles, turn, openPullRequest);
   }
 
   /** Update to a freshly connected daemon client without registering a new

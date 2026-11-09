@@ -184,13 +184,18 @@ def test_gateway_typed_header_beats_keywords_in_the_message():
     assert "00:00 UTC" not in html
 
 
-def test_gateway_body_type_is_used_when_the_typed_headers_are_missing():
+def test_gateway_body_type_and_action_need_the_typed_headers():
+    """A provider's words can reach the body, so only the gateway's headers choose the card and its action."""
     body = _error("Shared models are busy.", type="service_busy", code="high_demand", action="switch_model",
                   retry_after=7200)
     info, html, _ = _card(_reply(503, body), "andromity")
+    assert info["type"] != "service_busy"
+    assert "data-error-action" not in html
+    typed = _reply(503, body, {"x-andromity-error-type": "service_busy", "x-andromity-error-action": "switch_model"})
+    info, html, _ = _card(typed, "andromity")
     assert info["type"] == "service_busy"
     assert 'data-error-action="switch_model"' in html
-    assert info["timer_text"].startswith("Expected back around")
+    assert info["timer_text"].startswith("Expected back around"), "the wait still comes from the body"
 
 
 @pytest.mark.parametrize("value", [
@@ -227,7 +232,8 @@ def test_gateway_invalid_key_blames_andromity_and_never_offers_sign_out():
 
 
 def test_gateway_invalid_key_wins_even_when_its_message_sounds_like_a_sign_in_problem():
-    exc = _reply(401, _error("Session expired, please log in", type="authentication_error", code="invalid_key"))
+    exc = _reply(401, _error("Session expired, please log in", type="authentication_error", code="invalid_key"),
+                 {"x-andromity-error-type": "authentication_error"})
     info, html, _ = _card(exc, "andromity")
     assert info["type"] == "gateway_auth_error"
     assert "use-without-sign-in" not in html
