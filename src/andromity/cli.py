@@ -57,6 +57,10 @@ def run(prompt, file, yes, dry_run, profile, provider, model):
     if not prompt:
         raise click.UsageError("Must provide PROMPT or --file")
     _tolerate_narrow_console()
+    from andromity.telemetry import take_first_run_notice
+    notice = take_first_run_notice()
+    if notice:
+        click.echo(notice, err=True)
     asyncio.run(_run_async(prompt, yes, dry_run, profile, provider, model))
 
 

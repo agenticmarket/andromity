@@ -304,7 +304,10 @@ class AndromityApp(App):
             self.remove_class("hide-files")
 
     def on_mount(self):
-        from andromity.telemetry import send_feature_used
+        from andromity.telemetry import send_feature_used, take_first_run_notice
+        notice = take_first_run_notice()
+        if notice:
+            self.notify(notice, title="Telemetry", timeout=20, markup=False)
         send_feature_used("app_started")
         try:
             from andromity.core.db import init_schema

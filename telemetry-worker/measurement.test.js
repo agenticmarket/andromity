@@ -146,7 +146,7 @@ test('grouped legacy error checks preserve event totals without per-turn feature
   await ingestTelemetry(db,{event:'session_start'},fields());
   for (let i=0;i<20;i++) await ingestTelemetry(db,{event:'session_end',had_error:true},fields());
   const result=await stats(db);
-  assert.equal(result.error_stats.total_errors,20);
+  assert.equal(result.error_stats.total_errors,1);
   assert.equal(result.error_stats.error_sessions,1);
   assert.equal(result.error_stats.affected_users,1);
   await ingestTelemetry(db,{event:'feature_use',feature_name:'error_generic'},fields());

@@ -8,7 +8,9 @@ Telemetry is **on by default** and can be turned off at any time (see [Turning i
 
 On first run, Andromity creates a random ID and stores it in `.telemetry_uuid` in its config folder (`%APPDATA%\andromity` on Windows, `~/.andromity` elsewhere, or `ANDROMITY_CONFIG_DIR` if set). Every event carries this ID, so events from the same installation can be linked together.
 
-The ID is not derived from your name, email, account, hostname or hardware. It is **pseudonymous, not anonymous**: it links your events to each other, but not to who you are. Deleting the file gives you a new ID.
+The ID is not derived from your name, email, account, hostname or hardware. It is **pseudonymous, not anonymous**: it links your events to each other, but not to who you are. Deleting the file gives you a new ID the next time Andromity starts.
+
+The first time the terminal app or `andromity run` sends telemetry, it shows a one-time notice explaining what is sent and how to turn it off. In VS Code, the extension follows VS Code's own telemetry setting.
 
 ## Where it goes
 
@@ -21,13 +23,16 @@ Every event includes the random ID, the client (`vscode`, `tui`, `cli` or `serve
 | Event | When | Additional fields |
 |---|---|---|
 | `session_start` | A chat session starts | Session ID; provider and model name; whether the provider is local or cloud; reasoning effort setting; number of MCP tools enabled; active profile; session duration so far |
-| `session_update` | During a session | Session ID; turn count; session duration |
-| `session_end` | A session ends | Session ID; provider and model name; local or cloud; turn count; whether an error occurred; session duration and a coarse duration bucket; counts of shell, file and web tool calls |
+| `session_update` | After each request | Session ID; turn count; session duration |
+| `session_end` | After each request, with the session's totals so far. The worker keeps one record per session, so the last one sent is the session's summary | Session ID; provider and model name; local or cloud; turn count; whether any request in the session had an error; session duration and a coarse duration bucket; counts of shell, file and web tool calls |
 | `task_started`, `task_finished` | A request to the agent starts and finishes | Session ID; a random run ID; provider and model name; outcome (`completed`, `failed` or `cancelled`); active seconds; time to first response in milliseconds |
 | `feature_use` | You use a feature (for example opening the waterfall) | Session ID when there is one; the feature's name only |
-| `weekly_summary` | At most once every 7 days | Names of features used that week (up to 20) |
 
-Model and provider names are the identifiers you configured (for example `anthropic` and `claude-sonnet-4-6`). Values are length-limited and stripped to safe characters before sending, and anything that looks like an API key is removed.
+Session duration is the time from the session's first request to its latest one, counted from when the session was last opened.
+
+Model and provider names are the identifiers you configured (for example `anthropic` and `claude-sonnet-4-6`). If a model is configured as the path of a model file (for example a `.gguf` or `.safetensors` file), only the file's name without its folder or extension is sent; any other path is sent as `local-path` and a URL as `url`. A provider name that looks like a path, URL or hostname is sent as `unknown`. Values are length-limited and stripped to safe characters before sending, and anything that looks like an API key is removed.
+
+Events that can't be sent right away wait in `.telemetry_outbox.json` in the config folder, for up to 7 days and at most 100 events, and are retried later. Events the worker refuses are dropped rather than retried.
 
 ### Pull requests from Changes Review
 
@@ -84,7 +89,7 @@ Any one of these stops all telemetry:
 
 Telemetry is also off automatically in CI environments.
 
-When telemetry is off, Andromity also stops fetching tips, news and command content from `telemetry.agenticmarket.dev`.
+With telemetry off, Andromity deletes any events still waiting to be sent instead of sending them. When telemetry is off, Andromity also stops fetching tips, news and command content from `telemetry.agenticmarket.dev`.
 
 ## Deleting your data
 
