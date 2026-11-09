@@ -590,7 +590,6 @@ async def test_stop_works_when_default_executor_is_full(project):
         await asyncio.wait_for(blocker, 10)
 
 
-@pytest.mark.xfail(strict=True, reason="fixed by the command-scope change on another branch")
 def test_stop_kills_a_program_that_is_no_longer_in_the_commands_process_tree(project):
     """Stop kills a command by its parent-id tree. A program that joins late (the shell still starting it) or
     whose parent already exited is outside that tree and outlives Stop. The parent-exited case is the
