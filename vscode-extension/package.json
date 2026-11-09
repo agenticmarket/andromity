@@ -286,6 +286,44 @@
         "icon": "$(diff-multiple)"
       },
       {
+        "command": "andromity.createPullRequest",
+        "title": "Create Pull Request",
+        "category": "Andromity",
+        "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "andromity.reviewPullRequest",
+        "title": "Review Pull Request…",
+        "category": "Andromity",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "andromity.postPullRequestReview",
+        "title": "Edit Review to Post",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.openPullRequestsView",
+        "title": "Pull Requests and Issues",
+        "category": "Andromity",
+        "icon": "$(issues)"
+      },
+      {
+        "command": "andromity.reviewFromGitHubTree",
+        "title": "Review with Andromity",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.askFromGitHubTree",
+        "title": "Ask Andromity",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.postReviewDocument",
+        "title": "Post Review Document to Pull Request",
+        "category": "Andromity"
+      },
+      {
         "command": "andromity.openSessionInTab",
         "title": "Open Session in Editor Tab (Pop Out)",
         "category": "Andromity",
@@ -453,6 +491,14 @@
           "when": "false"
         },
         {
+          "command": "andromity.reviewFromGitHubTree",
+          "when": "false"
+        },
+        {
+          "command": "andromity.askFromGitHubTree",
+          "when": "false"
+        },
+        {
           "command": "andromity.deleteSession",
           "when": "false"
         },
@@ -610,6 +656,11 @@
           "group": "navigation@2"
         },
         {
+          "command": "andromity.openPullRequestsView",
+          "when": "view == andromity.chatView",
+          "group": "navigation@2"
+        },
+        {
           "command": "andromity.viewGitDiff",
           "when": "view == andromity.chatView",
           "group": "navigation@3"
@@ -655,6 +706,16 @@
           "command": "andromity.deleteSession",
           "when": "view == andromity.sessionsView && viewItem == sessionItem",
           "group": "inline"
+        },
+        {
+          "command": "andromity.reviewFromGitHubTree",
+          "when": "view == pr:github && viewItem =~ /pullrequest/",
+          "group": "andromity@1"
+        },
+        {
+          "command": "andromity.askFromGitHubTree",
+          "when": "view == pr:github && viewItem =~ /pullrequest/ || view == issues:github && viewItem =~ /^(link)?(current|continue)?issue/",
+          "group": "andromity@2"
         }
       ]
     },
@@ -750,6 +811,29 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically append 'Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>' to AI-generated commit messages and to commits the agent creates."
+        },
+        "andromity.pullRequest.branchPrefix": {
+          "type": "string",
+          "default": "andromity/",
+          "maxLength": 40,
+          "description": "Prefix for branch names suggested by Create pull request in Changes Review. Leave empty for no prefix."
+        },
+        "andromity.pullRequest.attachReceipt": {
+          "type": "boolean",
+          "scope": "application",
+          "default": true,
+          "description": "Attach the turn receipt to pull requests created from Changes Review. You can still untick it in the form."
+        },
+        "andromity.pullRequest.draftWithAI": {
+          "type": "boolean",
+          "default": true,
+          "description": "Draft the pull request description with your selected model. Turn off for projects that do not accept AI-written pull request text. The commit message is still drafted."
+        },
+        "andromity.pullRequest.sizeWarningLines": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "description": "Warn in Create pull request when the ticked files change more lines than this (lockfiles not counted). 0 turns the warning off."
         },
         "andromity.includeAssistedBy": {
           "type": "boolean",

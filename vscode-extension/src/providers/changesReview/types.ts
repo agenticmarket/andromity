@@ -6,6 +6,7 @@ export interface ReviewFile {
   deletions: number;
   binary?: boolean;
   omitted?: boolean;
+  originalPath?: string;
 }
 
 export interface GitStatusResult {

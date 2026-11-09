@@ -693,6 +693,9 @@ export function getReviewStyles(): string {
     .header-left { flex-wrap: wrap; gap: 8px; min-width: 0; }
     .file-status-badge.R { color: var(--vscode-gitDecoration-renamedResourceForeground); }
     .file-status-badge[data-status="!"] { color: var(--vscode-gitDecoration-conflictingResourceForeground); }
+    .turn-now { margin-left: 6px; font-size: 10.5px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
+    .turn-badge { margin-left: 8px; padding: 1px 7px; border-radius: 10px; font-size: 11px; white-space: nowrap;
+      background: rgba(128, 128, 128, 0.18); color: var(--vscode-descriptionForeground); }
     @media (max-width: 850px) {
       .diff-file-title { flex-basis: 100%; }
     }

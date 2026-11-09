@@ -4685,7 +4685,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             } catch (err) {}
           }
           const fPath = target.getAttribute('data-file-path') || target.closest('[data-file-path]')?.getAttribute('data-file-path');
-          vscode.postMessage({ type: 'open_review_tab', filePath: fPath, turnFiles: turnFiles });
+          let reviewTurnIndex = null;
+          const reviewWrap = target.closest('.message-wrap');
+          const reviewKeyed = reviewWrap ? reviewWrap.querySelector('[data-turn-key]') : null;
+          const reviewKey = reviewKeyed ? reviewKeyed.getAttribute('data-turn-key') : null;
+          const reviewState = reviewKey ? ownSessionState(currentSessionId) : null;
+          const reviewReceipts = reviewState && reviewState.receipts && typeof reviewState.receipts === 'object' ? reviewState.receipts : null;
+          const reviewEntry = reviewReceipts && Object.prototype.hasOwnProperty.call(reviewReceipts, reviewKey) ? reviewReceipts[reviewKey] : null;
+          if (reviewEntry && Number.isSafeInteger(reviewEntry.turn_index) && reviewEntry.turn_index >= 0) reviewTurnIndex = reviewEntry.turn_index;
+          const reviewMessage = { type: 'open_review_tab', filePath: fPath, turnFiles: turnFiles };
+          if (reviewTurnIndex !== null) reviewMessage.turnIndex = reviewTurnIndex;
+          vscode.postMessage(reviewMessage);
           break;
         }
         case 'toggle-timeline':

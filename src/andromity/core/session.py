@@ -135,6 +135,9 @@ class Session:
         self.watching_for: Optional[Dict[str, Any]] = None
         # A session started in the background from another one: {"session_id", "name", "pending"}.
         self.started_from: Optional[Dict[str, Any]] = None
+        # Set once a turn carries GitHub text (a pull request review): the source label. Keeps every later turn
+        # read-only, also after compaction removes that text from the messages.
+        self.external_review: Optional[str] = None
         # Sessions this one started in the background, newest last.
         self.background_runs: List[Dict[str, Any]] = []
         self.project_path = normalize_project_path(project_path)
@@ -406,6 +409,7 @@ class Session:
             "collaborators": list(getattr(self, "collaborators", [])),
             "watching_for": getattr(self, "watching_for", None),
             "started_from": copy.deepcopy(getattr(self, "started_from", None)),
+            "external_review": getattr(self, "external_review", None),
             "background_runs": copy.deepcopy(getattr(self, "background_runs", [])),
             "tool_decisions": copy.deepcopy(getattr(self, "tool_decisions", {}) or {}),
             "tool_gates": dict(getattr(self, "tool_gates", {}) or {}),
@@ -563,6 +567,7 @@ class Session:
             "watching_for": getattr(self, "watching_for", None),
             "run_owner": getattr(self, "run_owner", None),
             "started_from": getattr(self, "started_from", None),
+            "external_review": getattr(self, "external_review", None),
             "background_runs": list(getattr(self, "background_runs", [])),
             "tool_decisions": dict(getattr(self, "tool_decisions", {}) or {}),
             "tool_gates": dict(getattr(self, "tool_gates", {}) or {}),
@@ -776,6 +781,8 @@ class Session:
         session.watching_for = metadata.get("watching_for")
         session.run_owner = metadata.get("run_owner")
         session.started_from = metadata.get("started_from")
+        review = metadata.get("external_review")
+        session.external_review = review if isinstance(review, str) and review.startswith("github:") else None
         session.background_runs = metadata.get("background_runs") or []
         session.tool_decisions = valid_tool_decisions(metadata.get("tool_decisions"))
         session.tool_gates = valid_tool_gates(metadata.get("tool_gates"))
