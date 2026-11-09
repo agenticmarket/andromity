@@ -139,7 +139,7 @@ export class RepoViewController {
   private selected: Record<ItemKind, number | null> = { pr: null, issue: null };
   private detail: PrDetail | IssueDetail | null = null;
   private detailError: string | null = null;
-  private files: { number: number; list: ChangedFile[]; more: boolean } | null = null;
+  private files: { owner: string; repo: string; number: number; list: ChangedFile[]; more: boolean } | null = null;
   private filesError: string | null = null;
   private branch: { name: string; number: number | null } | null = null;
   private empty: EmptyState | null = null;
@@ -154,6 +154,10 @@ export class RepoViewController {
   private detailSeq = 0;
   private busy = new Set<string>();
   private disposed = false;
+  private detailRepo: RepoRef | null = null;
+  private loadedKey: ListKey | null = null;
+  private forYouOverlap = 0;
+  private starting: Promise<void> | null = null;
 
   constructor(private readonly deps: RepoViewDeps) {}
 
@@ -179,10 +183,10 @@ export class RepoViewController {
       loadingList: this.loadingList,
       loadingMore: this.loadingMore,
       selected: this.selected[this.kind],
-      detail: this.detail && this.detail.kind === this.kind && this.detail.number === this.selected[this.kind] ? this.detail : null,
+      detail: this.currentDetail(),
       detailLoading: this.detailLoading,
       detailError: this.detailError,
-      files: this.files && this.files.number === this.selected.pr && this.kind === "pr" ? this.files.list : null,
+      files: this.files && this.sameRepo(this.files) && this.files.number === this.selected.pr && this.kind === "pr" ? this.files.list : null,
       filesMore: !!this.files?.more,
       filesLoading: this.filesLoading,
       filesError: this.filesError,
@@ -194,6 +198,23 @@ export class RepoViewController {
     };
   }
 
+  private sameRepo(ref: RepoRef | null): boolean {
+    return !!ref && !!this.current && ref.owner === this.current.owner && ref.repo === this.current.repo;
+  }
+
+  private currentDetail(): PrDetail | IssueDetail | null {
+    const detail = this.detail;
+    return detail && this.sameRepo(this.detailRepo) && detail.kind === this.kind && detail.number === this.selected[this.kind] ? detail : null;
+  }
+
+  /** Air-gap can be turned on while the view is open; every GitHub request checks it. */
+  private airGapped(): boolean {
+    if (!this.deps.airGap()) return false;
+    this.loadingList = this.loadingMore = this.detailLoading = this.filesLoading = false;
+    this.setEmpty("airgap");
+    return true;
+  }
+
   private publish(): void {
     if (!this.disposed) this.deps.post({ type: "state", state: this.state() });
   }
@@ -201,7 +222,7 @@ export class RepoViewController {
   private chips(): { id: string; label: string; count: number | null }[] {
     if (this.kind === "pr") {
       return [
-        { id: "foryou", label: "For you", count: this.chipCounts.foryou ?? null },
+        { id: "foryou", label: "For you", count: this.chipCounts.foryou === undefined || this.chipCounts.foryou === null ? null : Math.max(0, this.chipCounts.foryou - this.forYouOverlap) },
         { id: "all", label: "All open", count: this.totals.pr },
       ];
     }
@@ -240,6 +261,12 @@ export class RepoViewController {
 
   /** First load, and the "Try again" buttons. */
   async start(mode: "silent" | "ask" | "choose" = "silent"): Promise<void> {
+    if (this.starting) return this.starting;
+    this.starting = this.run(mode).finally(() => { this.starting = null; });
+    return this.starting;
+  }
+
+  private async run(mode: "silent" | "ask" | "choose"): Promise<void> {
     if (this.deps.airGap()) return this.setEmpty("airgap");
     this.status = "loading";
     this.empty = null;
@@ -257,14 +284,16 @@ export class RepoViewController {
     } catch (error) {
       return this.setEmpty(errorKind(error), resetText(error), error);
     }
-    await this.useParentIfFork();
+    const blocked = await this.useParentIfFork();
+    if (blocked) return this.setEmpty("notfound", "", blocked);
     this.deps.track("prv_opened");
     await this.reload(true);
   }
 
-  private async useParentIfFork(): Promise<void> {
+  /** Switches to a fork's parent. Returns the error when this account can't see the repository at all. */
+  private async useParentIfFork(): Promise<unknown> {
     const current = this.current;
-    if (!current || !this.client || current.label.endsWith("(parent)")) return;
+    if (!current || !this.client || current.label.endsWith("(parent)")) return null;
     try {
       const info = await this.client.repository(current.owner, current.repo);
       if (info.parent && !this.choices.some((choice) => choice.owner === info.parent?.owner && choice.repo === info.parent?.repo)) {
@@ -272,9 +301,10 @@ export class RepoViewController {
         this.choices = [parent, ...this.choices];
         this.current = parent;
       }
-    } catch {
-      /* The search below reports access problems with the right wording. */
+    } catch (error) {
+      if (errorKind(error) === "notfound") return error;
     }
+    return null;
   }
 
   /** Reloads counts, the list and the open item, keeping the selection. */
@@ -282,6 +312,8 @@ export class RepoViewController {
     const client = this.client;
     const repo = this.current;
     if (!client || !repo) return this.start();
+    if (this.airGapped()) return;
+    if (full) this.files = null;
     const seq = ++this.listSeq;
     this.loadingList = true;
     this.publish();
@@ -310,6 +342,13 @@ export class RepoViewController {
       const kind = errorKind(error);
       if (this.status === "ready" && (kind === "ratelimit" || kind === "offline")) {
         this.notice = kind === "ratelimit" ? `GitHub is limiting requests. Showing earlier results.${resetText(error)}` : "Can't reach GitHub. Showing earlier results.";
+        const shown = this.loadedKey;
+        if (shown) {
+          this.kind = shown.kind;
+          this.filter[shown.kind] = shown.filter;
+          this.sort = shown.sort;
+          this.text = shown.text;
+        }
         this.deps.track(`prv_fail_${kind}`);
       } else {
         this.loadingList = false;
@@ -322,8 +361,8 @@ export class RepoViewController {
     this.publish();
     const selected = this.selected[this.kind];
     const items = this.groups.flatMap((group) => group.items);
-    if (selected !== null && items.some((item) => item.number === selected)) await this.loadDetail(selected, true);
-    else if (items.length) await this.select(items[0].number);
+    if (selected !== null) await this.loadDetail(selected, true);
+    else if (items.length) await this.select(items[0].number, false);
     else {
       this.selected[this.kind] = null;
       this.publish();
@@ -350,12 +389,15 @@ export class RepoViewController {
         search(searchQuery(repo, "pr", "foryou", key.sort, key.text, "mine")),
       ]);
       if (seq !== this.listSeq) return;
+      const overlap = mine.items.filter((item) => review.items.some((other) => other.number === item.number)).length;
       this.groups = [
         { title: "Review requested from you or your team", items: review.items },
         { title: "Your pull requests", items: mine.items.filter((item) => !review.items.some((other) => other.number === item.number)) },
       ];
+      this.forYouOverlap = overlap;
       this.cursor = null;
       this.more = false;
+      this.loadedKey = key;
       return;
     }
     const page = await search(searchQuery(repo, key.kind, key.filter, key.sort, key.text));
@@ -363,6 +405,7 @@ export class RepoViewController {
     this.groups = [{ title: "", items: page.items }];
     this.cursor = page.cursor;
     this.more = page.more;
+    this.loadedKey = key;
   }
 
   private async loadBranch(): Promise<void> {
@@ -387,6 +430,7 @@ export class RepoViewController {
 
   async loadMore(): Promise<void> {
     if (!this.client || !this.current || !this.more || !this.cursor || this.loadingMore) return;
+    if (this.airGapped()) return;
     const seq = this.listSeq;
     const key = this.key();
     this.loadingMore = true;
@@ -407,9 +451,9 @@ export class RepoViewController {
     }
   }
 
-  async select(number: unknown): Promise<void> {
-    if (typeof number !== "number" || !this.items().some((item) => item.number === number) && !(this.detail && this.detail.number === number)) return;
-    if (this.selected[this.kind] !== number) this.deps.track("prv_open_item");
+  async select(number: unknown, byUser = true): Promise<void> {
+    if (typeof number !== "number" || !this.items().some((item) => item.number === number) && !(this.detail && this.detail.number === number) && number !== this.selected[this.kind]) return;
+    if (byUser && this.selected[this.kind] !== number) this.deps.track("prv_open_item");
     this.selected[this.kind] = number;
     this.filesError = null;
     await this.loadDetail(number, false);
@@ -417,17 +461,19 @@ export class RepoViewController {
 
   private async loadDetail(number: number, refresh: boolean): Promise<void> {
     if (!this.client || !this.current) return;
+    if (this.airGapped()) return;
     const seq = ++this.detailSeq;
     const kind = this.kind;
     const repo = this.current;
-    if (!refresh || !this.detail || this.detail.number !== number || this.detail.kind !== kind) this.detail = null;
+    if (!refresh || !this.currentDetail() || this.detail?.number !== number) this.detail = null;
     this.detailLoading = true;
     this.detailError = null;
     this.publish();
     try {
       const data = await this.client.graphql(kind === "pr" ? PR_DETAIL_QUERY : ISSUE_DETAIL_QUERY, { owner: repo.owner, repo: repo.repo, number });
-      if (seq !== this.detailSeq) return;
+      if (seq !== this.detailSeq || repo !== this.current) return;
       this.detail = kind === "pr" ? readPrDetail(data, repo, number) : readIssueDetail(data, repo, number);
+      this.detailRepo = repo;
     } catch (error) {
       if (seq !== this.detailSeq) return;
       const why = errorKind(error);
@@ -442,13 +488,15 @@ export class RepoViewController {
   async loadFiles(): Promise<void> {
     const number = this.selected.pr;
     if (!this.client || !this.current || this.kind !== "pr" || number === null || this.filesLoading) return;
-    if (this.files?.number === number) return this.publish();
+    if (this.files && this.sameRepo(this.files) && this.files.number === number) return this.publish();
+    if (this.airGapped()) return;
+    const repo = this.current;
     this.filesLoading = true;
     this.filesError = null;
     this.publish();
     try {
-      const { files, more } = await this.client.pullFiles(this.current.owner, this.current.repo, number);
-      if (this.selected.pr === number) this.files = { number, list: readFiles(files), more };
+      const { files, more } = await this.client.pullFiles(repo.owner, repo.repo, number);
+      if (this.selected.pr === number && repo === this.current) this.files = { owner: repo.owner, repo: repo.repo, number, list: readFiles(files), more };
       this.deps.track("prv_files");
     } catch (error) {
       this.filesError = errorKind(error) === "ratelimit" ? "GitHub is limiting requests. Try again later." : "The files couldn't be loaded. Try again.";
@@ -501,7 +549,9 @@ export class RepoViewController {
     this.current = pick;
     this.selected = { pr: null, issue: null };
     this.detail = null;
+    this.detailRepo = null;
     this.files = null;
+    this.detailSeq++;
     await this.reload(true);
   }
 
@@ -517,7 +567,8 @@ export class RepoViewController {
 
   private item(number: unknown): ListItem | PrDetail | IssueDetail | null {
     if (typeof number !== "number") return null;
-    if (this.detail && this.detail.number === number && this.detail.kind === this.kind) return this.detail;
+    const detail = this.currentDetail();
+    if (detail && detail.number === number) return detail;
     return this.items().find((item) => item.number === number) ?? null;
   }
 
@@ -560,7 +611,9 @@ export class RepoViewController {
       this.deps.post({ type: "done", text: `A read-only review chat started for #${item.number}.` });
     } catch (error) {
       this.deps.track("prv_fail_review");
-      this.deps.notify(error instanceof GitHubError ? this.deps.errorText(error) : "The review couldn't start. Check that Andromity's engine is running.");
+      const why = error instanceof GitHubError ? this.deps.errorText(error) : "The review couldn't start. Check that Andromity's engine is running.";
+      this.deps.post({ type: "failed", text: why });
+      this.deps.notify(why);
     } finally {
       this.busy.delete(`review:${item.number}`);
     }
@@ -594,7 +647,9 @@ export class RepoViewController {
       this.deps.post({ type: "done", text: `A read-only chat opened with #${item.number} attached.` });
     } catch (error) {
       this.deps.track("prv_fail_ask");
-      this.deps.notify(error instanceof GitHubError ? this.deps.errorText(error) : "The question couldn't be sent. Check that Andromity's engine is running.");
+      const why = error instanceof GitHubError ? this.deps.errorText(error) : "The question couldn't be sent. Check that Andromity's engine is running.";
+      this.deps.post({ type: "failed", text: why });
+      this.deps.notify(why);
     } finally {
       this.busy.delete(key);
     }
@@ -604,12 +659,18 @@ export class RepoViewController {
   async focus(target: RepoRef & { kind: ItemKind; number: number }): Promise<boolean> {
     const choice = this.choices.find((repo) => repo.owner.toLowerCase() === target.owner.toLowerCase() && repo.repo.toLowerCase() === target.repo.toLowerCase());
     if (!choice || !this.client) return false;
+    if (choice !== this.current) {
+      this.detail = null;
+      this.detailRepo = null;
+      this.files = null;
+    }
+    this.detailSeq++;
     this.current = choice;
     this.kind = target.kind;
     this.filter[target.kind] = "all";
     this.selected[target.kind] = target.number;
     await this.reload(true);
-    if (this.selected[target.kind] !== target.number || !this.detail) {
+    if (this.selected[target.kind] !== target.number) {
       this.selected[target.kind] = target.number;
       await this.loadDetail(target.number, false);
     }

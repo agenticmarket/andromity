@@ -104,6 +104,18 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .md p { margin: 0 0 10px; white-space: pre-wrap; }
 .md .md-h { font-weight: 600; }
 .md ul, .md ol { margin: 0 0 10px; padding-left: 22px; }
+.md .md-h1, .md .md-h2 { font-size: 1.25em; margin-top: 16px; }
+.md .md-h3 { font-size: 1.1em; margin-top: 12px; }
+.md hr { border: none; border-top: 1px solid var(--vscode-panel-border); margin: 14px 0; }
+.md sub, .md sup { font-size: .8em; }
+.md kbd { font-family: var(--vscode-editor-font-family); font-size: 11.5px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 0 4px; }
+.md details.md-details { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 6px 10px; margin: 0 0 10px; }
+.md details.md-details > summary { cursor: pointer; font-weight: 600; }
+.md details.md-details[open] > summary { margin-bottom: 8px; }
+.md-table-wrap { overflow-x: auto; margin: 0 0 10px; }
+.md table.md-table { border-collapse: collapse; font-size: 12.5px; }
+.md table.md-table th, .md table.md-table td { border: 1px solid var(--vscode-panel-border); padding: 4px 10px; text-align: left; vertical-align: top; }
+.md table.md-table th { background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent); font-weight: 600; }
 .md blockquote { margin: 0 0 10px; padding-left: 10px; border-left: 3px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); }
 pre.code, pre.diff { font-family: var(--vscode-editor-font-family); font-size: 12px; background: var(--vscode-textCodeBlock-background); padding: 8px 10px; border-radius: 6px; overflow: auto; white-space: pre; margin: 0 0 10px; }
 .hidden-text { font-size: 12px; color: var(--vscode-descriptionForeground); border: 1px dashed var(--vscode-panel-border); border-radius: 6px; padding: 6px 8px; margin: 0 0 10px; white-space: pre-wrap; }

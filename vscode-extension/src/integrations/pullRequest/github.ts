@@ -140,7 +140,7 @@ export class GitHubClient {
     private readonly timeoutMs = DEFAULT_TIMEOUT_MS,
   ) {}
 
-  private async request(method: string, path: string, body?: unknown, accept = "application/vnd.github+json"): Promise<{ status: number; data: unknown; text: string }> {
+  private async request(method: string, path: string, body?: unknown, accept = "application/vnd.github+json"): Promise<{ status: number; data: unknown; text: string; headers: HttpResponse["headers"] }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     let response: HttpResponse;
@@ -184,7 +184,7 @@ export class GitHubClient {
         data = null;
       }
     }
-    if (response.status >= 200 && response.status < 300) return { status: response.status, data, text };
+    if (response.status >= 200 && response.status < 300) return { status: response.status, data, text, headers: response.headers };
     if (text && data === null) {
       try {
         data = JSON.parse(text);
@@ -193,7 +193,7 @@ export class GitHubClient {
       }
     }
     const error = this.errorFor(response, data);
-    const said = str(obj(data)?.message, 300);
+    const said = this.scrub(str(obj(data)?.message, 300));
     throw said && !error.detail ? new GitHubError(error.kind, error.status, error.ssoUrl, error.resetAt, said) : error;
   }
 
@@ -366,18 +366,28 @@ export class GitHubClient {
     await this.request("POST", `/repos/${seg(owner)}/${seg(repo)}/issues/${number}/comments`, { body });
   }
 
+  /** An error message with the token removed, in case a server ever echoes it. */
+  private scrub(message: string | null): string | null {
+    if (!message) return message;
+    return this.token && message.includes(this.token) ? message.split(this.token).join("[token]") : message;
+  }
+
   /** A read-only GraphQL query. GitHub answers some failures with status 200 and an errors list; those become GitHubErrors too. */
   async graphql(query: string, variables: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const { data } = await this.request("POST", "/graphql", { query, variables });
+    const { data, headers } = await this.request("POST", "/graphql", { query, variables });
     const value = obj(data);
     const errors = Array.isArray(value?.errors) ? (value?.errors as unknown[]) : [];
     const result = obj(value?.data);
     if (errors.length) {
       const first = obj(errors[0]);
       const type = str(first?.type, 100) || "";
-      const said = (str(first?.message, 2000) || "").slice(0, 300) || null;
-      const message = (said || "").toLowerCase();
-      if (type === "RATE_LIMITED" || message.includes("rate limit")) throw new GitHubError("rate_limited", 200, null, null, said);
+      const raw = str(first?.message, 2000) || "";
+      const said = this.scrub(raw.slice(0, 300) || null);
+      const message = raw.toLowerCase();
+      if (type === "RATE_LIMITED" || message.includes("rate limit")) {
+        const reset = Number(headers.get("x-ratelimit-reset"));
+        throw new GitHubError("rate_limited", 200, null, Number.isFinite(reset) && reset > 0 ? reset * 1000 : null, said);
+      }
       if (message.includes("saml")) throw new GitHubError("sso", 200, null, null, said);
       if (message.includes("oauth app access restrictions")) throw new GitHubError("oauth_restricted", 200, null, null, said);
       if (type === "INSUFFICIENT_SCOPES" || message.includes("not been granted the required scopes")) throw new GitHubError("invalid", 200, null, null, said);

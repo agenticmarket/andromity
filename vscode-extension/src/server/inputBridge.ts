@@ -15,6 +15,7 @@ const SLASH_COMMAND = /^\/([a-z][a-z0-9-]{1,20})(?=\s|$)/i;
 export async function handleInputMessage(
   rpc: RpcClient, message: InputBridgeMessage, currentSession: string,
   post: (message: unknown) => void, approvedMode = "safe",
+  external: { source: string; text: string } | null = null,
 ): Promise<boolean> {
   const methods: Record<string, string> = {
     queue_snapshot: "agent.queue", queue_promote: "agent.promote",
@@ -40,7 +41,8 @@ export async function handleInputMessage(
       const prompt = EditorBridge.formatPromptWithEditorState(
         message.prompt || "", EditorBridge.getActiveContext(), message.attachContext !== false);
       const result = await rpc.call<{ queue: InputQueueState; input_id: string }>("agent.submit", {
-        session_id: sid, request_id: message.requestId, delivery: message.delivery || "queue",
+        session_id: sid, request_id: message.requestId, delivery: external ? "queue" : message.delivery || "queue",
+        ...(external ? { external_context: external } : {}),
         prompt, image_uris: message.images || [], image_only: message.imageOnly === true, project_path: projectPath,
         profile: message.profile, model: message.model, provider: message.provider,
         mode: clampPromptMode(message.mode, approvedMode), reasoning_effort: message.reasoningEffort,

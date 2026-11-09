@@ -14,6 +14,8 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
   let state: any = null;
   let subtab = "overview";
   let lastFocus: HTMLElement | null = null;
+  let lastFocusKey: string | null = null;
+  let failSheet: ((text: string) => void) | null = null;
   let sheetOpen = false;
   let filterTimer: any = null;
   let typedText: string | null = null;
@@ -70,85 +72,176 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
     }
   }
 
-  /** Inline text: `code`, [links](https://…) and ![images](…) as links with their real site, #123 references. */
-  function inline(text: string): Node[] {
+  /** Inline text, built only from text nodes and a fixed set of elements: `code`, **bold**, *italic*, the tags
+   *  sub, sup, b, strong, i, em, code, kbd and br, [links](https://…) and ![images](…) shown as links with their
+   *  real site, and #123 references. Any other tag stays visible as text. */
+  function inline(text: string, depth?: number): Node[] {
+    const level = depth || 0;
     const out: Node[] = [];
-    const re = /(`[^`\n]{1,500}`)|(!?\[([^\]\n]{0,300})\]\(([^)\s]{1,2048})(?:\s+"[^"\n]*")?\))|(^|[\s(])#([1-9][0-9]{0,9})\b/g;
+    if (level > 6) { out.push(document.createTextNode(text)); return out; }
+    const re = /(`[^`\n]{1,500}`)|(!?\[([^\]\n]{0,300})\]\(([^)\s]{1,2048})(?:\s+"[^"\n]*")?\))|(\*\*([^*\n](?:[^*]|\*(?!\*)){0,2000}?)\*\*)|(<(sub|sup|b|strong|i|em|code|kbd)>([\s\S]{0,2000}?)<\/\8>)|(<br\s*\/?>)|((^|[^\w*])\*([^*\s](?:[^*\n]{0,500}?[^*\s])?)\*(?![\w*]))|((^|[\s(])#([1-9][0-9]{0,9})\b)/gi;
     let at = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text))) {
-      const lead = m[5] || "";
-      const start = m.index + lead.length;
-      if (start > at) out.push(document.createTextNode(text.slice(at, m.index) + lead));
+      const lead = m[11] ? m[12] || "" : m[14] ? m[15] || "" : "";
+      const before = text.slice(at, m.index) + lead;
+      if (before) out.push(document.createTextNode(before));
       if (m[1]) out.push(h("code", { text: m[1].slice(1, -1) }));
       else if (m[2]) {
-        const label = m[3] || (m[2].startsWith("!") ? "image" : m[4]);
-        const host = hostOf(m[4]);
+        const url = m[4];
+        const isImage = m[2].charAt(0) === "!";
+        const label = m[3] || (isImage ? "image" : url);
+        const host = hostOf(url);
         if (host) {
-          out.push(h("button", { class: "link", type: "button", title: "Opens " + host + " in your browser", onclick: () => send({ type: "open_link", url: m![4] }) }, (m[2].startsWith("!") ? "Image: " : "") + label));
+          out.push(h("button", { class: "link", type: "button", title: "Opens " + host + " in your browser", onclick: () => send({ type: "open_link", url: url }) }, (isImage ? "Image: " : "") + label));
           out.push(h("span", { class: "host", text: host }));
         } else {
           out.push(document.createTextNode(label));
           out.push(h("span", { class: "muted", text: " (link removed: not https)" }));
         }
-      } else if (m[6]) {
-        const n = Number(m[6]);
-        out.push(h("span", { class: "ref", text: "#" + n }));
-      }
+      } else if (m[5]) out.push(h("strong", null, inline(m[6], level + 1)));
+      else if (m[7]) {
+        const tag = m[8].toLowerCase();
+        const name = tag === "b" ? "strong" : tag === "i" ? "em" : tag;
+        out.push(name === "code" || name === "kbd" ? h(name, { text: m[9] }) : h(name, null, inline(m[9], level + 1)));
+      } else if (m[10]) out.push(h("br"));
+      else if (m[11]) out.push(h("em", null, inline(m[13], level + 1)));
+      else if (m[14]) out.push(h("span", { class: "ref", text: "#" + m[16] }));
       at = m.index + m[0].length;
     }
     if (at < text.length) out.push(document.createTextNode(text.slice(at)));
     return out;
   }
 
-  /** A small Markdown subset rendered as text: paragraphs, headings, lists, quotes, fenced code, and HTML comments shown dimmed. */
+  /** HTML comments found in one pass (no backtracking), so a long body can't stall the view. */
+  function splitComments(source: string): { text: string; comment: boolean }[] {
+    const parts: { text: string; comment: boolean }[] = [];
+    let at = 0;
+    while (at < source.length) {
+      const open = source.indexOf("<!--", at);
+      if (open < 0) break;
+      const close = source.indexOf("-->", open + 4);
+      if (close < 0) break;
+      if (open > at) parts.push({ text: source.slice(at, open), comment: false });
+      parts.push({ text: source.slice(open + 4, close), comment: true });
+      at = close + 3;
+    }
+    if (at < source.length) parts.push({ text: source.slice(at), comment: false });
+    return parts;
+  }
+
+  function cells(row: string): string[] {
+    let s = row.trim();
+    if (s.startsWith("|")) s = s.slice(1);
+    if (s.endsWith("|") && !s.endsWith("\\|")) s = s.slice(0, -1);
+    const out: string[] = [];
+    let cur = "";
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === "\\" && s[i + 1] === "|") { cur += "|"; i++; continue; }
+      if (s[i] === "|") { out.push(cur.trim()); cur = ""; continue; }
+      cur += s[i];
+    }
+    out.push(cur.trim());
+    return out;
+  }
+
+  /** A Markdown subset rendered with text nodes: headings, paragraphs, lists, task lists, quotes, fenced code,
+   *  tables, rules, <details>/<summary>, and HTML comments shown dimmed as "Hidden on GitHub". */
   function markdown(source: string): HTMLElement {
     const box = h("div", { class: "md" });
-    const text = source.replace(/<!--([\s\S]*?)-->/g, (_all, inner) => "\u0000COMMENT" + inner.replace(/\n/g, "\u0001") + "\u0000");
+    const MARK = String.fromCharCode(0);
+    const hidden: string[] = [];
+    const text = splitComments(source).map((part) => {
+      if (!part.comment) return part.text;
+      hidden.push(part.text);
+      return "\n" + MARK + (hidden.length - 1) + MARK + "\n";
+    }).join("");
     const lines = text.split("\n");
+    const stack: HTMLElement[] = [box];
+    const top = () => stack[stack.length - 1];
     let para: string[] = [];
     let listEl: HTMLElement | null = null;
     const flush = () => {
-      if (para.length) box.appendChild(h("p", null, inline(para.join("\n"))));
+      if (para.length) top().appendChild(h("p", null, inline(para.join("\n"))));
       para = [];
     };
+    const restore = (s: string) => s.split(MARK).map((piece, i) => i % 2 === 1 ? "<!--" + (hidden[Number(piece)] || "") + "-->" : piece).join("");
+    const isSep = (s: string) => /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/.test(s) && s.indexOf("-") >= 0;
     for (let i = 0; i < lines.length; i++) {
       const raw = lines[i];
+      const trimmed = raw.trim();
       const fence = /^\s{0,3}(```|~~~)/.exec(raw);
       if (fence) {
-        flush();
-        listEl = null;
+        flush(); listEl = null;
         const code: string[] = [];
         i++;
         while (i < lines.length && !lines[i].trimStart().startsWith(fence[1])) code.push(lines[i++]);
-        box.appendChild(h("pre", { class: "code" }, code.join("\n").replace(/\u0000COMMENT([^\u0000]*)\u0000/g, (_a, c) => "<!--" + c.replace(/\u0001/g, "\n") + "-->")));
+        top().appendChild(h("pre", { class: "code" }, restore(code.join("\n")).replace(/^\n|\n$/g, "")));
         continue;
       }
-      const comment = /^\u0000COMMENT([^\u0000]*)\u0000\s*$/.exec(raw.trim());
-      if (comment) {
-        flush();
-        listEl = null;
-        const inner = comment[1].replace(/\u0001/g, "\n").trim();
-        if (inner) box.appendChild(h("div", { class: "hidden-text", title: "This text is hidden on GitHub's own page" }, h("span", { class: "hidden-label", text: "Hidden on GitHub: " }), inner));
+      const marker = new RegExp("^" + MARK + "(\\d+)" + MARK + "$").exec(trimmed);
+      if (marker) {
+        flush(); listEl = null;
+        const inner = (hidden[Number(marker[1])] || "").trim();
+        if (inner) top().appendChild(h("div", { class: "hidden-text", title: "This text is hidden on GitHub's own page" }, h("span", { class: "hidden-label", text: "Hidden on GitHub: " }), inner));
         continue;
       }
-      const shown = raw.replace(/\u0000COMMENT([^\u0000]*)\u0000/g, (_a, c) => "<!--" + c.replace(/\u0001/g, " ") + "-->");
-      if (!shown.trim()) { flush(); listEl = null; continue; }
-      const heading = /^\s{0,3}(#{1,6})\s+(.*)$/.exec(shown);
-      if (heading) { flush(); listEl = null; box.appendChild(h("p", { class: "md-h" }, inline(heading[2]))); continue; }
-      const item = /^\s{0,3}([-*+]|\d{1,3}[.)])\s+(.*)$/.exec(shown);
+      if (!trimmed) { flush(); listEl = null; continue; }
+      const open = /^<details(\s+open)?\s*>(.*)$/i.exec(trimmed);
+      if (open && stack.length < 8) {
+        flush(); listEl = null;
+        const det = h("details", { class: "md-details" });
+        if (open[1]) det.setAttribute("open", "");
+        top().appendChild(det);
+        stack.push(det);
+        const rest = open[2].trim();
+        const sum = /^<summary>([\s\S]*?)<\/summary>(.*)$/i.exec(rest);
+        if (sum) { det.appendChild(h("summary", null, inline(sum[1]))); if (sum[2].trim()) para.push(sum[2]); }
+        else if (rest) para.push(rest);
+        continue;
+      }
+      const summary = /^<summary>([\s\S]*?)<\/summary>(.*)$/i.exec(trimmed);
+      if (summary && top().tagName === "DETAILS" && !top().querySelector("summary")) {
+        flush(); listEl = null;
+        top().insertBefore(h("summary", null, inline(summary[1])), top().firstChild);
+        if (summary[2].trim()) para.push(summary[2]);
+        continue;
+      }
+      if (/^<\/details>$/i.test(trimmed) && stack.length > 1) { flush(); listEl = null; stack.pop(); continue; }
+      if (/^\s{0,3}(-\s*){3,}$|^\s{0,3}(\*\s*){3,}$|^\s{0,3}(_\s*){3,}$/.test(raw)) { flush(); listEl = null; top().appendChild(h("hr")); continue; }
+      if (raw.indexOf("|") >= 0 && i + 1 < lines.length && isSep(lines[i + 1])) {
+        flush(); listEl = null;
+        const table = h("table", { class: "md-table" });
+        const head = cells(raw);
+        table.appendChild(h("thead", null, h("tr", null, head.map((c) => h("th", null, inline(c))))));
+        const body = h("tbody");
+        i += 2;
+        let rows = 0;
+        while (i < lines.length && lines[i].trim() && lines[i].indexOf("|") >= 0 && rows < 500) {
+          const row = cells(lines[i]);
+          body.appendChild(h("tr", null, head.map((_c, k) => h("td", null, inline(row[k] || "")))));
+          i++; rows++;
+        }
+        i--;
+        table.appendChild(body);
+        top().appendChild(h("div", { class: "md-table-wrap" }, table));
+        continue;
+      }
+      const heading = /^\s{0,3}(#{1,6})\s+(.*)$/.exec(raw);
+      if (heading) { flush(); listEl = null; top().appendChild(h("p", { class: "md-h md-h" + heading[1].length }, inline(heading[2]))); continue; }
+      const item = /^\s{0,3}([-*+]|\d{1,3}[.)])\s+(.*)$/.exec(raw);
       if (item) {
         flush();
         const ordered = /\d/.test(item[1]);
-        if (!listEl || listEl.tagName !== (ordered ? "OL" : "UL")) { listEl = h(ordered ? "ol" : "ul"); box.appendChild(listEl); }
+        if (!listEl || listEl.tagName !== (ordered ? "OL" : "UL") || listEl.parentElement !== top()) { listEl = h(ordered ? "ol" : "ul"); top().appendChild(listEl); }
         const check = /^\[([ xX])\]\s+(.*)$/.exec(item[2]);
         listEl.appendChild(h("li", null, check ? [check[1] === " " ? "☐ " : "☑ ", ...inline(check[2])] : inline(item[2])));
         continue;
       }
-      const quote = /^\s{0,3}>\s?(.*)$/.exec(shown);
-      if (quote) { flush(); listEl = null; box.appendChild(h("blockquote", null, inline(quote[1]))); continue; }
+      const quote = /^\s{0,3}>\s?(.*)$/.exec(raw);
+      if (quote) { flush(); listEl = null; top().appendChild(h("blockquote", null, inline(quote[1]))); continue; }
       listEl = null;
-      para.push(shown);
+      para.push(raw);
     }
     flush();
     return box;
@@ -337,9 +430,17 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
   function prPane(d: any): HTMLElement {
     const pane = h("div", { class: "pane", role: "tabpanel", id: "tabpanel", "aria-labelledby": "tab-" + subtab });
     if (subtab === "files") {
+      if (!state.files && !state.filesLoading && !state.filesError) setTimeout(() => send({ type: "files" }), 0);
       if (state.filesLoading && !state.files) pane.appendChild(h("p", { class: "muted", text: "Loading files…" }));
       else if (state.filesError) pane.appendChild(h("p", { class: "fail", text: state.filesError }));
       else if (state.files) {
+        const steering = state.files.filter((f: any) => STEERING.test(f.path) || (f.previousPath && STEERING.test(f.previousPath)));
+        if (steering.length) {
+          pane.appendChild(h("div", { class: "box warn" }, icon("warning", "pend"), " This pull request changes files that control how tools and agents behave in a folder: ",
+            steering.slice(0, 12).map((f: any, i: number) => [i ? ", " : "", h("code", { text: f.path })]),
+            steering.length > 12 ? " and " + (steering.length - 12) + " more" : "",
+            ". Reading it here is safe. Checking it out would put these files in your folder."));
+        }
         for (const f of state.files) {
           const head = h("summary", null, h("span", { class: "fstatus " + f.status, text: f.status.charAt(0).toUpperCase() }), " ",
             h("span", { class: "fpath", text: f.previousPath ? f.previousPath + " → " + f.path : f.path }), " ", h("span", { class: "a", text: "+" + f.additions }), " ", h("span", { class: "d", text: "-" + f.deletions }));
@@ -388,8 +489,10 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
       return pane;
     }
     pane.appendChild(trustNote(d.author));
-    if (aiPattern.test(d.title + "\n" + d.body)) pane.appendChild(aiNote());
+    const said = [d.title, d.body].concat(d.conversation.map((c: any) => c.body)).concat(d.threads.flatMap((t: any) => t.comments.map((c: any) => c.body)));
+    if (aiPattern.test(said.join("\n"))) pane.appendChild(aiNote());
     pane.appendChild(d.body.trim() ? markdown(d.body) : h("p", { class: "muted", text: "No description." }));
+    if (d.bodyCut) pane.appendChild(cutNote(d));
     if (d.closes.length) {
       pane.appendChild(h("div", { class: "section" }, h("h3", { text: "Closes when merged" }), d.closes.map((c: any) => h("div", { class: "linkrow" }, icon("issues", "st-open"), h("span", { text: "#" + c.number + " " + c.title })))));
     }
@@ -400,6 +503,13 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
     pane.appendChild(h("div", { class: "section" }, h("h3", { text: "Reviewers" }), reviewers.length ? h("div", { class: "people" }, reviewers) : h("span", { class: "muted", text: "None yet" })));
     return pane;
   }
+
+  function cutNote(d: any): HTMLElement {
+    return h("p", { class: "muted" }, "The text is longer than 60,000 characters, so only the start is shown here. ",
+      h("button", { class: "link", type: "button", onclick: () => send({ type: "open", number: d.number }) }, "Read the rest on GitHub"));
+  }
+
+  const STEERING = /(^|\/)(AGENTS\.md|CLAUDE\.md|GEMINI\.md|andromity\.md|\.cursorrules|\.windsurfrules|copilot-instructions\.md|\.pre-commit-config\.ya?ml|package\.json|Makefile|\.gitattributes|\.gitmodules)$|(^|\/)(\.vscode|\.andromity|\.husky|\.cursor|\.claude|\.github\/workflows|\.devcontainer)\//i;
 
   function aiNote(): HTMLElement {
     return h("div", { class: "box warn" }, icon("warning", "pend"), " This text contains instructions aimed at an AI. Andromity reads GitHub text only in read-only chats: they can't edit files, run commands or post anything.");
@@ -447,8 +557,8 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
     }
     const actions = h("div", { class: "actions" });
     const mine = state.account && d.author === state.account;
-    if (isPr && live && !mine) actions.appendChild(h("button", { class: "btn primary", type: "button", onclick: () => openSheet("review", d) }, icon("sparkle"), "Review with Andromity"));
-    actions.appendChild(h("button", { class: "btn" + (isPr && live && !mine ? "" : " primary"), type: "button", onclick: () => openSheet("ask", d) }, icon("comment-discussion"), "Ask Andromity"));
+    if (isPr && live && !mine) actions.appendChild(h("button", { class: "btn primary", type: "button", "data-focus": "review", onclick: () => openSheet("review", d) }, icon("sparkle"), "Review with Andromity"));
+    actions.appendChild(h("button", { class: "btn" + (isPr && live && !mine ? "" : " primary"), type: "button", "data-focus": "ask", onclick: () => openSheet("ask", d) }, icon("comment-discussion"), "Ask Andromity"));
     actions.appendChild(moreMenu(d));
     head.appendChild(actions);
     box.appendChild(head);
@@ -460,6 +570,7 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
       pane.appendChild(trustNote(d.author));
       if (aiPattern.test(d.title + "\n" + d.body + "\n" + d.conversation.map((c: any) => c.body).join("\n"))) pane.appendChild(aiNote());
       pane.appendChild(d.body.trim() ? markdown(d.body) : h("p", { class: "muted", text: "No description." }));
+      if (d.bodyCut) pane.appendChild(cutNote(d));
       if (d.conversation.length) pane.appendChild(h("div", { class: "section" }, h("h3", { text: "Comments" }), h("div", { class: "thread" }, d.conversation.map(commentEl))));
       box.appendChild(pane);
     }
@@ -478,6 +589,7 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
 
   function openSheet(kind: string, d: any) {
     lastFocus = document.activeElement as HTMLElement;
+    lastFocusKey = lastFocus && lastFocus.getAttribute ? lastFocus.getAttribute("data-focus") : null;
     sheetEl.textContent = "";
     const isPr = d.kind === "pr";
     const title = kind === "review" ? "Review pull request #" + d.number + " with Andromity" : "Ask Andromity about " + (isPr ? "pull request" : "issue") + " #" + d.number;
@@ -502,9 +614,13 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
     const update = () => { if (kind === "ask") go.disabled = !ta.value.trim(); };
     ta.addEventListener("input", update);
     update();
+    const failLine = h("p", { class: "fail", role: "alert", hidden: true });
+    body.appendChild(failLine);
+    failSheet = (text: string) => { failLine.textContent = text; failLine.hidden = false; go.disabled = false; update(); };
     go.addEventListener("click", () => {
       if (go.disabled) return;
       go.disabled = true;
+      failLine.hidden = true;
       send(kind === "review" ? { type: "review", number: d.number, focus: ta.value } : { type: "ask", number: d.number, question: ta.value });
     });
     ta.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); go.click(); } });
@@ -521,7 +637,10 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
     sheetEl.hidden = true;
     backEl.hidden = true;
     sheetOpen = false;
+    failSheet = null;
+    const again = lastFocusKey ? root.querySelector('[data-focus="' + lastFocusKey + '"]') as HTMLElement | null : null;
     if (lastFocus && document.body.contains(lastFocus)) lastFocus.focus();
+    else if (again) again.focus();
   }
   backEl.addEventListener("click", closeSheet);
   sheetEl.addEventListener("keydown", (e: KeyboardEvent) => {
@@ -618,7 +737,11 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
       render();
       if (prev && prev.loadingList && !state.loadingList && state.status === "ready") say((state.kind === "pr" ? "Pull requests" : "Issues") + " updated.");
     } else if (msg.type === "done") {
+      failSheet = null;
       closeSheet();
+      say(String(msg.text || ""));
+    } else if (msg.type === "failed") {
+      if (failSheet) failSheet(String(msg.text || "It didn't start. Try again."));
       say(String(msg.text || ""));
     } else if (msg.type === "open_sheet" && state && state.detail && state.detail.number === msg.number && (msg.sheet === "review" || msg.sheet === "ask")) {
       openSheet(msg.sheet, state.detail);

@@ -73,6 +73,8 @@ export interface LinkedItem {
 
 export interface PrDetail extends ListItem {
   body: string;
+  /** The description was longer than MAX_BODY and is cut; the rest is on GitHub. */
+  bodyCut: boolean;
   additions: number;
   deletions: number;
   changedFiles: number;
@@ -87,6 +89,7 @@ export interface PrDetail extends ListItem {
 
 export interface IssueDetail extends ListItem {
   body: string;
+  bodyCut: boolean;
   conversation: Comment[];
   closedBy: LinkedItem[];
 }
@@ -116,7 +119,7 @@ const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 const BOT_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}(\[bot\])?$/;
 const NAME = /^[A-Za-z0-9._-]{1,100}$/;
 const COLOR = /^[0-9a-fA-F]{6}$/;
-const HIDDEN = /[\u0000-\u0008\u000b-\u000c\u000e-\u001f\u007f-\u009f\u00ad\u061c\u115f-\u1160\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\ufff9-\ufffb]/g;
+const HIDDEN = /[\u0000-\u0008\u000b-\u000c\u000e-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f-\u1160\u17b4-\u17b5\u180b-\u180f\u200b-\u200f\u2028-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\u{1d173}-\u{1d17a}\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/gu;
 const ASSOCIATIONS: Record<string, string> = {
   OWNER: "Owner", MEMBER: "Member", COLLABORATOR: "Collaborator", CONTRIBUTOR: "Contributor",
   FIRST_TIME_CONTRIBUTOR: "First-time contributor", FIRST_TIMER: "First-time contributor", MANNEQUIN: "Mannequin", NONE: "None",
@@ -142,16 +145,16 @@ function positive(value: unknown): number | null {
 
 /** Hidden and direction-changing characters shown as visible marks, so a spoofed name can't look like a real one. */
 export function visible(value: string): string {
-  return value.replace(HIDDEN, (ch) => {
-    if (ch === "\t") return ch;
-    return `⟨U+${ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`;
-  });
+  return value.replace(HIDDEN, (ch) => `⟨U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}⟩`);
 }
 
 /** One line of untrusted text: newlines become spaces, hidden characters become visible, then it's cut. */
 export function line(value: unknown, max = 300): string {
   if (typeof value !== "string") return "";
-  return visible(value.slice(0, max * 2).replace(/\r\n?|\n/g, " ")).slice(0, max);
+  const shown = visible(Array.from(value.slice(0, max * 2).replace(/\r\n?|\n/g, " ")).slice(0, max).join(""));
+  if (shown.length <= max) return shown;
+  const cut = Array.from(shown).slice(0, max).join("");
+  return cut.replace(/⟨[^⟩]*$/, "");
 }
 
 /** A block of untrusted text: newlines kept, hidden characters made visible, cut at the limit. */
@@ -240,8 +243,9 @@ export function readItem(raw: unknown, repo: RepoRef): ListItem | null {
   const number = positive(entry?.number);
   const url = githubUrl(entry?.url);
   if (!entry || !number || !url) return null;
-  const expected = `https://github.com/${repo.owner}/${repo.repo}/`.toLowerCase();
-  if (!url.toLowerCase().startsWith(expected)) return null;
+  const own = itemFromUrl(url);
+  const kind = entry.__typename === "PullRequest" ? "pr" : "issue";
+  if (!own || own.owner.toLowerCase() !== repo.owner.toLowerCase() || own.repo.toLowerCase() !== repo.repo.toLowerCase() || own.number !== number || own.kind !== kind) return null;
   const base = {
     number,
     title: line(entry.title, 300) || "(no title)",
@@ -364,9 +368,11 @@ export function readPrDetail(data: Record<string, unknown>, repo: RepoRef, numbe
     const reviewState = typeof entry?.state === "string" && /^[A-Z_]{1,30}$/.test(entry.state) ? entry.state : "";
     return reviewState ? { author: login(entry?.author), state: reviewState } : null;
   }).filter((entry): entry is { author: string; state: string } => !!entry);
+  const description = block(pull.body, MAX_BODY);
   return {
     ...item,
-    body: block(pull.body, MAX_BODY).text,
+    body: description.text,
+    bodyCut: description.cut,
     additions: num(pull.additions),
     deletions: num(pull.deletions),
     changedFiles: num(pull.changedFiles),
@@ -384,9 +390,11 @@ export function readIssueDetail(data: Record<string, unknown>, repo: RepoRef, nu
   const issue = obj(obj(data.repository)?.issue);
   const item = readItem(issue ? { ...issue, __typename: "Issue" } : null, repo);
   if (!issue || !item || item.number !== number) throw new Error("not this issue");
+  const description = block(issue.body, MAX_BODY);
   return {
     ...item,
-    body: block(issue.body, MAX_BODY).text,
+    body: description.text,
+    bodyCut: description.cut,
     conversation: comments(issue.comments, 50),
     closedBy: linkedItems(issue.closedByPullRequestsReferences),
   };
@@ -414,9 +422,9 @@ export function readFiles(raw: unknown[]): ChangedFile[] {
 export function cleanFilter(value: unknown): string {
   if (typeof value !== "string") return "";
   return value
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/[\u0000-\u001f\u007f()]/g, " ")
     .split(/\s+/)
-    .filter((word) => word && !/^-?(repo|org|user|owner|type|is|in|archived|sort):/i.test(word))
+    .filter((word) => word && !/^(OR|AND|NOT)$/i.test(word) && !/^-?(repo|org|user|owner|type|is|in|archived|sort):/i.test(word))
     .join(" ")
     .slice(0, 200);
 }
@@ -428,7 +436,7 @@ export function searchQuery(repo: RepoRef, kind: ItemKind, filter: string, sort:
   const words = [`repo:${repo.owner}/${repo.repo}`, kind === "pr" ? "is:pr" : "is:issue", "is:open"];
   if (kind === "pr" && filter === "foryou") words.push(part === "mine" ? "author:@me" : "review-requested:@me");
   if (kind === "issue" && filter === "assigned") words.push("assignee:@me");
-  words.push(SORTS[sort] ?? SORTS.updated);
+  words.push(Object.prototype.hasOwnProperty.call(SORTS, sort) ? SORTS[sort] : SORTS.updated);
   const extra = cleanFilter(text);
   if (extra) words.push(extra);
   return words.join(" ");
@@ -515,6 +523,11 @@ export function itemFromUrl(value: unknown): (RepoRef & { kind: ItemKind; number
   return { owner: match[1], repo: match[2], kind: match[3] === "pull" ? "pr" : "issue", number: Number(match[4]) };
 }
 
+/** GitHub text as a quoted block, so a body can't add lines that look like another person's comment. */
+function quoted(text: string): string {
+  return (text.trim() || "(none)").split("\n").map((row) => `> ${row}`).join("\n");
+}
+
 /** Text the model reads for a question about a pull request. All of it comes from GitHub and is untrusted. */
 export function prMaterial(repo: RepoRef, pull: PrDetail, diff: string, cut: boolean): string {
   const parts = [
@@ -523,18 +536,18 @@ export function prMaterial(repo: RepoRef, pull: PrDetail, diff: string, cut: boo
     `Checks: ${pull.checkList.length ? pull.checkList.map((check) => `${check.name} ${check.state}${check.required ? " (required)" : ""}`).join("; ") : "none"}.`,
     "",
     "Description:",
-    pull.body.trim() || "(none)",
+    quoted(pull.body),
   ];
   if (pull.conversation.length) {
     parts.push("", "Comments:");
-    for (const entry of pull.conversation) parts.push(`@${entry.author} (${entry.association}): ${entry.body}`);
+    for (const entry of pull.conversation) parts.push(`Comment by @${entry.author} (${entry.association}):`, quoted(entry.body));
   }
   const open = pull.threads.filter((thread) => !thread.resolved);
   if (open.length) {
     parts.push("", "Open review threads:");
     for (const thread of open) {
-      parts.push(`${thread.path}${thread.line ? `:${thread.line}` : ""}${thread.outdated ? " (outdated)" : ""}`);
-      for (const entry of thread.comments) parts.push(`  @${entry.author} (${entry.association}): ${entry.body}`);
+      parts.push(`Thread on ${line(thread.path, 300)}${thread.line ? `:${thread.line}` : ""}${thread.outdated ? " (outdated)" : ""}`);
+      for (const entry of thread.comments) parts.push(`Comment by @${entry.author} (${entry.association}):`, quoted(entry.body));
     }
   }
   parts.push("", cut ? "Diff (cut: the full diff is longer than this could read):" : "Diff:", diff);
@@ -547,11 +560,11 @@ export function issueMaterial(repo: RepoRef, issue: IssueDetail): string {
     `Author: @${issue.author} (${issue.association}). State: ${issue.state}${issue.stateReason ? ` (${issue.stateReason})` : ""}. Labels: ${issue.labels.map((entry) => entry.name).join(", ") || "none"}.`,
     "",
     "Text:",
-    issue.body.trim() || "(none)",
+    quoted(issue.body),
   ];
   if (issue.conversation.length) {
     parts.push("", "Comments:");
-    for (const entry of issue.conversation) parts.push(`@${entry.author} (${entry.association}): ${entry.body}`);
+    for (const entry of issue.conversation) parts.push(`Comment by @${entry.author} (${entry.association}):`, quoted(entry.body));
   }
   return parts.join("\n");
 }

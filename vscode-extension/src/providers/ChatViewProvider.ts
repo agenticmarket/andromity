@@ -1339,6 +1339,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       : null;
   }
 
+  /** The GitHub text waiting for this exact prompt in this chat, taken once. The webview can't supply it. */
+  private _takePendingExternal(prompt: string, sessionId: string | undefined): { source: string; text: string } | null {
+    if (!sessionId) return null;
+    const queue = this._pendingExternal?.get(sessionId);
+    const at = queue ? queue.findIndex((entry) => entry.prompt === prompt) : -1;
+    if (!queue || at < 0) return null;
+    const [entry] = queue.splice(at, 1);
+    if (!queue.length) this._pendingExternal.delete(sessionId);
+    if (entry.target) this._reviewSessions?.set(sessionId, entry.target);
+    return entry.external;
+  }
+
   /** What the pull request review commands need from the chat. */
   public reviewHost(): ReviewHost {
     return {
@@ -2600,11 +2612,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    const queuedExternal = message?.type === "submit_input"
+      ? this._takePendingExternal(typeof message.prompt === "string" ? message.prompt : "", message.sessionId || this._currentSessionId)
+      : null;
     if (this._rpcClient && await handleInputMessage(this._rpcClient, message, this._currentSessionId || "", (event) => {
       const data = event as { type: string; session_id?: string };
       if (data.type === "input_session" && data.session_id) this._currentSessionId = data.session_id;
       this._postToWebview(event);
-    }, this._currentMode)) return;
+    }, this._currentMode, queuedExternal)) return;
 
     if (await handleInteractionMessage(this._rpcClient, message, this._currentSessionId, (event) => this._postToWebview(event))) return;
     if (await handlePromptImageMessage(this._rpcClient, message, this._currentSessionId, (event) => this._postToWebview(event))) return;

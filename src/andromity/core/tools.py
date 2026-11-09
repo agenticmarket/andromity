@@ -2699,7 +2699,9 @@ def read_external_context(value: Any) -> Optional[tuple]:
     source, text = value.get("source"), value.get("text")
     if not isinstance(source, str) or not isinstance(text, str) or not text.strip():
         return None
-    label = _EXTERNAL_SOURCE_UNSAFE.sub("", source)[:120]
+    label = _EXTERNAL_SOURCE_UNSAFE.sub("", source)
+    if len(label) > 200:
+        label = "github:"
     if not label.startswith("github:"):
         return None
     return label, text[:MAX_EXTERNAL_TEXT]
