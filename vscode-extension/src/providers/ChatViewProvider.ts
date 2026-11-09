@@ -126,7 +126,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** The session and turn number of _latestTurnFiles; the number arrives with the turn's receipt. */
   private _latestTurn: TurnRef | null = null;
   /** GitHub text waiting to go with one prompt in the review's own new chat, keyed by that chat. */
-  private _pendingExternal = new Map<string, { prompt: string; external: { source: string; text: string }; target: ReviewTarget }[]>();
+  private _pendingExternal = new Map<string, { prompt: string; external: { source: string; text: string }; target: ReviewTarget | null }[]>();
   /** Chats that review a pull request. */
   private _reviewSessions = new Map<string, ReviewTarget>();
   private _hydration = new SessionHydration();
@@ -1378,6 +1378,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         return null;
       },
+      modelLabel: () => this._currentModel || "the chat's model",
     };
   }
 
@@ -2697,7 +2698,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (pendingExternal && pendingQueue) {
             pendingQueue.splice(pendingAt, 1);
             if (!pendingQueue.length) this._pendingExternal?.delete(pendingSid);
-            this._reviewSessions?.set(pendingSid, pendingExternal.target);
+            if (pendingExternal.target) this._reviewSessions?.set(pendingSid, pendingExternal.target);
           }
           await this._rpcClient.call("agent.prompt", {
             session_id: activeSid,

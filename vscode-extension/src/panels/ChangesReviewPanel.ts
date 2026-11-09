@@ -237,6 +237,10 @@ export class ChangesReviewPanel {
             if (typeof message.filePath === "string") await this._loadTurnFileDiff(message.filePath);
             break;
 
+          case "open_repo_view":
+            void vscode.commands.executeCommand("andromity.openPullRequestsView");
+            break;
+
           case "get_file_diff":
             if (message.filePath) {
               if (this._knownFiles.has(message.filePath)) this._pr.markOpened(message.filePath);

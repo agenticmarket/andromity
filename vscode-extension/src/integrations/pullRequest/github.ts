@@ -15,7 +15,7 @@ export type FetchLike = (url: string, init: {
 
 export type GitHubErrorKind =
   | "unauthorized" | "sso" | "forbidden" | "not_found" | "rate_limited" | "exists" | "no_commits"
-  | "draft_unsupported" | "invalid" | "server" | "network" | "timeout";
+  | "draft_unsupported" | "invalid" | "server" | "network" | "timeout" | "oauth_restricted";
 
 export class GitHubError extends Error {
   constructor(
@@ -209,6 +209,7 @@ export class GitHubClient {
       const retry = Number(response.headers.get("retry-after"));
       return new GitHubError("rate_limited", status, null, resetAt ?? (Number.isFinite(retry) && retry > 0 ? Date.now() + retry * 1000 : null));
     }
+    if (status === 403 && message.includes("oauth app access restrictions")) return new GitHubError("oauth_restricted", status);
     if (status === 403) return new GitHubError("forbidden", status);
     if (status === 404) return new GitHubError("not_found", status);
     if (status === 422) {
@@ -359,5 +360,38 @@ export class GitHubClient {
 
   async comment(owner: string, repo: string, number: number, body: string): Promise<void> {
     await this.request("POST", `/repos/${seg(owner)}/${seg(repo)}/issues/${number}/comments`, { body });
+  }
+
+  /** A read-only GraphQL query. GitHub answers some failures with status 200 and an errors list; those become GitHubErrors too. */
+  async graphql(query: string, variables: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const { data } = await this.request("POST", "/graphql", { query, variables });
+    const value = obj(data);
+    const errors = Array.isArray(value?.errors) ? (value?.errors as unknown[]) : [];
+    const result = obj(value?.data);
+    if (errors.length) {
+      const first = obj(errors[0]);
+      const type = str(first?.type, 100) || "";
+      const message = (str(first?.message, 2000) || "").toLowerCase();
+      if (type === "RATE_LIMITED" || message.includes("rate limit")) throw new GitHubError("rate_limited", 200);
+      if (message.includes("saml")) throw new GitHubError("sso", 200);
+      if (message.includes("oauth app access restrictions")) throw new GitHubError("oauth_restricted", 200);
+      if (type === "NOT_FOUND") throw new GitHubError("not_found", 200);
+      if (type === "FORBIDDEN") throw new GitHubError("forbidden", 200);
+      if (!result) throw new GitHubError("invalid", 200);
+    }
+    if (!result) throw new GitHubError("server");
+    return result;
+  }
+
+  /** A pull request's changed files with their patches, at most 300 files. */
+  async pullFiles(owner: string, repo: string, number: number): Promise<{ files: unknown[]; more: boolean }> {
+    const files: unknown[] = [];
+    for (let page = 1; page <= 3; page++) {
+      const { data } = await this.request("GET", `/repos/${seg(owner)}/${seg(repo)}/pulls/${number}/files?per_page=100&page=${page}`);
+      if (!Array.isArray(data)) throw new GitHubError("server");
+      files.push(...data);
+      if (data.length < 100) return { files, more: false };
+    }
+    return { files, more: true };
   }
 }

@@ -303,6 +303,22 @@
         "category": "Andromity"
       },
       {
+        "command": "andromity.openPullRequestsView",
+        "title": "Pull Requests and Issues",
+        "category": "Andromity",
+        "icon": "$(issues)"
+      },
+      {
+        "command": "andromity.reviewFromGitHubTree",
+        "title": "Review with Andromity",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.askFromGitHubTree",
+        "title": "Ask Andromity",
+        "category": "Andromity"
+      },
+      {
         "command": "andromity.postReviewDocument",
         "title": "Post Review Document to Pull Request",
         "category": "Andromity"
@@ -475,6 +491,14 @@
           "when": "false"
         },
         {
+          "command": "andromity.reviewFromGitHubTree",
+          "when": "false"
+        },
+        {
+          "command": "andromity.askFromGitHubTree",
+          "when": "false"
+        },
+        {
           "command": "andromity.deleteSession",
           "when": "false"
         },
@@ -632,6 +656,11 @@
           "group": "navigation@2"
         },
         {
+          "command": "andromity.openPullRequestsView",
+          "when": "view == andromity.chatView",
+          "group": "navigation@2"
+        },
+        {
           "command": "andromity.viewGitDiff",
           "when": "view == andromity.chatView",
           "group": "navigation@3"
@@ -677,6 +706,16 @@
           "command": "andromity.deleteSession",
           "when": "view == andromity.sessionsView && viewItem == sessionItem",
           "group": "inline"
+        },
+        {
+          "command": "andromity.reviewFromGitHubTree",
+          "when": "view == pr:github && viewItem =~ /pullrequest/",
+          "group": "andromity@1"
+        },
+        {
+          "command": "andromity.askFromGitHubTree",
+          "when": "view == pr:github && viewItem =~ /pullrequest/ || view == issues:github && viewItem =~ /^(link)?(current|continue)?issue/",
+          "group": "andromity@2"
         }
       ]
     },

@@ -17,12 +17,15 @@ export interface ReviewTarget {
 
 /** What the review commands need from the chat. */
 export interface ReviewHost {
-  /** Starts a new chat turn whose GitHub text the engine wraps as untrusted and keeps read-only. */
-  startExternalTask(prompt: string, external: { source: string; text: string }, taskName: string, target: ReviewTarget): Promise<void>;
+  /** Starts a new chat turn whose GitHub text the engine wraps as untrusted and keeps read-only.
+   *  A target marks the chat as a review that can be posted; questions pass null. */
+  startExternalTask(prompt: string, external: { source: string; text: string }, taskName: string, target: ReviewTarget | null): Promise<void>;
   /** The review a chat holds (the current chat when no id is given), if it is one. */
   reviewIn(sessionId?: string): Promise<{ sessionId: string; target: ReviewTarget } | null>;
   /** The last answer of a chat, as plain text. */
   lastAnswer(sessionId: string): Promise<string | null>;
+  /** The chat model new chats use, for telling the user where GitHub text is sent. */
+  modelLabel?(): string;
 }
 
 const fetchImpl: FetchLike = (url, init) => fetch(url, init) as unknown as Promise<HttpResponse>;
@@ -33,7 +36,7 @@ function track(name: string): void {
   recordFeatureUse(name);
 }
 
-async function signIn(choose: boolean): Promise<GitHubClient | null> {
+export async function signIn(choose: boolean): Promise<GitHubClient | null> {
   try {
     const session = await vscode.authentication.getSession("github", ["repo"], choose ? { createIfNone: true, clearSessionPreference: true } : { createIfNone: true });
     return session?.accessToken ? new GitHubClient(session.accessToken, fetchImpl) : null;
@@ -61,11 +64,12 @@ async function workspaceRepository(): Promise<{ owner: string; repo: string } | 
   return { owner: parsed.owner, repo: parsed.repo };
 }
 
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   if (error instanceof GitHubError) {
     if (error.kind === "not_found") return "GitHub can't find that with your sign-in. If the repository belongs to another of your GitHub accounts, run the command again and choose it.";
     if (error.kind === "unauthorized") return "GitHub sign-in expired. Run the command again to sign in.";
     if (error.kind === "sso") return "This organisation requires single sign-on for your GitHub sign-in. Authorize it on GitHub, then try again.";
+    if (error.kind === "oauth_restricted") return "This organisation hasn't approved VS Code's GitHub access. Request access on GitHub, then try again.";
     if (error.kind === "rate_limited") return "GitHub is limiting requests right now. Try again in a few minutes.";
     if (error.kind === "timeout" || error.kind === "network") return "Couldn't reach GitHub. Check your connection and try again.";
   }
@@ -87,10 +91,28 @@ export function reviewMaterial(target: { owner: string; repo: string }, pull: Pu
   return lines.join("\n");
 }
 
-export function reviewPrompt(target: { owner: string; repo: string }, number: number): string {
+export function reviewPrompt(target: { owner: string; repo: string }, number: number, focus = ""): string {
+  const extra = plainText(focus, 2000).replace(/\s+/g, " ").trim();
   return `Review pull request #${number} in ${target.owner}/${target.repo}. Look for bugs, security problems, missing tests, and changes that don't match the description. `
     + "My open folder is on my own branch, not the pull request, so read files here only for context. "
-    + "Finish with a short summary, then a numbered list of findings, each with the file and line it refers to.";
+    + "Finish with a short summary, then a numbered list of findings, each with the file and line it refers to."
+    + (extra ? ` Pay most attention to this: ${extra}` : "");
+}
+
+/** Starts a review of one known pull request in a new read-only chat. */
+export async function startReview(host: ReviewHost, github: GitHubClient, target: { owner: string; repo: string }, number: number, focus = ""): Promise<void> {
+  const [detail, { diff, cut }] = await Promise.all([
+    github.pullDetail(target.owner, target.repo, number),
+    github.pullDiff(target.owner, target.repo, number),
+  ]);
+  track("pra_review_started");
+  if (cut) track("pra_review_diff_cut");
+  await host.startExternalTask(
+    reviewPrompt(target, detail.number, focus),
+    { source: `github:${target.owner}/${target.repo}#${detail.number}`, text: reviewMaterial(target, detail, diff, cut) },
+    `Review PR #${detail.number}`,
+    { owner: target.owner, repo: target.repo, number: detail.number, title: detail.title },
+  );
 }
 
 /** Andromity: Review Pull Request… */
@@ -135,18 +157,7 @@ export async function reviewPullRequest(host: ReviewHost): Promise<void> {
       pull,
     })), { placeHolder: `Open pull requests in ${target.owner}/${target.repo}`, matchOnDescription: true });
     if (!pick) return;
-    const [detail, { diff, cut }] = await Promise.all([
-      github.pullDetail(target.owner, target.repo, pick.pull.number),
-      github.pullDiff(target.owner, target.repo, pick.pull.number),
-    ]);
-    track("pra_review_started");
-    if (cut) track("pra_review_diff_cut");
-    await host.startExternalTask(
-      reviewPrompt(target, detail.number),
-      { source: `github:${target.owner}/${target.repo}#${detail.number}`, text: reviewMaterial(target, detail, diff, cut) },
-      `Review PR #${detail.number}`,
-      { owner: target.owner, repo: target.repo, number: detail.number, title: detail.title },
-    );
+    await startReview(host, github, target, pick.pull.number);
   } catch (error) {
     track("pra_review_failed");
     void vscode.window.showWarningMessage(errorText(error));

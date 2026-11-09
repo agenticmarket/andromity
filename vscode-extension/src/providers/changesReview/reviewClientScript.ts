@@ -161,6 +161,9 @@ export function getReviewClientScript(): string {
       renderTree();
     });
 
+    const repoViewBtn = document.getElementById('repo-view-btn');
+    if (repoViewBtn) repoViewBtn.addEventListener('click', function () { vscode.postMessage({ type: 'open_repo_view' }); });
+
     refreshBtn.addEventListener('click', function () {
       refreshBtn.disabled = true;
       refreshBtn.innerHTML = '<span class="codicon codicon-loading codicon-modifier-spin"></span> Refreshing...';

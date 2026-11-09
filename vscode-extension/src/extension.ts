@@ -22,6 +22,7 @@ import { AttentionKind, BackgroundSessions, describeToolActivity } from "./backg
 import { confirmTurnOnAirGap, currentAirGap } from "./airgapState.js";
 import { airGapStatusLine } from "./airgap.js";
 import { openReviewForPosting, postActiveReview, reviewPullRequest } from "./integrations/pullRequest/reviewPullRequest.js";
+import { RepoViewPanel, targetFromTreeItem } from "./panels/RepoViewPanel.js";
 
 let pythonBridge: PythonBridge | null = null;
 let statusBarItem: vscode.StatusBarItem;
@@ -825,6 +826,20 @@ export async function activate(context: vscode.ExtensionContext) {
 
     registerTrackedCommand("andromity.postReviewDocument", async () => {
       await postActiveReview();
+    }),
+
+    registerTrackedCommand("andromity.openPullRequestsView", () => {
+      RepoViewPanel.show(context.extensionUri, chatProvider.reviewHost());
+    }),
+
+    registerTrackedCommand("andromity.reviewFromGitHubTree", (node?: unknown) => {
+      const target = targetFromTreeItem(node);
+      RepoViewPanel.show(context.extensionUri, chatProvider.reviewHost(), target && target.kind === "pr" ? { ...target, sheet: "review" } : undefined);
+    }),
+
+    registerTrackedCommand("andromity.askFromGitHubTree", (node?: unknown) => {
+      const target = targetFromTreeItem(node);
+      RepoViewPanel.show(context.extensionUri, chatProvider.reviewHost(), target ? { ...target, sheet: "ask" } : undefined);
     }),
 
     registerTrackedCommand("andromity.refreshSessions", () => {

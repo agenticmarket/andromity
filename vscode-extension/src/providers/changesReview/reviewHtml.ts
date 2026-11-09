@@ -112,6 +112,9 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
 
     <div class="header-right">
       <button class="action-btn primary pr-open-btn" id="pr-open-btn" type="button" aria-haspopup="dialog" aria-expanded="false" hidden></button>
+      <button class="action-btn" id="repo-view-btn" type="button" title="Open the repository's pull requests and issues">
+        <span class="codicon codicon-git-pull-request"></span> Pull requests
+      </button>
       <button class="action-btn" id="refresh-btn" title="Refresh Git changes">
         <span class="codicon codicon-refresh"></span> Refresh
       </button>
