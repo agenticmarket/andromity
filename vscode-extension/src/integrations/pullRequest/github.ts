@@ -380,6 +380,7 @@ export class GitHubClient {
       if (type === "RATE_LIMITED" || message.includes("rate limit")) throw new GitHubError("rate_limited", 200, null, null, said);
       if (message.includes("saml")) throw new GitHubError("sso", 200, null, null, said);
       if (message.includes("oauth app access restrictions")) throw new GitHubError("oauth_restricted", 200, null, null, said);
+      if (type === "INSUFFICIENT_SCOPES" || message.includes("not been granted the required scopes")) throw new GitHubError("invalid", 200, null, null, said);
       if (type === "NOT_FOUND") throw new GitHubError("not_found", 200, null, null, said);
       if (type === "FORBIDDEN") throw new GitHubError("forbidden", 200, null, null, said);
       if (!result) throw new GitHubError("invalid", 200, null, null, said);

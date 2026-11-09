@@ -181,7 +181,7 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
 
   function reviewBit(item: any, me: string | null): HTMLElement | null {
     if (me && item.requestedUsers && item.requestedUsers.indexOf(me) >= 0) return h("span", { class: "tag you", text: "review requested from you" });
-    if (item.requestedTeams && item.requestedTeams.length) return h("span", { class: "tag you" }, icon("organization"), " " + item.requestedTeams[0]);
+    if (item.requestedTeams) return h("span", { class: "tag" }, icon("organization"), item.requestedTeams === 1 ? " team review requested" : " " + item.requestedTeams + " team reviews requested");
     if (item.review === "CHANGES_REQUESTED") return h("span", { class: "fail", text: "changes requested" });
     if (item.review === "APPROVED") return h("span", { class: "pass", text: "approved" });
     return null;
@@ -395,7 +395,7 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
     }
     const reviewers: HTMLElement[] = [];
     (d.requestedUsers || []).forEach((u: string) => reviewers.push(person(u, h("span", { class: "tag" + (u === state.account ? " you" : ""), text: "requested" }))));
-    (d.requestedTeams || []).forEach((t: string) => reviewers.push(h("div", { class: "person" }, icon("organization"), t, h("span", { class: "tag", text: "team requested" }))));
+    if (d.requestedTeams) reviewers.push(h("div", { class: "person" }, icon("organization"), d.requestedTeams === 1 ? "A team" : d.requestedTeams + " teams", h("span", { class: "tag", text: "requested" }), h("span", { class: "muted small", text: " (team names need GitHub's read:org permission)" })));
     d.reviews.forEach((r: any) => reviewers.push(person(r.author, h("span", { class: r.state === "APPROVED" ? "pass" : r.state === "CHANGES_REQUESTED" ? "fail" : "muted", text: r.state === "APPROVED" ? "approved" : r.state === "CHANGES_REQUESTED" ? "changes requested" : r.state.toLowerCase().replace(/_/g, " ") }))));
     pane.appendChild(h("div", { class: "section" }, h("h3", { text: "Reviewers" }), reviewers.length ? h("div", { class: "people" }, reviewers) : h("span", { class: "muted", text: "None yet" })));
     return pane;

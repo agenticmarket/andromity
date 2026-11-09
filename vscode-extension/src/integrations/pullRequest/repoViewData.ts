@@ -37,7 +37,8 @@ export interface ListItem {
   checks?: "success" | "failure" | "pending" | null;
   review?: "REVIEW_REQUIRED" | "CHANGES_REQUESTED" | "APPROVED" | null;
   requestedUsers?: string[];
-  requestedTeams?: string[];
+  /** Teams asked to review. GitHub only shares team names with the read:org permission, which VS Code's sign-in doesn't ask for, so only the count is known. */
+  requestedTeams?: number;
   assignees?: string[];
   linked?: number[];
 }
@@ -114,7 +115,6 @@ export const MAX_COMMENT = 20_000;
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 const BOT_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}(\[bot\])?$/;
 const NAME = /^[A-Za-z0-9._-]{1,100}$/;
-const TEAM = /^[A-Za-z0-9](?:[A-Za-z0-9-]){0,38}\/[A-Za-z0-9._-]{1,100}$/;
 const COLOR = /^[0-9a-fA-F]{6}$/;
 const HIDDEN = /[\u0000-\u0008\u000b-\u000c\u000e-\u001f\u007f-\u009f\u00ad\u061c\u115f-\u1160\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\ufff9-\ufffb]/g;
 const ASSOCIATIONS: Record<string, string> = {
@@ -204,13 +204,13 @@ function labels(value: unknown): Label[] {
   }).filter((entry) => entry.name);
 }
 
-function requested(value: unknown): { users: string[]; teams: string[] } {
+function requested(value: unknown): { users: string[]; teams: number } {
   const users: string[] = [];
-  const teams: string[] = [];
+  let teams = 0;
   for (const node of list(value, 15)) {
     const reviewer = obj(obj(node)?.requestedReviewer);
     if (reviewer?.__typename === "User" && typeof reviewer.login === "string" && LOGIN.test(reviewer.login)) users.push(reviewer.login);
-    if (reviewer?.__typename === "Team" && typeof reviewer.combinedSlug === "string" && TEAM.test(reviewer.combinedSlug)) teams.push(reviewer.combinedSlug);
+    if (reviewer?.__typename === "Team") teams++;
   }
   return { users, teams };
 }
@@ -444,7 +444,7 @@ const ITEM_FIELDS = `
     comments { totalCount }
     labels(first: 10) { nodes { name color } }
     reviewDecision
-    reviewRequests(first: 15) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { combinedSlug } } } }
+    reviewRequests(first: 15) { nodes { requestedReviewer { __typename ... on User { login } } } }
     lastCommit: commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
   }
   ... on Issue {
@@ -480,7 +480,7 @@ export const PR_DETAIL_QUERY = `query($owner: String!, $repo: String!, $number: 
       mergeStateStatus reviewDecision
       comments(last: 50) { totalCount nodes { ${COMMENT_FIELDS} } }
       labels(first: 10) { nodes { name color } }
-      reviewRequests(first: 15) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { combinedSlug } } } }
+      reviewRequests(first: 15) { nodes { requestedReviewer { __typename ... on User { login } } } }
       latestReviews(first: 20) { nodes { author { login } state } }
       closingIssuesReferences(first: 10) { nodes { number title } }
       reviewThreads(first: 100) { nodes { path line originalLine isResolved isOutdated comments(first: 20) { nodes { ${COMMENT_FIELDS} } } } }
