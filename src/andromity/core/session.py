@@ -839,6 +839,10 @@ class Session:
                 m["turn_key"] = mr["turn_key"]
             msgs.append(m)
         session.messages = msgs
+        if not session.external_review:
+            from andromity.core.tools import carries_external_content
+            if carries_external_content(msgs):
+                session.external_review = "github:"
 
         return session
 
@@ -898,6 +902,12 @@ class Session:
         from andromity.config import config
         session.permission_mode = data.get("permission_mode", config.get("default", "permission_mode", "safe"))
         session.profile = data.get("profile", "builder")
+        review = data.get("external_review")
+        session.external_review = review if isinstance(review, str) and review.startswith("github:") else None
+        if not session.external_review:
+            from andromity.core.tools import carries_external_content
+            if carries_external_content(session.messages):
+                session.external_review = "github:"
         session.allowed_external_files = set()
         session.storage_dir = fp.parent
         session.file_path = fp

@@ -907,7 +907,7 @@ function loadBaseScript(): string | null {
   return m.exports.getChatClientScript("icon.svg", STATE);
 }
 
-function serialize(el: FakeElement, opts: { unpinFooters?: boolean } = {}, depth = 0, out: string[] = []): string[] {
+function serialize(el: FakeElement, opts: { unpinFooters?: boolean; skipFileStats?: boolean } = {}, depth = 0, out: string[] = []): string[] {
   const attrs = [...el.attrs.entries()]
     .map(([k, v]): [string, string] => {
       if (opts.unpinFooters && k === "class" && /\bmessage-footer\b/.test(v)) return [k, v.split(/\s+/).filter(c => c !== "visible").join(" ")];
@@ -917,6 +917,7 @@ function serialize(el: FakeElement, opts: { unpinFooters?: boolean } = {}, depth
     .map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(" ");
   const style = JSON.stringify(Object.entries(el.style).sort());
   out.push(`${"  ".repeat(depth)}<${el.tagName} ${attrs} style=${style}>${JSON.stringify(el.ownText)}`);
+  if (opts.skipFileStats && el.classList.contains("files-changed-row-stats")) return out;
   for (const child of el.children) serialize(child, opts, depth + 1, out);
   return out;
 }
@@ -984,7 +985,7 @@ function renderWith(script: string, s: any): FakeElement {
 }
 
 /** The chat up to and including the running turn's prompt. */
-function beforeRunningTurn(chat: FakeElement, opts: { unpinFooters?: boolean }): string {
+function beforeRunningTurn(chat: FakeElement, opts: { unpinFooters?: boolean; skipFileStats?: boolean }): string {
   const children = chat.children;
   let cut = -1;
   children.forEach((child: FakeElement, i: number) => { if (child.classList.contains("message-wrap") && child.classList.contains("user")) cut = i; });
@@ -998,8 +999,8 @@ describe("finished turns and idle sessions render exactly as before", () => {
   it("an idle session draws the same page as the base branch", { skip }, () => {
     for (let seed = 1; seed <= 60; seed++) {
       const s = generatedSession(seed, false);
-      const now = serialize(renderWith(CURRENT_SCRIPT, s)).join("\n");
-      const before = serialize(renderWith(base!, s)).join("\n");
+      const now = serialize(renderWith(CURRENT_SCRIPT, s), { skipFileStats: true }).join("\n");
+      const before = serialize(renderWith(base!, s), { skipFileStats: true }).join("\n");
       assert.equal(now, before, "seed " + seed);
     }
   });
@@ -1007,8 +1008,8 @@ describe("finished turns and idle sessions render exactly as before", () => {
   it("a running session draws its finished turns the same as the base branch", { skip }, () => {
     for (let seed = 1; seed <= 60; seed++) {
       const s = generatedSession(seed, true);
-      const now = beforeRunningTurn(renderWith(CURRENT_SCRIPT, s), { unpinFooters: true });
-      const before = beforeRunningTurn(renderWith(base!, s), { unpinFooters: true });
+      const now = beforeRunningTurn(renderWith(CURRENT_SCRIPT, s), { unpinFooters: true, skipFileStats: true });
+      const before = beforeRunningTurn(renderWith(base!, s), { unpinFooters: true, skipFileStats: true });
       assert.equal(now, before, "seed " + seed);
     }
   });

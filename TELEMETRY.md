@@ -42,6 +42,7 @@ Model and provider names are the identifiers you configured (for example `anthro
 | `pr_mode_*`, `pr_scope_turn`, `pr_scope_all`, `pr_opt_*` | What was chosen at submit, for example a new branch, starting from the latest main, attaching the receipt or not, a draft, reviewers, a template, or whether the drafted description was edited |
 | `pr_check_*` | A check came up: high findings, a secret, a large change, staged files outside the selection, a sensitive file left out |
 | `pr_github_*`, `pr_blocked_*`, `pr_receipt_unavailable` | Sign-in state, why the form couldn't start, or that no receipt could be attached |
+| `pr_receipts_all_covered`, `pr_receipts_some_covered`, `pr_receipts_none_covered`, `pr_receipts_many_chats` | Whether the pushed files were all, partly or not matched to turns with receipts, and whether those turns came from more than one chat. No file names or counts |
 | `pr_fail_<step>`, `pr_err_<kind>`, `pr_cancelled_running` | Which step failed and a fixed category, such as `pr_err_push_rejected` |
 | `pr_draft_ok`, `pr_draft_failed`, `pr_checks_changed`, `pr_sign_in`, `pr_sign_in_again`, `pr_sign_in_declined`, `pr_retry`, `pr_push_new_name`, `pr_switch_back`, `pr_open_link`, `pr_copy_link`, `pr_open_page`, `pr_publish`, `pr_reviewers_failed` | Drafting results and the buttons used after a step |
 
@@ -51,7 +52,7 @@ Model and provider names are the identifiers you configured (for example `anthro
 
 ### Pull Requests and Issues view
 
-**Pull Requests and Issues** sends `feature_use` names starting with `prv_`: `prv_opened`, `prv_tab_issues`, `prv_filter_foryou`, `prv_filter_all`, `prv_filter_assigned`, `prv_sort`, `prv_load_more`, `prv_open_item`, `prv_files`, `prv_open_github`, `prv_review`, `prv_ask`, and on failure `prv_fail_` followed by one of `signedout`, `notfound`, `sso`, `oauth`, `ratelimit`, `offline`, `error`, `nogit`, `norepo`, `noremote`, `otherhost`, `airgap`, `review` or `ask`. None carries a repository, number, title, author, question or error text.
+**Pull Requests and Issues** sends `feature_use` names starting with `prv_`: `prv_opened`, `prv_tab_issues`, `prv_filter_foryou`, `prv_filter_all`, `prv_filter_assigned`, `prv_sort`, `prv_load_more`, `prv_open_item`, `prv_files`, `prv_open_github`, `prv_review`, `prv_ask`, `prv_tip_shown` and `prv_tip_opened` (the one-time tip that points at the view), and on failure `prv_fail_` followed by one of `signedout`, `notfound`, `sso`, `oauth`, `ratelimit`, `offline`, `error`, `nogit`, `norepo`, `noremote`, `otherhost`, `airgap`, `review` or `ask`. None carries a repository, number, title, author, question or error text.
 
 ## Feedback you send
 

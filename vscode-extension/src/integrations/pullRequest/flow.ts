@@ -315,14 +315,17 @@ export interface RunPlan {
   commitMessage: string;
   signoff: boolean;
   title: string;
-  /** The pull request body, built once the commit exists so the receipt line can name it. */
-  bodyFor(commit: string): string;
+  /** The pull request body, built once the commit is pushed, so its receipts can be matched to the pushed files. */
+  bodyFor(commit: string): string | Promise<string>;
+  /** What to add as a comment when a pull request for this branch already exists: the description and receipts
+   *  that would have been its body. Empty when there is nothing to add. */
+  existingPullComment?(commit: string): string | Promise<string>;
   draft: boolean;
   reviewers: string[];
   teams: string[];
   existingPull: PullInfo | null;
   /** A comment for an existing pull request, built once the commit exists; null for none. */
-  commentFor: ((commit: string) => string) | null;
+  commentFor: ((commit: string) => string | Promise<string>) | null;
 }
 
 /** What has already happened, so a retry picks up where the last attempt stopped. */
@@ -343,6 +346,10 @@ export interface RunResult {
   pull: PullInfo | null;
   pageUrl: string | null;
   reviewerProblem: GitHubError | null;
+  /** A pull request for this branch already existed, so the description and receipts went into a comment on it. */
+  joinedExisting?: boolean;
+  /** "posted", "failed" when GitHub refused the comment, "none" when there was nothing to add. */
+  existingComment?: "posted" | "failed" | "none";
 }
 
 export type FlowErrorKind =
@@ -548,7 +555,8 @@ export async function runPlan(
     if (plan.commentFor && plan.existingPull) {
       await step("comment", async () => {
         if (state.commented) return;
-        await github.comment(target.owner, target.repo, (plan.existingPull as PullInfo).number, (plan.commentFor as (commit: string) => string)(commit));
+        const text = await (plan.commentFor as (commit: string) => string | Promise<string>)(commit);
+        if (text.trim()) await github.comment(target.owner, target.repo, (plan.existingPull as PullInfo).number, text);
         state.commented = true;
       });
     }
@@ -559,8 +567,23 @@ export async function runPlan(
     if (state.pull) return;
     const head = plan.headOwner && plan.headOwner.toLowerCase() !== target.owner.toLowerCase() ? `${plan.headOwner}:${plan.branch}` : plan.branch;
     const existing = await github.openPullFor(target.owner, target.repo, plan.headOwner || target.owner, plan.branch).catch(() => null);
-    state.pull = existing ?? await github.createPull(target.owner, target.repo, {
-      title: plan.title, head, base: plan.base, body: plan.bodyFor(commit), draft: plan.draft,
+    if (existing) {
+      state.pull = existing;
+      result.joinedExisting = true;
+      let text = "";
+      try {
+        text = plan.existingPullComment ? await plan.existingPullComment(commit) : "";
+      } catch {
+        text = "";
+      }
+      result.existingComment = "none";
+      if (text.trim()) {
+        result.existingComment = await github.comment(target.owner, target.repo, existing.number, text).then(() => "posted" as const, () => "failed" as const);
+      }
+      return;
+    }
+    state.pull = await github.createPull(target.owner, target.repo, {
+      title: plan.title, head, base: plan.base, body: await plan.bodyFor(commit), draft: plan.draft,
     });
   });
   result.pull = state.pull ?? null;

@@ -960,6 +960,17 @@
             ]
           },
           {
+            "id": "andromity.welcome.pullRequests",
+            "title": "Pull requests and issues",
+            "description": "See your repository's pull requests and issues, and hand any of them to Andromity in a read-only chat.",
+            "media": {
+              "markdown": "walkthroughs/pull-requests.md"
+            },
+            "completionEvents": [
+              "onCommand:andromity.openPullRequestsView"
+            ]
+          },
+          {
             "id": "andromity.welcome.trusted",
             "title": "Trust & Workspace Governance",
             "description": "Manage folder permissions, review auto-approved directories, and choose your permission mode.",

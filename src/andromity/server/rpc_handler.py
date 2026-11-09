@@ -1,4 +1,5 @@
 import asyncio
+from andromity.core.turn_changes import public_file_stats
 import concurrent.futures
 import hashlib
 import inspect
@@ -2084,6 +2085,12 @@ class JsonRpcHandler:
                                     from andromity.core.git_ops import checkpoint_changed_files
                                     turn_files = await asyncio.to_thread(checkpoint_changed_files,
                                         get_repo(Path(session.project_path)), turn_checkpoint, session.project_path)
+                                try:
+                                    from andromity.core.turn_changes import turn_file_stats
+                                    turn_checkpoint["file_stats"] = await asyncio.to_thread(turn_file_stats,
+                                        get_repo(Path(session.project_path)), turn_checkpoint, session.project_path)
+                                except Exception:
+                                    turn_checkpoint.pop("file_stats", None)
                             self.notify("agent/done", {
                                 "session_id": session_id,
                                 "usage": event.usage,
@@ -2094,6 +2101,7 @@ class JsonRpcHandler:
                                 "context_tokens": getattr(session, "context_tokens", 0),
                                 "cost_usd": getattr(session, "cost_usd", 0.0),
                                 "turn_files": turn_files,
+                                "turn_file_stats": public_file_stats((turn_checkpoint or {}).get("file_stats")),
                             })
                             if turn_checkpoint and turn_checkpoint.get("after_hash"):
                                 await self._seal_receipt(session, turn_checkpoint)
@@ -3278,6 +3286,34 @@ class JsonRpcHandler:
         if repo is None:
             return None, None, "This folder isn't a git repository, so turns have no snapshots."
         return session, repo, None
+
+    async def rpc_pr_provenance(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Which turns, in any chat of this project, produced each file of the pull request at HEAD."""
+        from andromity.core.pr_provenance import ProvenanceUnavailable, provenance
+        project_path = params.get("project_path")
+        if not isinstance(project_path, str) or not project_path:
+            return {"success": False, "error": "Open the project folder first."}
+        project = str(Path(project_path).resolve())
+        if not config.is_trusted(project):
+            return {"success": False, "error": "Trust this workspace to match its turns."}
+        repo = get_repo(Path(project))
+        if repo is None:
+            return {"success": False, "error": "This folder isn't a git repository."}
+
+        def _sessions():
+            stored = Session.list_sessions(project, limit=200)
+            live = {sid: session for sid, session in self._active_sessions.items()
+                    if str(Path(str(getattr(session, "project_path", "") or ".")).resolve()) == project}
+            merged = [live.pop(item.id, item) for item in stored]
+            return list(live.values()) + merged
+
+        try:
+            sessions = await asyncio.to_thread(_sessions)
+            return {"success": True, **await asyncio.to_thread(provenance, repo, params.get("base_ref"), sessions)}
+        except ProvenanceUnavailable as exc:
+            return {"success": False, "error": str(exc)}
+        except Exception:
+            return {"success": False, "error": "The pull request's files couldn't be matched to turns."}
 
     async def rpc_git_turn_changes(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.turn_changes import TurnChangesUnavailable, turn_changes

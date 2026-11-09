@@ -162,3 +162,114 @@ export function composeReceiptComment(receipt: { markdown: string; link: Receipt
   const fitted = fitReceipt(receipt.markdown.trim(), BODY_BUDGET - head.length);
   return { body: head + fitted.text, receiptShortened: fitted.shortened };
 }
+
+export interface ProvenanceRow {
+  path: string;
+  oldPath: string | null;
+  additions: number | null;
+  deletions: number | null;
+  binary: boolean;
+  coverage: "covered" | "partial" | "edited" | "none";
+  /** "turn 2 · chat 1" labels, newest first. */
+  turns: string[];
+}
+
+export interface ProvenanceReceipt {
+  label: string;
+  files: number;
+  needsEyes: boolean;
+  markdown: string;
+}
+
+export interface Provenance {
+  rows: ProvenanceRow[];
+  totals: { files: number; covered: number; partial: number; edited: number };
+  receipts: ProvenanceReceipt[];
+  /** Receipts that were found but couldn't be loaded or didn't fit. */
+  missing: string[];
+  head: string;
+  truncated: boolean;
+}
+
+const MAX_TABLE_ROWS = 100;
+export const PROVENANCE_START = "<!-- andromity-receipts -->";
+export const PROVENANCE_END = "<!-- /andromity-receipts -->";
+
+function source(row: ProvenanceRow): string {
+  const shown = row.turns.slice(0, 4).reverse();
+  const turns = (row.turns.length > 4 ? `${row.turns.length - 4} earlier turns, then ` : "") + shown.join(", then ");
+  if (row.coverage === "covered") return row.turns.length > 1 ? `${turns}, with nothing in between` : `${turns}, as the turn left it`;
+  if (row.coverage === "partial") return `${turns}; earlier changes have no receipt`;
+  if (row.coverage === "edited") return `${turns}, then changed outside Andromity`;
+  return "No Andromity receipt found on this computer";
+}
+
+function counts(row: ProvenanceRow): string {
+  if (row.binary) return "binary";
+  return `+${row.additions ?? 0} −${row.deletions ?? 0}`;
+}
+
+/** The pull request's receipts section, written by fixed code: which turn produced each file, then each turn's receipt. */
+export function composeProvenance(provenance: Provenance, budget: number): { text: string; shortened: boolean } {
+  const { rows, totals } = provenance;
+  const head = /^[0-9a-f]{7,64}$/.test(provenance.head) ? mdCode(provenance.head.slice(0, 7)) : "the pushed commit";
+  const lines = [
+    PROVENANCE_START,
+    "---",
+    "",
+    `**Andromity receipts** · ${plural(totals.files, "file", "files")} in this pull request · covered by a receipt: **${totals.covered} of ${totals.files}**`
+      + (totals.partial ? ` · partly: ${totals.partial}` : "") + (totals.edited ? ` · changed after their turn: ${totals.edited}` : ""),
+    "",
+    "| File | Lines | Made by |",
+    "|---|---|---|",
+  ];
+  const footerRoom = 1200;
+  let used = lines.join("\n").length;
+  let shown = 0;
+  for (const row of rows.slice(0, MAX_TABLE_ROWS)) {
+    const name = row.oldPath ? `${mdCode(row.oldPath)} → ${mdCode(row.path)}` : mdCode(row.path);
+    const cell = (value: string) => value.replace(/\|/g, "\\|");
+    const line = `| ${cell(name)} | ${counts(row)} | ${cell(source(row))} |`;
+    if (used + line.length + 1 > budget - footerRoom) break;
+    lines.push(line);
+    used += line.length + 1;
+    shown++;
+  }
+  const rest = rows.slice(shown);
+  if (rest.length || provenance.truncated) {
+    const covered = rest.filter((row) => row.coverage === "covered").length;
+    lines.push("", `<sub>And ${plural(rest.length, "more file", "more files")}${provenance.truncated ? " (the list stops at 3,000)" : ""}: ${covered} covered by a receipt.</sub>`);
+  }
+  lines.push("", `<sub>Matched by file contents against the turns recorded on the computer that opened this pull request, as of ${head}. A file counts as covered only when every change since the base branch was made in turns that have a receipt.</sub>`);
+  let text = lines.join("\n");
+  const close = `\n\n${PROVENANCE_END}`;
+  let shortened = false;
+  const left: string[] = [...provenance.missing];
+  for (const receipt of provenance.receipts) {
+    const summary = `Receipt · ${receipt.label} · ${plural(receipt.files, "file", "files")}${receipt.needsEyes ? " · needs your eyes" : ""}`;
+    const opener = `\n\n<details><summary>${summary}</summary>\n\n`;
+    const room = budget - text.length - close.length - opener.length - "\n\n</details>".length - 200;
+    if (room < 400) {
+      left.push(receipt.label);
+      continue;
+    }
+    const markdown = receipt.markdown.trim();
+    let fitted = fitReceipt(markdown, room);
+    let closed = closeOpenBlocks(fitted.text);
+    if (closed.length > room) {
+      fitted = fitReceipt(markdown, Math.max(0, room - (closed.length - fitted.text.length)));
+      closed = closeOpenBlocks(fitted.text);
+    }
+    if (closed.length > room) {
+      left.push(receipt.label);
+      continue;
+    }
+    if (fitted.shortened) shortened = true;
+    text += `${opener}${closed}\n\n</details>`;
+  }
+  if (left.length) {
+    text += `\n\n<sub>Not attached here: ${left.slice(0, 10).join(", ")}${left.length > 10 ? ` and ${left.length - 10} more` : ""}. They are in Andromity's receipt tab.</sub>`;
+    shortened = true;
+  }
+  return { text: text + close, shortened };
+}

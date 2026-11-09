@@ -29,6 +29,8 @@ from andromity.config import config
 
 log = get_logger("agent")
 
+_OUTWARD_TOOLS = {"web_search", "fetch_url", "session_answer_question"}
+
 _COLLAB_ACTION_VERBS = {
     "session_send_message": "send messages to other sessions", "session_ask_question": "ask other sessions questions",
     "session_broadcast": "message every session", "session_answer_question": "answer other sessions",
@@ -1028,6 +1030,26 @@ class Agent:
 
                 # Hard Gate: Profile confinement (planner and reviewer cannot execute mutating tools)
                 prof = (self.profile or "").strip().lower()
+                if getattr(self.session, "external_review", None):
+                    from andromity.core.profiles import PROFILES
+                    if t_lower not in {name.lower() for name in PROFILES["reviewer"]["tools"]}:
+                        rejection = (
+                            f"TOOL BLOCKED: this chat holds text from GitHub written by someone else, so it is read-only. "
+                            f"'{tool_name}' is not allowed. Do NOT retry it. Answer from what you can read, and suggest "
+                            f"the user start a new chat to make changes."
+                        )
+                        final_results[tool_call["id"]] = rejection
+                        yield ToolResult(tool_id=tool_call["id"], result="[Blocked: read-only chat]", duration_ms=0.0, success=False, ts=time.time())
+                        continue
+                    if t_lower in _OUTWARD_TOOLS and (self.auto_approve or not self.on_tool_approval):
+                        rejection = (
+                            f"TOOL BLOCKED: this chat holds text from GitHub written by someone else, and '{tool_name}' "
+                            f"sends data out of this chat, so it needs a person to approve it, and nobody is asked here. "
+                            f"Do NOT retry it. Answer from what you can read locally."
+                        )
+                        final_results[tool_call["id"]] = rejection
+                        yield ToolResult(tool_id=tool_call["id"], result="[Blocked: read-only chat]", duration_ms=0.0, success=False, ts=time.time())
+                        continue
                 if prof in ("planner", "reviewer") and t_lower in _MUTATING_TOOLS:
                     rejection = (
                         f"TOOL BLOCKED: Profile '{self.profile}' is strictly restricted from executing mutating tool '{tool_name}'.\n"

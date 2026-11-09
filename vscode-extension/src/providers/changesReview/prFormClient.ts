@@ -285,8 +285,8 @@ export function prFormClient(vscode: PrVsCodeApi, hooks: PrClientHooks): void {
       setHtml("prf-receipt",
         '<label class="pr-check' + (r.available ? "" : " pr-disabled") + '"><input type="checkbox" data-pr-attach' + (r.attach ? " checked" : "") + (r.available ? "" : " disabled") + "><span>" + esc(r.label) + "</span></label>" +
         (r.available
-          ? '<div class="pr-receipt"><div class="pr-receipt-line"><span>' + icon("shield") + " " + esc(r.summary) + '</span><button type="button" class="pr-link-btn" data-pr-preview>' + (previewOpen ? "Hide preview" : "Preview") + "</button></div>" +
-            (previewOpen ? '<pre class="pr-receipt-preview">' + esc(r.preview) + "</pre>" : "") + "</div>"
+          ? '<div class="pr-receipt"><div class="pr-receipt-line"><span>' + icon("shield") + " " + esc(r.summary) + '</span>' + (r.preview ? '<button type="button" class="pr-link-btn" data-pr-preview>' + (previewOpen ? "Hide preview" : "Preview") + "</button>" : "") + "</div>" +
+            (previewOpen && r.preview ? '<pre class="pr-receipt-preview">' + esc(r.preview) + "</pre>" : "") + "</div>"
           : '<p class="pr-help">' + esc(r.reason || "") + "</p>") +
         (form.publicNote ? '<p class="pr-help warn">' + icon("globe") + " " + esc(form.publicNote) + "</p>" : "") +
         (form.draft.show ? '<label class="pr-check"><input type="checkbox" data-pr-draft' + (form.draft.on ? " checked" : "") + "><span>Open as draft</span></label>" : ""));
