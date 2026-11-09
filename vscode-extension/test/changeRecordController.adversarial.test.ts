@@ -122,8 +122,10 @@ async function openReady(h: H) {
 }
 
 async function submit(h: H) {
+  await waitFor(() => lastView(h.posts)?.form?.sizeLine?.text !== "Counting lines…", "the file checks");
   const checks = lastView(h.posts)?.form?.checks;
   if (checks?.key) await h.ctrl.handle({ type: "pr_update", changes: { ack: checks.key } });
+  await waitFor(() => lastView(h.posts)?.form?.primary?.enabled === true, "the button: " + JSON.stringify(lastView(h.posts)?.form?.disabledReason ?? null));
   await h.ctrl.handle({ type: "pr_submit", action: "primary" });
   await waitFor(() => lastView(h.posts)?.phase === "done" || lastView(h.posts)?.phase === "failed", "the run");
 }
