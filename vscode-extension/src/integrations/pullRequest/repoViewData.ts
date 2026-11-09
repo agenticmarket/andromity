@@ -442,9 +442,7 @@ export function searchQuery(repo: RepoRef, kind: ItemKind, filter: string, sort:
   return words.join(" ");
 }
 
-const ITEM_FIELDS = `
-  __typename
-  ... on PullRequest {
+const PR_FIELDS = `
     number title state isDraft url updatedAt authorAssociation
     author { login }
     headRefName baseRefName isCrossRepository
@@ -453,7 +451,22 @@ const ITEM_FIELDS = `
     labels(first: 10) { nodes { name color } }
     reviewDecision
     reviewRequests(first: 15) { nodes { requestedReviewer { __typename ... on User { login } } } }
-    lastCommit: commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+    lastCommit: commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }`;
+
+/** Open pull requests from one branch, read directly: unlike search, it shows a pull request the moment it exists. */
+export const BRANCH_QUERY = `query($owner: String!, $repo: String!, $head: String!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequests(headRefName: $head, states: OPEN, first: 5) { nodes { __typename ${PR_FIELDS} } }
+  }
+}`;
+
+export function readBranchPulls(data: Record<string, unknown>, repo: RepoRef): ListItem[] {
+  return list(obj(obj(data.repository)?.pullRequests), 5).map((node) => readItem(node, repo)).filter((item): item is ListItem => !!item && item.kind === "pr");
+}
+
+const ITEM_FIELDS = `
+  __typename
+  ... on PullRequest {${PR_FIELDS}
   }
   ... on Issue {
     number title state stateReason url updatedAt authorAssociation

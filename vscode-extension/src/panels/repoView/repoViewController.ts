@@ -4,7 +4,7 @@
 import { GitHubClient, GitHubError } from "../../integrations/pullRequest/github.js";
 import type { ReviewHost } from "../../integrations/pullRequest/reviewPullRequest.js";
 import {
-  ASK_SUGGESTIONS, COUNT_QUERY, ISSUE_DETAIL_QUERY, PR_DETAIL_QUERY, SEARCH_QUERY, PAGE_SIZE,
+  ASK_SUGGESTIONS, BRANCH_QUERY, COUNT_QUERY, readBranchPulls, ISSUE_DETAIL_QUERY, PR_DETAIL_QUERY, SEARCH_QUERY, PAGE_SIZE,
   askPrompt, httpsUrl, issueMaterial, line, prMaterial, readFiles, readIssueDetail, readPrDetail, readSearch, searchQuery,
   type ChangedFile, type IssueDetail, type ItemKind, type ListItem, type PrDetail, type RepoRef, type SortOrder,
 } from "../../integrations/pullRequest/repoViewData.js";
@@ -39,7 +39,7 @@ export interface RepoViewDeps {
   /** The parent of a fork, if GitHub says the repository is one. */
   pickRepository(choices: RepoChoice[], current: RepoChoice): Promise<RepoChoice | null>;
   host: ReviewHost;
-  startReview(client: GitHubClient, repo: RepoRef, number: number, focus: string): Promise<void>;
+  startReview(client: GitHubClient, repo: RepoRef, number: number, focus: string, projectPath?: string): Promise<void>;
   errorText(error: unknown): string;
   airGap(): boolean;
   openExternal(url: string): Promise<void>;
@@ -416,8 +416,8 @@ export class RepoViewController {
       return;
     }
     try {
-      const page = readSearch(await this.client!.graphql(SEARCH_QUERY, { q: `repo:${repo.owner}/${repo.repo} is:pr is:open head:${name}`, first: 5, after: null }), repo, "pr");
-      const match = page.items.find((item) => item.headRef === name && (!item.crossRepository || !repo.localOwner || item.headOwner?.toLowerCase() === repo.localOwner.toLowerCase()));
+      const pulls = readBranchPulls(await this.client!.graphql(BRANCH_QUERY, { owner: repo.owner, repo: repo.repo, head: name }), repo);
+      const match = pulls.find((item) => item.headRef === name && (!item.crossRepository || !repo.localOwner || item.headOwner?.toLowerCase() === repo.localOwner.toLowerCase()));
       this.branch = { name, number: match?.number ?? null };
     } catch {
       this.branch = { name, number: null };
@@ -606,7 +606,7 @@ export class RepoViewController {
     if (this.deps.airGap()) return this.deps.notify("Reviews need GitHub, so they're off in air-gap mode.");
     this.busy.add(`review:${item.number}`);
     try {
-      await this.deps.startReview(this.client, repo, item.number, typeof focus === "string" ? focus : "");
+      await this.deps.startReview(this.client, repo, item.number, typeof focus === "string" ? focus : "", repo.root ?? undefined);
       this.deps.track("prv_review");
       this.deps.post({ type: "done", text: `A read-only review chat started for #${item.number}.` });
     } catch (error) {
@@ -642,6 +642,7 @@ export class RepoViewController {
         { source: `github:${repo.owner}/${repo.repo}/${item.kind === "pr" ? "pull" : "issue"}-question#${item.number}`, text: material },
         `Ask about #${item.number}`,
         null,
+        repo.root ?? undefined,
       );
       this.deps.track("prv_ask");
       this.deps.post({ type: "done", text: `A read-only chat opened with #${item.number} attached.` });

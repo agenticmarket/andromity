@@ -839,6 +839,10 @@ class Session:
                 m["turn_key"] = mr["turn_key"]
             msgs.append(m)
         session.messages = msgs
+        if not session.external_review:
+            from andromity.core.tools import carries_external_content
+            if carries_external_content(msgs):
+                session.external_review = "github:"
 
         return session
 

@@ -14,7 +14,7 @@ import { FetchLike, GitHubClient, GitHubError, HttpResponse } from "../integrati
 import { HostKind, enterpriseHostsFrom, newPullRequestUrl, requestNoun } from "../integrations/pullRequest/remotes.js";
 import { branchPrefix, isValidBranchName, suggestBranchName } from "../integrations/pullRequest/branchName.js";
 import { SecretHit, chooseReviewers, closedIssuesIn, isLockfile, looksSensitive, mentionsIn, secretsInText, sizeWarningLimit } from "../integrations/pullRequest/checks.js";
-import { MAX_COMMIT_MESSAGE, MAX_DESCRIPTION, MAX_TITLE, ReceiptLink, cleanDraft, cleanTitle, composeBody, composeReceiptComment, plainText } from "../integrations/pullRequest/body.js";
+import { GITHUB_BODY_LIMIT, MAX_COMMIT_MESSAGE, MAX_DESCRIPTION, MAX_TITLE, ReceiptLink, cleanDraft, cleanTitle, closeOpenBlocks, composeBody, composeProvenance, composeReceiptComment, plainText, type Provenance, type ProvenanceRow } from "../integrations/pullRequest/body.js";
 import {
   FlowDeps, FlowError, RepoContext, RunMode, RunPlan, RunResult, RunState, SelectionReport, StepId,
   branchTaken, evaluateSelection, freeBranchName, moveToFreshBranch, pathsToStage, prepareContext, pullUrl, runPlan, stepsFor,
@@ -768,6 +768,7 @@ export class PullRequestController {
     }
 
     const receiptShown = mode !== "commit" && (!this.updating() || !!ctx.existingPull);
+    const matchesTurns = (mode === "pull_request" || mode === "update") && !!this.host.rpc();
     const r = this.receipt?.receipt;
     const findings = r?.needs_attention.length ?? 0;
     const receiptSummary = r
@@ -853,8 +854,10 @@ export class PullRequestController {
         available: !!this.receipt,
         reason: this.receipt ? null : this.receiptReason,
         attach: !!this.receipt && (this.updating() ? this.form.commentReceipt : this.form.attachReceipt),
-        label: this.updating() && ctx.existingPull ? `Add this turn's receipt to #${ctx.existingPull.number} as a comment` : "Attach this turn's receipt",
-        summary: receiptSummary,
+        label: matchesTurns && this.receipt
+          ? (this.updating() && ctx.existingPull ? `Add the receipts of the turns in it to #${ctx.existingPull.number} as a comment` : "Attach the receipts of the turns in this pull request")
+          : this.updating() && ctx.existingPull ? `Add this turn's receipt to #${ctx.existingPull.number} as a comment` : "Attach this turn's receipt",
+        summary: matchesTurns && receiptSummary ? `${receiptSummary}. Other turns whose changes are in the pull request are matched after the push.` : receiptSummary,
         preview: this.receipt ? this.previewBody() : null,
       },
       publicNote,
@@ -882,7 +885,7 @@ export class PullRequestController {
       case "pull_request":
         return `Commits ${files} to ${branch}${from} pushes it to ${remote} and opens a pull request into ${this.form.base} on ${where}.`;
       case "update": {
-        const comment = this.receipt && this.form.commentReceipt ? ` and adds this turn's receipt to #${ctx.existingPull?.number} as a comment` : "";
+        const comment = this.receipt && this.form.commentReceipt ? ` and adds the receipts of the turns in it to #${ctx.existingPull?.number} as a comment` : "";
         return `Commits ${files} to ${branch} and pushes it to ${remote}${comment}.`;
       }
       case "host_page":
@@ -900,7 +903,10 @@ export class PullRequestController {
       return this.receipt && this.form.commentReceipt ? "" : " No receipt is added.";
     }
     if (!this.receipt) return " No receipt is attached.";
-    return this.form.attachReceipt ? ` The receipt for turn ${this.receipt.receipt.turn_index + 1} is attached below the description.` : " The receipt is not attached.";
+    if (!this.form.attachReceipt) return " The receipt is not attached.";
+    return mode === "pull_request"
+      ? ` The receipt for turn ${this.receipt.receipt.turn_index + 1} is attached below the description, with the receipts of any other turns whose changes are in the pull request.`
+      : ` The receipt for turn ${this.receipt.receipt.turn_index + 1} is attached below the description.`;
   }
 
   private receiptLink(commit?: string, committedPaths?: readonly string[]): ReceiptLink | null {
@@ -920,6 +926,84 @@ export class PullRequestController {
     const link = this.receiptLink(commit, committedPaths);
     const attach = this.receipt && this.form.attachReceipt && link;
     return composeBody(this.form.description, attach ? { markdown: (this.receipt as LoadedReceipt).markdown, link } : undefined).body;
+  }
+
+  /** Every turn, in any chat of this project, whose changes are in the pushed pull request: a table of files and
+   *  the turns that made them, then each turn's receipt. Null when receipts are off or the engine can't match them. */
+  private async receiptsSection(budget: number): Promise<string | null> {
+    if (!this.receipt || !(this.updating() ? this.form.commentReceipt : this.form.attachReceipt)) return null;
+    const rpc = this.host.rpc();
+    const ctx = this.context;
+    if (!rpc || !ctx) return null;
+    const baseRef = ctx.baseRemote ? `${ctx.baseRemote}/${this.form.base}` : this.form.base;
+    let res: any;
+    try {
+      res = await rpc.call<unknown>("pr.provenance", { project_path: this.host.projectPath(), base_ref: baseRef });
+    } catch {
+      return null;
+    }
+    if (!res || res.success !== true || !Array.isArray(res.files)) return null;
+    const ID = /^[A-Za-z0-9_-]{1,128}$/;
+    const turnRef = (t: any) => (t && typeof t.session_id === "string" && ID.test(t.session_id) && Number.isSafeInteger(t.turn_index) && t.turn_index >= 0 ? t : null);
+    const chats: string[] = [];
+    for (const file of res.files) for (const t of Array.isArray(file?.turns) ? file.turns : []) if (turnRef(t) && !chats.includes(t.session_id)) chats.push(t.session_id);
+    const label = (t: { session_id: string; turn_index: number }) => `turn ${t.turn_index + 1}${chats.length > 1 ? ` · chat ${chats.indexOf(t.session_id) + 1}` : ""}`;
+    const count = (v: unknown) => (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null);
+    const rows: ProvenanceRow[] = res.files.slice(0, 3000).map((file: any) => ({
+      path: plainText(file?.path, 1000),
+      oldPath: typeof file?.old_path === "string" ? plainText(file.old_path, 1000) : null,
+      additions: count(file?.additions),
+      deletions: count(file?.deletions),
+      binary: file?.binary === true,
+      coverage: ["covered", "partial", "edited"].includes(file?.coverage) ? file.coverage : "none",
+      turns: (Array.isArray(file?.turns) ? file.turns : []).map(turnRef).filter(Boolean).map(label),
+    })).filter((row: ProvenanceRow) => row.path);
+    const totals = {
+      files: rows.length,
+      covered: rows.filter((row) => row.coverage === "covered").length,
+      partial: rows.filter((row) => row.coverage === "partial").length,
+      edited: rows.filter((row) => row.coverage === "edited").length,
+    };
+    const turns = (Array.isArray(res.turns) ? res.turns : []).map(turnRef).filter(Boolean)
+      .sort((a: any, b: any) => chats.indexOf(a.session_id) - chats.indexOf(b.session_id) || b.turn_index - a.turn_index);
+    const receipts: Provenance["receipts"] = [];
+    const missing: string[] = [];
+    for (const turn of turns) {
+      if (receipts.length >= 8) {
+        missing.push(label(turn));
+        continue;
+      }
+      let response: ReturnType<typeof readResponse>;
+      try {
+        response = readResponse(await rpc.call<unknown>("session.receipt", { session_id: turn.session_id, project_path: this.host.projectPath(), turn_index: turn.turn_index }));
+      } catch {
+        response = readResponse(null);
+      }
+      if (!response.success || !response.receipt || !response.markdown || response.receipt.turn_index !== turn.turn_index) {
+        missing.push(label(turn));
+        continue;
+      }
+      receipts.push({
+        label: label(turn),
+        files: response.receipt.files_changed.length,
+        needsEyes: response.receipt.needs_attention.some((finding) => finding.severity === "high"),
+        markdown: response.markdown,
+      });
+    }
+    if (!totals.files) return null;
+    const head = typeof res.head === "string" ? res.head : "";
+    this.trackOnce(totals.covered === totals.files ? "pr_receipts_all_covered" : totals.covered ? "pr_receipts_some_covered" : "pr_receipts_none_covered");
+    if (chats.length > 1) this.trackOnce("pr_receipts_many_chats");
+    return composeProvenance({ rows, totals, receipts, missing, head, truncated: res.truncated === true }, budget).text;
+  }
+
+  /** The published body: the description, then the receipts of every turn in the pull request, or the one
+   *  turn's receipt when the engine can't match the pushed files to turns. */
+  private async publishedBody(commit: string, committedPaths?: readonly string[]): Promise<string> {
+    const description = closeOpenBlocks(plainText(this.form.description, MAX_DESCRIPTION).trim());
+    const section = await this.receiptsSection(GITHUB_BODY_LIMIT - 512 - description.length - 4);
+    if (section === null) return this.bodyFor(commit, committedPaths);
+    return `${description ? description + "\n\n" : ""}${section}`;
   }
 
   private previewBody(): string {
@@ -1368,13 +1452,15 @@ export class PullRequestController {
       commitMessage: coAuthor ? appendCoAuthorTrailer(message) : message,
       signoff: vscode.workspace.getConfiguration("git").get<boolean>("alwaysSignOff", false) === true,
       title: cleanTitle(this.form.title) || cleanTitle(message.split("\n", 1)[0]),
-      bodyFor: (commit) => this.bodyFor(commit, committedPaths),
+      bodyFor: (commit) => (mode === "pull_request" ? this.publishedBody(commit, committedPaths) : this.bodyFor(commit, committedPaths)),
+      receiptsFor: (commit) => this.receiptsSection(GITHUB_BODY_LIMIT - 512),
       draft: this.form.draft,
       reviewers: reviewers?.reviewers ?? [],
       teams: reviewers?.teams ?? [],
       existingPull: ctx.existingPull,
       commentFor: mode === "update" && receipt && this.form.commentReceipt
-        ? (commit) => composeReceiptComment({ markdown: receipt.markdown, link: this.receiptLink(commit, committedPaths) as ReceiptLink }).body
+        ? async (commit) => (await this.receiptsSection(GITHUB_BODY_LIMIT - 512))
+          ?? (receipt ? composeReceiptComment({ markdown: receipt.markdown, link: this.receiptLink(commit, committedPaths) as ReceiptLink }).body : "")
         : null,
     };
   }
@@ -1446,14 +1532,14 @@ export class PullRequestController {
     }
   }
 
-  private clipboardText(result: RunResult): string {
+  private async clipboardText(result: RunResult): Promise<string> {
     const plan = this.plan as RunPlan;
-    return `${plan.title}\n\n${plan.bodyFor(result.commit)}`.trim();
+    return `${plan.title}\n\n${await plan.bodyFor(result.commit)}`.trim();
   }
 
   private async afterDone(result: RunResult): Promise<void> {
     if (result.mode === "host_page" || result.mode === "push") {
-      await vscode.env.clipboard.writeText(this.clipboardText(result));
+      await vscode.env.clipboard.writeText(await this.clipboardText(result));
       if (result.pageUrl) await vscode.env.openExternal(vscode.Uri.parse(result.pageUrl, true));
     }
     if (result.pull && this.plan?.target && (result.mode === "pull_request" || result.mode === "update")) {
@@ -1659,12 +1745,12 @@ export class PullRequestController {
         const url = newPullRequestUrl(plan.parsed, plan.base, plan.branch, plan.headOwner ?? undefined);
         if (!url) return;
         this.track("pr_open_page");
-        if (this.runState.commit) await vscode.env.clipboard.writeText(`${plan.title}\n\n${plan.bodyFor(this.runState.commit)}`.trim());
+        if (this.runState.commit) await vscode.env.clipboard.writeText(`${plan.title}\n\n${await plan.bodyFor(this.runState.commit)}`.trim());
         await vscode.env.openExternal(vscode.Uri.parse(url, true));
         return;
       }
       case "copy_description":
-        if (plan && this.runState.commit) await vscode.env.clipboard.writeText(`${plan.title}\n\n${plan.bodyFor(this.runState.commit)}`.trim());
+        if (plan && this.runState.commit) await vscode.env.clipboard.writeText(`${plan.title}\n\n${await plan.bodyFor(this.runState.commit)}`.trim());
         return;
       case "switch_back": {
         const original = this.runState.originalBranch;

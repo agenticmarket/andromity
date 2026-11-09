@@ -173,3 +173,57 @@ def turn_revert_file(session: Any, turn_index: int, path: str, repo: Any) -> Dic
         return {"success": True, "action": "restored", "path": rel}
     full.unlink(missing_ok=True)
     return {"success": True, "action": "removed", "path": rel}
+
+
+MAX_STATS = 300
+_ZERO_ID = re.compile(r"0+")
+
+
+def turn_file_stats(repo: Any, record: Dict[str, Any], project_path: str) -> List[Dict[str, Any]]:
+    """Each file one turn changed, from its own before and after snapshots: the path relative to the project, the
+    change (A, M, D, T), lines added and deleted (None for binary files), and the file's blob before and after, so a
+    later pull request can tell which turn left a file exactly as it is."""
+    before, after = str(record.get("snapshot_hash") or ""), str(record.get("after_hash") or "")
+    if not _OBJECT_ID.fullmatch(before) or not _OBJECT_ID.fullmatch(after):
+        return []
+    git = safe_git_command(repo)
+    root = Path(repo.working_tree_dir).resolve()
+    project = Path(project_path).resolve()
+    scope = _scope(repo, project)
+    flags = ["--no-renames", "--no-ext-diff", "--no-textconv", "-z"]
+    raw = repo.git.execute([*git, "diff", "--raw", "--no-abbrev", *flags, before, after, *scope])
+    counts = _counts(repo.git.execute([*git, "diff", "--numstat", *flags, before, after, *scope]))
+    parts = raw.split("\0")
+    rows: List[Dict[str, Any]] = []
+    i = 0
+    while i < len(parts) - 1 and len(rows) < MAX_STATS:
+        head, name = parts[i], parts[i + 1]
+        i += 2
+        fields = head.lstrip(":").split()
+        if len(fields) != 5 or not name:
+            continue
+        _, _, old_id, new_id, status = fields
+        added, deleted = counts.get(name, (None, None))
+        try:
+            path = (root / name).resolve().relative_to(project).as_posix()
+        except ValueError:
+            continue
+        rows.append({
+            "path": path,
+            "status": status[:1],
+            "additions": added,
+            "deletions": deleted,
+            "binary": added is None and deleted is None,
+            "before_blob": None if _ZERO_ID.fullmatch(old_id) else old_id,
+            "after_blob": None if _ZERO_ID.fullmatch(new_id) else new_id,
+        })
+    return rows
+
+
+def public_file_stats(rows: Any) -> List[Dict[str, Any]]:
+    """The part of a turn's file stats a client shows: no blob ids."""
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and isinstance(row.get("path"), str):
+            out.append({key: row.get(key) for key in ("path", "status", "additions", "deletions", "binary")})
+    return out

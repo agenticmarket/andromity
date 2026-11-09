@@ -302,8 +302,10 @@ def receipt_turns(session: Any) -> List[Dict[str, Any]]:
                 and isinstance(record.get("after_hash"), str) and record["after_hash"]):
             continue
         key = record.get("turn_key")
+        from andromity.core.turn_changes import public_file_stats
         turns[record["turn_index"]] = {"turn_index": record["turn_index"],
                                        "turn_key": key if isinstance(key, str) and _TURN_KEY.fullmatch(key) else None,
+                                       **({"file_stats": public_file_stats(record["file_stats"])} if "file_stats" in record else {}),
                                        **sealed_counts(record)}
     return [turns[index] for index in sorted(turns)]
 

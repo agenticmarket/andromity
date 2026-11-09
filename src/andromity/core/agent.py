@@ -1028,6 +1028,17 @@ class Agent:
 
                 # Hard Gate: Profile confinement (planner and reviewer cannot execute mutating tools)
                 prof = (self.profile or "").strip().lower()
+                if getattr(self.session, "external_review", None):
+                    from andromity.core.profiles import PROFILES
+                    if t_lower not in {name.lower() for name in PROFILES["reviewer"]["tools"]}:
+                        rejection = (
+                            f"TOOL BLOCKED: this chat holds text from GitHub written by someone else, so it is read-only. "
+                            f"'{tool_name}' is not allowed. Do NOT retry it. Answer from what you can read, and suggest "
+                            f"the user start a new chat to make changes."
+                        )
+                        final_results[tool_call["id"]] = rejection
+                        yield ToolResult(tool_id=tool_call["id"], result="[Blocked: read-only chat]", duration_ms=0.0, success=False, ts=time.time())
+                        continue
                 if prof in ("planner", "reviewer") and t_lower in _MUTATING_TOOLS:
                     rejection = (
                         f"TOOL BLOCKED: Profile '{self.profile}' is strictly restricted from executing mutating tool '{tool_name}'.\n"

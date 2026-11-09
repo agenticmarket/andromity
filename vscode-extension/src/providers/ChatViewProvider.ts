@@ -1340,26 +1340,50 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       : null;
   }
 
-  /** The GitHub text waiting for this exact prompt in this chat, taken once. The webview can't supply it. */
-  private _takePendingExternal(prompt: string, sessionId: string | undefined): { source: string; text: string } | null {
+  /** The GitHub text waiting for this exact prompt in this chat. The webview can't supply it. It is taken while the
+   *  prompt is sent, kept once the engine accepts it, and put back if sending fails, so a retry still carries it. */
+  private _claimPendingExternal(prompt: string, sessionId: string | undefined): {
+    external: { source: string; text: string };
+    confirm(): void;
+    release(retryPrompt?: string): void;
+  } | null {
     if (!sessionId) return null;
     const queue = this._pendingExternal?.get(sessionId);
     const at = queue ? queue.findIndex((entry) => entry.prompt === prompt) : -1;
     if (!queue || at < 0) return null;
     const [entry] = queue.splice(at, 1);
     if (!queue.length) this._pendingExternal.delete(sessionId);
-    if (entry.target) this._reviewSessions?.set(sessionId, entry.target);
-    return entry.external;
+    let settled = false;
+    return {
+      external: entry.external,
+      confirm: () => {
+        if (settled) return;
+        settled = true;
+        if (entry.target) this._reviewSessions?.set(sessionId, entry.target);
+      },
+      release: (retryPrompt?: string) => {
+        if (settled) return;
+        settled = true;
+        const again = this._pendingExternal.get(sessionId) ?? [];
+        again.unshift({ ...entry, prompt: retryPrompt ?? entry.prompt });
+        this._pendingExternal.set(sessionId, again);
+      },
+    };
   }
 
   /** What the pull request review commands need from the chat. */
   public reviewHost(): ReviewHost {
     return {
-      startExternalTask: async (prompt, external, taskName, target) => {
+      startExternalTask: async (prompt, external, taskName, target, projectPath) => {
         if (!this._rpcClient) throw new Error("Andromity's engine isn't running.");
+        const folders = vscode.workspace.workspaceFolders ?? [];
+        const inWorkspace = projectPath && folders.some((folder) => {
+          const relative = path.relative(folder.uri.fsPath, projectPath);
+          return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+        });
         const created = await this._rpcClient.call<SessionInfo>("session.create", {
           name: taskName,
-          project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+          project_path: inWorkspace ? projectPath : folders[0]?.uri.fsPath,
         });
         if (!created?.id) throw new Error("The review chat couldn't be created.");
         this._sessionNames.set(created.id, created.name || taskName);
@@ -2615,14 +2639,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const queuedExternal = message?.type === "submit_input"
-      ? this._takePendingExternal(typeof message.prompt === "string" ? message.prompt : "", message.sessionId || this._currentSessionId)
+    const queuedExternal = message?.type === "submit_input" && this._rpcClient
+      ? this._claimPendingExternal(typeof message.prompt === "string" ? message.prompt : "", message.sessionId || this._currentSessionId)
       : null;
-    if (this._rpcClient && await handleInputMessage(this._rpcClient, message, this._currentSessionId || "", (event) => {
-      const data = event as { type: string; session_id?: string };
-      if (data.type === "input_session" && data.session_id) this._currentSessionId = data.session_id;
-      this._postToWebview(event);
-    }, this._currentMode, queuedExternal)) return;
+    let handled = false;
+    try {
+      handled = !!this._rpcClient && await handleInputMessage(this._rpcClient, message, this._currentSessionId || "", (event) => {
+        const data = event as { type: string; session_id?: string };
+        if (data.type === "input_session" && data.session_id) this._currentSessionId = data.session_id;
+        if (data.type === "input_accepted") queuedExternal?.confirm();
+        if (data.type === "input_rejected") queuedExternal?.release();
+        this._postToWebview(event);
+      }, this._currentMode, queuedExternal?.external ?? null);
+    } finally {
+      queuedExternal?.release();
+    }
+    if (handled) return;
 
     if (await handleInteractionMessage(this._rpcClient, message, this._currentSessionId, (event) => this._postToWebview(event))) return;
     if (await handlePromptImageMessage(this._rpcClient, message, this._currentSessionId, (event) => this._postToWebview(event))) return;
@@ -2664,6 +2696,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const pendingQueue = this._pendingExternal?.get(pendingSid);
         const pendingAt = pendingQueue ? pendingQueue.findIndex((entry) => entry.prompt === promptText) : -1;
         const pendingExternal = pendingQueue && pendingAt >= 0 ? pendingQueue[pendingAt] : undefined;
+        let pendingClaim: ReturnType<ChatViewProvider["_claimPendingExternal"]> = null;
         console.log('[Andromity ext] send_prompt recv:', promptText.slice(0,120), 'sess', this._currentSessionId, 'hasClient', !!this._rpcClient);
         try {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -2713,11 +2746,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (pendingExternal && activeSid !== pendingSid) {
             throw new Error("The review's chat changed before its prompt was sent. Start the review again.");
           }
-          if (pendingExternal && pendingQueue) {
-            pendingQueue.splice(pendingAt, 1);
-            if (!pendingQueue.length) this._pendingExternal?.delete(pendingSid);
-            if (pendingExternal.target) this._reviewSessions?.set(pendingSid, pendingExternal.target);
-          }
+          if (pendingExternal) pendingClaim = this._claimPendingExternal(pendingExternal.prompt, pendingSid);
           await this._rpcClient.call("agent.prompt", {
             session_id: activeSid,
             prompt: promptText,
@@ -2730,9 +2759,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             reasoning_effort: message.reasoningEffort || this._currentReasoning,
             image_uris: message.images || [],
           }, 600000);
+          pendingClaim?.confirm();
         } catch (err: any) {
           const activeSid = message.sessionId || this._currentSessionId;
           const msg = err.message || String(err);
+          if (msg.includes("RPC timeout")) pendingClaim?.confirm();
+          else if (msg.includes("already running a turn") || msg.includes("-32603") || msg.includes("AGENT_BUSY")) pendingClaim?.release(promptText);
+          else pendingClaim?.release();
           const lowerMsg = msg.toLowerCase();
 
           // Error category only; no message text or paths

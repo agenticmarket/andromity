@@ -257,6 +257,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const sessionLiveBuffer = new Map(); // sessionId -> Array<raw msg> for replay when switching to a live session
     let turnEditedFiles = new Set();
     let globalDiffStats = {};
+    let finishedTurnFileStats = null;
     let lastTurnPrompt = null;
     const btnScrollBottom = document.getElementById('btn-scroll-bottom');
     const scrollUnreadBadge = document.getElementById('scroll-unread-badge');
@@ -9359,7 +9360,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return '<span class="files-changed-lang-tag ' + safeClass + '">' + escapeHtml(displayExt) + '</span>';
     }
 
-    function createFilesChangedCard(filePathsSet) {
+    function statForPath(stats, path) {
+      if (!Array.isArray(stats)) return null;
+      for (const entry of stats) {
+        if (!entry || typeof entry.path !== 'string' || !entry.path) continue;
+        if (path === entry.path || path.endsWith('/' + entry.path)) return entry;
+      }
+      return null;
+    }
+
+    function createFilesChangedCard(filePathsSet, turnStats) {
       if (!filePathsSet) return null;
       const seen = new Map();
       Array.from(filePathsSet).forEach(filePath => {
@@ -9400,19 +9410,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const normalizedKey = filePath.replace(/\\\\/g, '/').trim();
         const filename = normalizedKey.split('/').pop() || filePath;
 
-        let stat = globalDiffStats[normalizedKey];
-        if (!stat) {
-          for (const k in globalDiffStats) {
-            const normK = k.replace(/\\\\/g, '/');
-            if (normalizedKey.endsWith(normK) || normK.endsWith(normalizedKey) || normalizedKey.endsWith('/' + normK) || normK.endsWith('/' + normalizedKey)) {
-              stat = globalDiffStats[k];
-              break;
-            }
-          }
-        }
+        const stat = statForPath(turnStats, normalizedKey);
 
         let statsHtml = '';
-        if (stat && (stat.additions > 0 || stat.deletions > 0)) {
+        if (stat && Number.isInteger(stat.additions) && Number.isInteger(stat.deletions) && (stat.additions > 0 || stat.deletions > 0)) {
           if (stat.additions > 0) statsHtml += '<span class="files-stat-add">+' + stat.additions + '</span>';
           if (stat.deletions > 0) statsHtml += '<span class="files-stat-del">-' + stat.deletions + '</span>';
           statsHtml += '<span class="chip-diff-label" style="margin-left:4px;">Diff</span>';
@@ -9438,10 +9439,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         moreBtn.textContent = '... Show ' + (files.length - MAX_PREVIEW) + ' more';
         card.appendChild(moreBtn);
       }
-
-      try {
-        vscode.postMessage({ type: 'get_file_diff_stats' });
-      } catch {}
 
       return card;
     }
@@ -9483,10 +9480,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       if (currentTurnAssistantDiv) {
         if (turnEditedFiles.size > 0) {
-          const card = createFilesChangedCard(turnEditedFiles);
+          const card = createFilesChangedCard(turnEditedFiles, finishedTurnFileStats);
           if (card) currentTurnAssistantDiv.appendChild(card);
         }
         turnEditedFiles.clear();
+        finishedTurnFileStats = null;
 
         const elapsedSec = (Date.now() - currentTurnStartTime) / 1000;
         currentTurnAssistantDiv._rawMarkdown = accumulatedAssistantText;
@@ -9751,41 +9749,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
         case 'set_mascot_enabled': {
           setMascotEnabled(msg.enabled !== false);
-          break;
-        }
-        case 'file_diff_stats_result': {
-          if (msg.stats) {
-            globalDiffStats = Object.assign(globalDiffStats || {}, msg.stats);
-            document.querySelectorAll('.files-changed-row').forEach(row => {
-              const fPath = row.getAttribute('data-file-path');
-              if (!fPath) return;
-              const normalized = fPath.replace(/\\\\/g, '/').trim();
-              let s = globalDiffStats[normalized];
-              if (!s) {
-                for (const k in globalDiffStats) {
-                  const normK = k.replace(/\\\\/g, '/');
-                  if (normalized.endsWith(normK) || normK.endsWith(normalized) || normalized.endsWith('/' + normK) || normK.endsWith('/' + normalized)) {
-                    s = globalDiffStats[k];
-                    break;
-                  }
-                }
-              }
-              if (s) {
-                const statsEl = row.querySelector('.files-changed-row-stats');
-                if (statsEl) {
-                  let html = '';
-                  if (s.additions > 0) html += '<span class="files-stat-add">+' + s.additions + '</span>';
-                  if (s.deletions > 0) html += '<span class="files-stat-del">-' + s.deletions + '</span>';
-                  if (s.additions > 0 || s.deletions > 0) {
-                    html += '<span class="chip-diff-label" style="margin-left:4px;">Diff</span>';
-                  } else {
-                    html += '<span class="chip-diff-label">Diff</span>';
-                  }
-                  if (html) statsEl.innerHTML = html;
-                }
-              }
-            });
-          }
           break;
         }
         case 'init_state':
@@ -10459,7 +10422,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   currentTurnToolBody = null;
                   currentTurnToolCount = 0;
                   if (turnEditedFilesForLoad.size > 0) {
-                    const card = createFilesChangedCard(turnEditedFilesForLoad);
+                    const storedTurn = (msg.session && Array.isArray(msg.session.receipt_turns) ? msg.session.receipt_turns : [])
+                      .find(function (t) { return t && currentTurnKey && t.turn_key === currentTurnKey; });
+                    const card = createFilesChangedCard(turnEditedFilesForLoad, storedTurn ? storedTurn.file_stats : null);
                     if (card) currentAssistantWrap.appendChild(card);
                   }
 
@@ -11557,6 +11522,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               if (tf) turnEditedFiles.add(tf);
             }
           }
+          finishedTurnFileStats = Array.isArray(msg.turn_file_stats) ? msg.turn_file_stats : null;
           const finishedTurn = unsentTurnSessions.delete(msg.session_id || currentSessionId) ? null : finishedTurnFacts(msg);
           endAssistantTurn();
           if (msg.outcome === 'error') enableEngineCardActions(msg.error_type, msg.error_action);

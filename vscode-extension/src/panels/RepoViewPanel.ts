@@ -93,7 +93,7 @@ export class RepoViewPanel {
         return pick?.choice ?? null;
       },
       host,
-      startReview: (client, repo, number, focusText) => startReview(host, client, repo, number, focusText),
+      startReview: (client, repo, number, focusText, projectPath) => startReview(host, client, repo, number, focusText, projectPath),
       errorText,
       airGap: () => currentAirGap().enabled,
       openExternal: async (url) => { await vscode.env.openExternal(vscode.Uri.parse(url, true)); },

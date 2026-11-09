@@ -19,7 +19,7 @@ export interface ReviewTarget {
 export interface ReviewHost {
   /** Starts a new chat turn whose GitHub text the engine wraps as untrusted and keeps read-only.
    *  A target marks the chat as a review that can be posted; questions pass null. */
-  startExternalTask(prompt: string, external: { source: string; text: string }, taskName: string, target: ReviewTarget | null): Promise<void>;
+  startExternalTask(prompt: string, external: { source: string; text: string }, taskName: string, target: ReviewTarget | null, projectPath?: string): Promise<void>;
   /** The review a chat holds (the current chat when no id is given), if it is one. */
   reviewIn(sessionId?: string): Promise<{ sessionId: string; target: ReviewTarget } | null>;
   /** The last answer of a chat, as plain text. */
@@ -100,7 +100,7 @@ export function reviewPrompt(target: { owner: string; repo: string }, number: nu
 }
 
 /** Starts a review of one known pull request in a new read-only chat. */
-export async function startReview(host: ReviewHost, github: GitHubClient, target: { owner: string; repo: string }, number: number, focus = ""): Promise<void> {
+export async function startReview(host: ReviewHost, github: GitHubClient, target: { owner: string; repo: string }, number: number, focus = "", projectPath?: string): Promise<void> {
   const [detail, { diff, cut }] = await Promise.all([
     github.pullDetail(target.owner, target.repo, number),
     github.pullDiff(target.owner, target.repo, number),
@@ -112,6 +112,7 @@ export async function startReview(host: ReviewHost, github: GitHubClient, target
     { source: `github:${target.owner}/${target.repo}#${detail.number}`, text: reviewMaterial(target, detail, diff, cut) },
     `Review PR #${detail.number}`,
     { owner: target.owner, repo: target.repo, number: detail.number, title: detail.title },
+    projectPath,
   );
 }
 

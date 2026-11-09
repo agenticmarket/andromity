@@ -378,6 +378,11 @@ export class GitHubClient {
     const value = obj(data);
     const errors = Array.isArray(value?.errors) ? (value?.errors as unknown[]) : [];
     const result = obj(value?.data);
+    const nested = (entry: unknown) => {
+      const where = obj(entry)?.path;
+      return Array.isArray(where) && where.length > 1;
+    };
+    if (errors.length && result && errors.every(nested)) return result;
     if (errors.length) {
       const first = obj(errors[0]);
       const type = str(first?.type, 100) || "";
