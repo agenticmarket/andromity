@@ -27,6 +27,7 @@ import { reviewTargetFromLabel, type ReviewHost, type ReviewTarget } from "../in
 import { PythonBridge } from "../server/PythonBridge.js";
 import { RpcClient } from "../server/RpcClient.js";
 import { handleInputMessage } from "../server/inputBridge.js";
+import { maybeShowPullRequestsTip } from "../panels/repoView/repoViewTip.js";
 import { handleInteractionMessage, reportDisconnectedAction } from "../server/interactionBridge.js";
 import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck, supportsKeyTests, unverifiedNotice } from "../server/keyCheck.js";
 import { SessionHydration } from "../server/sessionHydration.js";
@@ -1794,6 +1795,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         void vscode.window.showInformationMessage(`The review of #${review.number} is ready in the chat.`, "Edit and post").then((choice) => {
           if (choice) void vscode.commands.executeCommand("andromity.postPullRequestReview", sid);
         });
+      } else if (params?.outcome === "success" && !params?.scheduled && Array.isArray(turnFiles) && turnFiles.length) {
+        void maybeShowPullRequestsTip(this._context);
       }
       // Scheduled runs report through their own cron notification instead.
       if (this.isSoundEnabled("done") && !params?.scheduled) {

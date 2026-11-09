@@ -51,7 +51,7 @@ Model and provider names are the identifiers you configured (for example `anthro
 
 ### Pull Requests and Issues view
 
-**Pull Requests and Issues** sends `feature_use` names starting with `prv_`: `prv_opened`, `prv_tab_issues`, `prv_filter_foryou`, `prv_filter_all`, `prv_filter_assigned`, `prv_sort`, `prv_load_more`, `prv_open_item`, `prv_files`, `prv_open_github`, `prv_review`, `prv_ask`, and on failure `prv_fail_` followed by one of `signedout`, `notfound`, `sso`, `oauth`, `ratelimit`, `offline`, `error`, `nogit`, `norepo`, `noremote`, `otherhost`, `airgap`, `review` or `ask`. None carries a repository, number, title, author, question or error text.
+**Pull Requests and Issues** sends `feature_use` names starting with `prv_`: `prv_opened`, `prv_tab_issues`, `prv_filter_foryou`, `prv_filter_all`, `prv_filter_assigned`, `prv_sort`, `prv_load_more`, `prv_open_item`, `prv_files`, `prv_open_github`, `prv_review`, `prv_ask`, `prv_tip_shown` and `prv_tip_opened` (the one-time tip that points at the view), and on failure `prv_fail_` followed by one of `signedout`, `notfound`, `sso`, `oauth`, `ratelimit`, `offline`, `error`, `nogit`, `norepo`, `noremote`, `otherhost`, `airgap`, `review` or `ask`. None carries a repository, number, title, author, question or error text.
 
 ## Feedback you send
 
