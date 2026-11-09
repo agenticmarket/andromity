@@ -1379,7 +1379,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const folders = vscode.workspace.workspaceFolders ?? [];
         const inWorkspace = projectPath && folders.some((folder) => {
           const relative = path.relative(folder.uri.fsPath, projectPath);
-          return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+          return relative === "" || (relative.split(/[\\/]/)[0] !== ".." && !path.isAbsolute(relative));
         });
         const created = await this._rpcClient.call<SessionInfo>("session.create", {
           name: taskName,

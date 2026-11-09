@@ -9255,6 +9255,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         sessionsState[currentSessionId].isRunning = true;
       }
       turnEditedFiles.clear();
+      finishedTurnFileStats = null;
       cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
       cancelBtn.disabled = false;
       cancelBtn.style.opacity = '';
@@ -9361,12 +9362,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function statForPath(stats, path) {
-      if (!Array.isArray(stats)) return null;
-      for (const entry of stats) {
-        if (!entry || typeof entry.path !== 'string' || !entry.path) continue;
-        if (path === entry.path || path.endsWith('/' + entry.path)) return entry;
-      }
-      return null;
+      if (!Array.isArray(stats) || typeof path !== 'string') return null;
+      const find = (wanted, key) => {
+        let best = null;
+        for (const entry of stats) {
+          if (!entry || typeof entry.path !== 'string' || !entry.path) continue;
+          const name = key(entry.path);
+          if ((wanted === name || wanted.endsWith('/' + name)) && (!best || entry.path.length > best.path.length)) best = entry;
+        }
+        return best;
+      };
+      const slashes = (value) => value.split(String.fromCharCode(92)).join('/');
+      return find(slashes(path), slashes) || find(slashes(path).toLowerCase(), (value) => slashes(value).toLowerCase());
     }
 
     function createFilesChangedCard(filePathsSet, turnStats) {
@@ -9478,13 +9485,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       cancelBtn.style.display = 'none';
       sendBtn.style.display = 'flex';
 
+      const turnFileStats = finishedTurnFileStats;
+      finishedTurnFileStats = null;
       if (currentTurnAssistantDiv) {
         if (turnEditedFiles.size > 0) {
-          const card = createFilesChangedCard(turnEditedFiles, finishedTurnFileStats);
+          const card = createFilesChangedCard(turnEditedFiles, turnFileStats);
           if (card) currentTurnAssistantDiv.appendChild(card);
         }
         turnEditedFiles.clear();
-        finishedTurnFileStats = null;
 
         const elapsedSec = (Date.now() - currentTurnStartTime) / 1000;
         currentTurnAssistantDiv._rawMarkdown = accumulatedAssistantText;

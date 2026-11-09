@@ -152,6 +152,7 @@ export class PullRequestController {
   private stopRequested = false;
   private running = false;
   private openedAt = 0;
+  private publishedSection = false;
   private tracked = new Set<string>();
   private disposed = false;
   private evaluateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1002,6 +1003,7 @@ export class PullRequestController {
   private async publishedBody(commit: string, committedPaths?: readonly string[]): Promise<string> {
     const description = closeOpenBlocks(plainText(this.form.description, MAX_DESCRIPTION).trim());
     const section = await this.receiptsSection(GITHUB_BODY_LIMIT - 512 - description.length - 4);
+    this.publishedSection = section !== null;
     if (section === null) return this.bodyFor(commit, committedPaths);
     return `${description ? description + "\n\n" : ""}${section}`;
   }
@@ -1453,7 +1455,7 @@ export class PullRequestController {
       signoff: vscode.workspace.getConfiguration("git").get<boolean>("alwaysSignOff", false) === true,
       title: cleanTitle(this.form.title) || cleanTitle(message.split("\n", 1)[0]),
       bodyFor: (commit) => (mode === "pull_request" ? this.publishedBody(commit, committedPaths) : this.bodyFor(commit, committedPaths)),
-      receiptsFor: (commit) => this.receiptsSection(GITHUB_BODY_LIMIT - 512),
+      existingPullComment: (commit) => (mode === "pull_request" ? this.publishedBody(commit, committedPaths) : ""),
       draft: this.form.draft,
       reviewers: reviewers?.reviewers ?? [],
       teams: reviewers?.teams ?? [],
@@ -1544,7 +1546,7 @@ export class PullRequestController {
     }
     if (result.pull && this.plan?.target && (result.mode === "pull_request" || result.mode === "update")) {
       const url = pullUrl(this.plan.target, result.pull.number);
-      const verb = result.mode === "update" ? "updated" : "opened";
+      const verb = result.mode === "update" || result.joinedExisting ? "updated" : "opened";
       void vscode.window.showInformationMessage(`Pull request #${result.pull.number} ${verb}.`, "Open").then((choice) => {
         if (choice === "Open") void vscode.env.openExternal(vscode.Uri.parse(url, true));
       });
@@ -1560,12 +1562,21 @@ export class PullRequestController {
     const actions: PrAction[] = [];
     let heading: string;
     let url: string | null = null;
-    if (result.mode === "pull_request" && result.pull && plan.target) {
+    if (result.mode === "pull_request" && result.pull && plan.target && result.joinedExisting) {
+      heading = `Added to pull request #${result.pull.number}`;
+      url = pullUrl(plan.target, result.pull.number);
+      lines.push(`A pull request for ${plan.branch} was already open, so the commit was added to it and its title and description were left as they were.`);
+      if (result.existingComment === "posted") lines.push(`Your description${this.receipt && this.form.attachReceipt ? " and the receipts" : ""} were added as a comment.`);
+      else if (result.existingComment === "failed") lines.push(`GitHub refused the comment, so your description${this.receipt && this.form.attachReceipt ? " and the receipts were" : " was"} not added. Copy them and add them on GitHub.`);
+      else lines.push("No receipt was attached.");
+      actions.push({ id: "open_link", label: "Open on GitHub", primary: true }, { id: "copy_link", label: "Copy link" });
+      if (result.existingComment === "failed") actions.push({ id: "copy_description", label: "Copy description" });
+    } else if (result.mode === "pull_request" && result.pull && plan.target) {
       heading = `Pull request #${result.pull.number} opened`;
       url = pullUrl(plan.target, result.pull.number);
-      lines.push(this.receipt && this.form.attachReceipt
-        ? `The receipt for turn ${this.receipt.receipt.turn_index + 1} is at the end of the description.`
-        : "No receipt was attached.");
+      lines.push(!(this.receipt && this.form.attachReceipt) ? "No receipt was attached."
+        : this.publishedSection ? "The receipts of the turns whose changes are in this pull request are at the end of the description."
+        : `The receipt for turn ${this.receipt.receipt.turn_index + 1} is at the end of the description.`);
       actions.push({ id: "open_link", label: "Open on GitHub", primary: true }, { id: "copy_link", label: "Copy link" });
       if (result.reviewerProblem) {
         lines.push(result.reviewerProblem.kind === "invalid"

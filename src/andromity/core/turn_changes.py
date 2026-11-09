@@ -179,7 +179,7 @@ MAX_STATS = 300
 _ZERO_ID = re.compile(r"0+")
 
 
-def turn_file_stats(repo: Any, record: Dict[str, Any], project_path: str) -> List[Dict[str, Any]]:
+def turn_file_stats(repo: Any, record: Dict[str, Any], project_path: str, limit: int = MAX_STATS) -> List[Dict[str, Any]]:
     """Each file one turn changed, from its own before and after snapshots: the path relative to the project, the
     change (A, M, D, T), lines added and deleted (None for binary files), and the file's blob before and after, so a
     later pull request can tell which turn left a file exactly as it is."""
@@ -196,7 +196,7 @@ def turn_file_stats(repo: Any, record: Dict[str, Any], project_path: str) -> Lis
     parts = raw.split("\0")
     rows: List[Dict[str, Any]] = []
     i = 0
-    while i < len(parts) - 1 and len(rows) < MAX_STATS:
+    while i < len(parts) - 1 and len(rows) < limit:
         head, name = parts[i], parts[i + 1]
         i += 2
         fields = head.lstrip(":").split()
@@ -205,7 +205,7 @@ def turn_file_stats(repo: Any, record: Dict[str, Any], project_path: str) -> Lis
         _, _, old_id, new_id, status = fields
         added, deleted = counts.get(name, (None, None))
         try:
-            path = (root / name).resolve().relative_to(project).as_posix()
+            path = Path(os.path.normpath(root / name)).relative_to(project).as_posix()
         except ValueError:
             continue
         rows.append({

@@ -379,8 +379,12 @@ export class GitHubClient {
     const errors = Array.isArray(value?.errors) ? (value?.errors as unknown[]) : [];
     const result = obj(value?.data);
     const nested = (entry: unknown) => {
-      const where = obj(entry)?.path;
-      return Array.isArray(where) && where.length > 1;
+      const error = obj(entry);
+      const where = error?.path;
+      const type = str(error?.type, 100) || "";
+      const message = (str(error?.message, 2000) || "").toLowerCase();
+      if (type === "RATE_LIMITED" || message.includes("rate limit") || message.includes("saml") || message.includes("oauth app access restrictions")) return false;
+      return Array.isArray(where) && where.length > 2 && where.some((part) => typeof part === "number");
     };
     if (errors.length && result && errors.every(nested)) return result;
     if (errors.length) {

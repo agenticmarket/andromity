@@ -223,12 +223,19 @@ export function composeProvenance(provenance: Provenance, budget: number): { tex
     "| File | Lines | Made by |",
     "|---|---|---|",
   ];
+  const footerRoom = 1200;
+  let used = lines.join("\n").length;
+  let shown = 0;
   for (const row of rows.slice(0, MAX_TABLE_ROWS)) {
     const name = row.oldPath ? `${mdCode(row.oldPath)} → ${mdCode(row.path)}` : mdCode(row.path);
     const cell = (value: string) => value.replace(/\|/g, "\\|");
-    lines.push(`| ${cell(name)} | ${counts(row)} | ${cell(source(row))} |`);
+    const line = `| ${cell(name)} | ${counts(row)} | ${cell(source(row))} |`;
+    if (used + line.length + 1 > budget - footerRoom) break;
+    lines.push(line);
+    used += line.length + 1;
+    shown++;
   }
-  const rest = rows.slice(MAX_TABLE_ROWS);
+  const rest = rows.slice(shown);
   if (rest.length || provenance.truncated) {
     const covered = rest.filter((row) => row.coverage === "covered").length;
     lines.push("", `<sub>And ${plural(rest.length, "more file", "more files")}${provenance.truncated ? " (the list stops at 3,000)" : ""}: ${covered} covered by a receipt.</sub>`);
@@ -246,9 +253,19 @@ export function composeProvenance(provenance: Provenance, budget: number): { tex
       left.push(receipt.label);
       continue;
     }
-    const fitted = fitReceipt(closeOpenBlocks(receipt.markdown.trim()), room);
+    const markdown = receipt.markdown.trim();
+    let fitted = fitReceipt(markdown, room);
+    let closed = closeOpenBlocks(fitted.text);
+    if (closed.length > room) {
+      fitted = fitReceipt(markdown, Math.max(0, room - (closed.length - fitted.text.length)));
+      closed = closeOpenBlocks(fitted.text);
+    }
+    if (closed.length > room) {
+      left.push(receipt.label);
+      continue;
+    }
     if (fitted.shortened) shortened = true;
-    text += `${opener}${fitted.text}\n\n</details>`;
+    text += `${opener}${closed}\n\n</details>`;
   }
   if (left.length) {
     text += `\n\n<sub>Not attached here: ${left.slice(0, 10).join(", ")}${left.length > 10 ? ` and ${left.length - 10} more` : ""}. They are in Andromity's receipt tab.</sub>`;

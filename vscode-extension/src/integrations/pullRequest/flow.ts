@@ -317,8 +317,9 @@ export interface RunPlan {
   title: string;
   /** The pull request body, built once the commit is pushed, so its receipts can be matched to the pushed files. */
   bodyFor(commit: string): string | Promise<string>;
-  /** The receipts section alone, for a pull request that already exists; null when there is nothing to add. */
-  receiptsFor?(commit: string): Promise<string | null>;
+  /** What to add as a comment when a pull request for this branch already exists: the description and receipts
+   *  that would have been its body. Empty when there is nothing to add. */
+  existingPullComment?(commit: string): string | Promise<string>;
   draft: boolean;
   reviewers: string[];
   teams: string[];
@@ -345,9 +346,10 @@ export interface RunResult {
   pull: PullInfo | null;
   pageUrl: string | null;
   reviewerProblem: GitHubError | null;
-  /** A pull request for this branch already existed, so the receipts were added as a comment instead of a new description. */
+  /** A pull request for this branch already existed, so the description and receipts went into a comment on it. */
   joinedExisting?: boolean;
-  receiptCommentFailed?: boolean;
+  /** "posted", "failed" when GitHub refused the comment, "none" when there was nothing to add. */
+  existingComment?: "posted" | "failed" | "none";
 }
 
 export type FlowErrorKind =
@@ -568,8 +570,16 @@ export async function runPlan(
     if (existing) {
       state.pull = existing;
       result.joinedExisting = true;
-      const section = plan.receiptsFor ? await plan.receiptsFor(commit).catch(() => null) : null;
-      if (section && section.trim()) await github.comment(target.owner, target.repo, existing.number, section).catch(() => { result.receiptCommentFailed = true; });
+      let text = "";
+      try {
+        text = plan.existingPullComment ? await plan.existingPullComment(commit) : "";
+      } catch {
+        text = "";
+      }
+      result.existingComment = "none";
+      if (text.trim()) {
+        result.existingComment = await github.comment(target.owner, target.repo, existing.number, text).then(() => "posted" as const, () => "failed" as const);
+      }
       return;
     }
     state.pull = await github.createPull(target.owner, target.repo, {
