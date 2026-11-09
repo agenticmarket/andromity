@@ -243,8 +243,6 @@ class Agent:
         self._tool_usage_counts: Dict[str, int] = (
             session._tool_usage_counts if session is not None else {"bash": 0, "file": 0, "web": 0}
         )
-        # Session wall-clock start time for duration telemetry
-        self._session_start_time: float = time.time()
         # Turn counter for telemetry (incremented per user message)
         self._turn_count: int = 0
         # Register session so plan tools can store plan in it
@@ -583,10 +581,15 @@ class Agent:
             return
         run_id = uuid.uuid4().hex
         self._telemetry_turn_start = time.monotonic()
+        if getattr(self.session, "_telemetry_started", None) is None:
+            self.session._telemetry_started = self._telemetry_turn_start
         first_response_ms = None
         outcome = None
         metadata = {"provider": self.provider, "model": self.model}
-        send_task_event("task_started", self.session.id, run_id, **metadata)
+        try:
+            send_task_event("task_started", self.session.id, run_id, **metadata)
+        except Exception:
+            pass
         try:
             async with aclosing(self._run(user_input, images, image_uris)) as events:
                 async for event in events:
@@ -598,14 +601,22 @@ class Agent:
         except asyncio.CancelledError:
             outcome = "cancelled"
             raise
+        except GeneratorExit:
+            outcome = outcome or "cancelled"
+            raise
         except Exception:
             outcome = "failed"
             raise
         finally:
+            if outcome == "failed":
+                self.session._telemetry_had_error = True
             if outcome is not None:
-                send_task_event("task_finished", self.session.id, run_id, outcome=outcome,
-                    active_seconds=time.monotonic() - self._telemetry_turn_start,
-                    first_response_ms=first_response_ms, **metadata)
+                try:
+                    send_task_event("task_finished", self.session.id, run_id, outcome=outcome,
+                        active_seconds=time.monotonic() - self._telemetry_turn_start,
+                        first_response_ms=first_response_ms, **metadata)
+                except Exception:
+                    pass
 
     async def _run(self, user_input: str, images: list = None, image_uris: list = None) -> AsyncGenerator[StreamEvent, None]:
         """Run one user turn.
@@ -1280,7 +1291,8 @@ class Agent:
         return sum(len(session.tools) for session in manager.sessions.values()) if manager else 0
 
     def _get_session_duration(self) -> float:
-        return max(0.0, time.monotonic() - getattr(self, "_telemetry_turn_start", time.monotonic()))
+        started = getattr(self.session, "_telemetry_started", None)
+        return 0.0 if started is None else max(0.0, time.monotonic() - started)
 
     def _fire_session_end(self, had_error: bool = False, error_type: Optional[str] = None,
                           error_detail: Optional[str] = None) -> None:
@@ -1297,6 +1309,7 @@ class Agent:
             _mod  = self.model  or config.get("default", "model", "")
             turns = self._get_turn_count()
             duration = self._get_session_duration()
+            self.session._telemetry_had_error = bool(getattr(self.session, "_telemetry_had_error", False) or had_error)
             # Send live session update so in-progress sessions reflect actual progress
             send_session_update(self.session.id, turn_count=turns, duration_sec=duration)
             # Update session end / event record
@@ -1305,7 +1318,7 @@ class Agent:
                 provider=_prov,
                 model=_mod,
                 turn_count=turns,
-                had_error=had_error,
+                had_error=self.session._telemetry_had_error,
                 duration_sec=duration,
                 tool_counts=dict(self._tool_usage_counts),
             )
