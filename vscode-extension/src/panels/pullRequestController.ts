@@ -14,7 +14,8 @@ import { FetchLike, GitHubClient, GitHubError, HttpResponse } from "../integrati
 import { HostKind, enterpriseHostsFrom, newPullRequestUrl, requestNoun } from "../integrations/pullRequest/remotes.js";
 import { branchPrefix, isValidBranchName, suggestBranchName } from "../integrations/pullRequest/branchName.js";
 import { SecretHit, chooseReviewers, closedIssuesIn, isLockfile, looksSensitive, mentionsIn, secretsInText, sizeWarningLimit } from "../integrations/pullRequest/checks.js";
-import { GITHUB_BODY_LIMIT, MAX_COMMIT_MESSAGE, MAX_DESCRIPTION, MAX_TITLE, ReceiptLink, cleanDraft, cleanTitle, closeOpenBlocks, composeBody, composeProvenance, composeReceiptComment, plainText, type Provenance, type ProvenanceRow } from "../integrations/pullRequest/body.js";
+import { GITHUB_BODY_LIMIT, MAX_COMMIT_MESSAGE, MAX_DESCRIPTION, MAX_TITLE, cleanDraft, cleanTitle, closeOpenBlocks, plainText } from "../integrations/pullRequest/body.js";
+import { buildChangeRecord, composeChangeRecord, type RecordFile, type RecordTurn } from "../integrations/pullRequest/changeRecord.js";
 import {
   FlowDeps, FlowError, RepoContext, RunMode, RunPlan, RunResult, RunState, SelectionReport, StepId,
   branchTaken, evaluateSelection, freeBranchName, moveToFreshBranch, pathsToStage, prepareContext, pullUrl, runPlan, stepsFor,
@@ -89,6 +90,8 @@ const STEP_NAMES: Record<StepId, string> = {
   branch: "branch", stage: "stage", commit: "commit", push: "push", pull: "pull", reviewers: "reviewers", comment: "comment",
 };
 const MAX_UPDATE_TEXT = MAX_DESCRIPTION + 1000;
+const MAX_RECORD_TURNS = 60;
+const MAX_LATER_TURNS = 3;
 const fetchImpl: FetchLike = (url, init) => fetch(url, init) as unknown as Promise<HttpResponse>;
 
 function plural(n: number, one: string, many = one + "s"): string {
@@ -778,8 +781,8 @@ export class PullRequestController {
     const isPublic = ctx.github.repo ? !ctx.github.repo.isPrivate : null;
     const publicNote = receiptShown && this.receipt && this.form.attachReceipt
       ? isPublic === true
-        ? "This repository is public. The receipt shows file paths, commands, the model, the cost and approver names from git settings (never emails)."
-        : isPublic === null ? "Anyone who can see this repository can read the receipt: file paths, commands, the model, the cost and approver names from git settings." : null
+        ? "This repository is public. The AI change record shows file paths, check commands, models and approver names from git settings (never emails)."
+        : isPublic === null ? "Anyone who can see this repository can read the AI change record: file paths, check commands, models and approver names from git settings." : null
       : null;
 
     const showPull = this.showPullFields() && !this.updating();
@@ -855,10 +858,10 @@ export class PullRequestController {
         available: !!this.receipt,
         reason: this.receipt ? null : this.receiptReason,
         attach: !!this.receipt && (this.updating() ? this.form.commentReceipt : this.form.attachReceipt),
-        label: matchesTurns && this.receipt
-          ? (this.updating() && ctx.existingPull ? `Add the receipts of the turns in it to #${ctx.existingPull.number} as a comment` : "Attach the receipts of the turns in this pull request")
-          : this.updating() && ctx.existingPull ? `Add this turn's receipt to #${ctx.existingPull.number} as a comment` : "Attach this turn's receipt",
-        summary: matchesTurns && receiptSummary ? `${receiptSummary}. Other turns whose changes are in the pull request are matched after the push.` : receiptSummary,
+        label: this.updating() && ctx.existingPull ? `Add an AI change record to #${ctx.existingPull.number} as a comment` : "Add an AI change record",
+        summary: matchesTurns && receiptSummary
+          ? `${receiptSummary}. The record covers every turn whose changes are in the pull request, matched after the push.`
+          : receiptSummary ? `${receiptSummary}. The record covers this turn.` : receiptSummary,
         preview: this.receipt ? this.previewBody() : null,
       },
       publicNote,
@@ -886,7 +889,7 @@ export class PullRequestController {
       case "pull_request":
         return `Commits ${files} to ${branch}${from} pushes it to ${remote} and opens a pull request into ${this.form.base} on ${where}.`;
       case "update": {
-        const comment = this.receipt && this.form.commentReceipt ? ` and adds the receipts of the turns in it to #${ctx.existingPull?.number} as a comment` : "";
+        const comment = this.receipt && this.form.commentReceipt ? ` and adds an AI change record to #${ctx.existingPull?.number} as a comment` : "";
         return `Commits ${files} to ${branch} and pushes it to ${remote}${comment}.`;
       }
       case "host_page":
@@ -901,37 +904,48 @@ export class PullRequestController {
   private receiptSentence(mode: RunMode): string {
     if (mode === "commit") return "";
     if (mode === "update") {
-      return this.receipt && this.form.commentReceipt ? "" : " No receipt is added.";
+      return this.receipt && this.form.commentReceipt ? "" : " No AI change record is added.";
     }
-    if (!this.receipt) return " No receipt is attached.";
-    if (!this.form.attachReceipt) return " The receipt is not attached.";
+    if (!this.receipt) return " No AI change record is added.";
+    if (!this.form.attachReceipt) return " No AI change record is added.";
     return mode === "pull_request"
-      ? ` The receipt for turn ${this.receipt.receipt.turn_index + 1} is attached below the description, with the receipts of any other turns whose changes are in the pull request.`
-      : ` The receipt for turn ${this.receipt.receipt.turn_index + 1} is attached below the description.`;
+      ? " An AI change record for every turn whose changes are in the pull request is added below the description."
+      : ` An AI change record for turn ${this.receipt.receipt.turn_index + 1} is added below the description.`;
   }
 
-  private receiptLink(commit?: string, committedPaths?: readonly string[]): ReceiptLink | null {
+  /** The record of the form's own turn alone, for when the pull request's files can't be matched to turns. */
+  private turnRecord(commit: string | undefined, committedPaths?: readonly string[]): string | null {
     if (!this.receipt) return null;
-    const committed = new Set(committedPaths ?? pathsToStage(this.tickedFiles()));
-    const turnFiles = [...this.receipt.files.keys()];
-    return {
-      turnIndex: this.receipt.receipt.turn_index,
-      matched: this.receiptRecovered ? this.receiptMatch ?? "names" : undefined,
-      commitSha: commit,
-      leftOut: turnFiles.filter((file) => !committed.has(file)),
-      extra: [...committed].filter((file) => !this.receipt?.files.has(file)),
-    };
+    const committed = [...new Set(committedPaths ?? pathsToStage(this.tickedFiles()))];
+    const key = `${this.receipt.receipt.session_id}:${this.receipt.receipt.turn_index}`;
+    const byName = this.receiptRecovered && this.receiptMatch !== "exact";
+    const record = buildChangeRecord({
+      head: commit ?? "",
+      scope: "turn",
+      files: committed.map((file) => ({
+        path: file,
+        coverage: this.receipt?.files.has(file) ? "covered" : "none",
+        turns: this.receipt?.files.has(file) ? [key] : [],
+      })),
+      turns: [{ key, receipt: this.receipt.receipt }],
+      notes: byName ? ["The turn was matched by file names only, so these files may also hold changes from other turns or from outside Andromity."] : [],
+    });
+    return composeChangeRecord(record, GITHUB_BODY_LIMIT - 512);
   }
 
   private bodyFor(commit: string | undefined, committedPaths?: readonly string[]): string {
-    const link = this.receiptLink(commit, committedPaths);
-    const attach = this.receipt && this.form.attachReceipt && link;
-    return composeBody(this.form.description, attach ? { markdown: (this.receipt as LoadedReceipt).markdown, link } : undefined).body;
+    const raw = plainText(this.form.description, MAX_DESCRIPTION).trim();
+    const section = this.receipt && this.form.attachReceipt ? this.turnRecord(commit, committedPaths) : null;
+    if (!section) return closeOpenBlocks(raw);
+    const room = GITHUB_BODY_LIMIT - 512 - section.length - 2;
+    let description = closeOpenBlocks(raw);
+    if (description.length > room) description = closeOpenBlocks(raw.slice(0, Math.max(0, room - 1200)));
+    return `${description ? description + "\n\n" : ""}${section}`;
   }
 
-  /** Every turn, in any chat of this project, whose changes are in the pushed pull request: a table of files and
-   *  the turns that made them, then each turn's receipt. Null when receipts are off or the engine can't match them. */
-  private async receiptsSection(budget: number): Promise<string | null> {
+  /** The AI change record of the pushed pull request, from the receipts of every turn, in any chat of this project,
+   *  whose changes are in it. Null when the record is off or the engine can't match the files to turns. */
+  private async recordSection(budget: number): Promise<string | null> {
     if (!this.receipt || !(this.updating() ? this.form.commentReceipt : this.form.attachReceipt)) return null;
     const rpc = this.host.rpc();
     const ctx = this.context;
@@ -945,75 +959,66 @@ export class PullRequestController {
     }
     if (!res || res.success !== true || !Array.isArray(res.files)) return null;
     const ID = /^[A-Za-z0-9_-]{1,128}$/;
-    const turnRef = (t: any) => (t && typeof t.session_id === "string" && ID.test(t.session_id) && Number.isSafeInteger(t.turn_index) && t.turn_index >= 0 ? t : null);
-    const chats: string[] = [];
-    for (const file of res.files) for (const t of Array.isArray(file?.turns) ? file.turns : []) if (turnRef(t) && !chats.includes(t.session_id)) chats.push(t.session_id);
-    const label = (t: { session_id: string; turn_index: number }) => `turn ${t.turn_index + 1}${chats.length > 1 ? ` · chat ${chats.indexOf(t.session_id) + 1}` : ""}`;
-    const count = (v: unknown) => (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null);
-    const rows: ProvenanceRow[] = res.files.slice(0, 3000).map((file: any) => ({
+    const turnKey = (t: any) => (t && typeof t.session_id === "string" && ID.test(t.session_id) && Number.isSafeInteger(t.turn_index) && t.turn_index >= 0
+      ? `${t.session_id}:${t.turn_index}` : null);
+    const files: RecordFile[] = res.files.slice(0, 3000).map((file: any) => ({
       path: plainText(file?.path, 1000),
-      oldPath: typeof file?.old_path === "string" ? plainText(file.old_path, 1000) : null,
-      additions: count(file?.additions),
-      deletions: count(file?.deletions),
-      binary: file?.binary === true,
       coverage: ["covered", "partial", "edited"].includes(file?.coverage) ? file.coverage : "none",
-      turns: (Array.isArray(file?.turns) ? file.turns : []).map(turnRef).filter(Boolean).map(label),
-    })).filter((row: ProvenanceRow) => row.path);
-    const totals = {
-      files: rows.length,
-      covered: rows.filter((row) => row.coverage === "covered").length,
-      partial: rows.filter((row) => row.coverage === "partial").length,
-      edited: rows.filter((row) => row.coverage === "edited").length,
-    };
-    const turns = (Array.isArray(res.turns) ? res.turns : []).map(turnRef).filter(Boolean)
-      .sort((a: any, b: any) => chats.indexOf(a.session_id) - chats.indexOf(b.session_id) || b.turn_index - a.turn_index);
-    const receipts: Provenance["receipts"] = [];
-    const missing: string[] = [];
-    for (const turn of turns) {
-      if (receipts.length >= 8) {
-        missing.push(label(turn));
-        continue;
-      }
-      let response: ReturnType<typeof readResponse>;
+      turns: (Array.isArray(file?.turns) ? file.turns : []).map(turnKey).filter((key: string | null): key is string => !!key),
+    })).filter((file: RecordFile) => file.path);
+    if (!files.length) return null;
+
+    const keys: string[] = [];
+    for (const file of files) for (const key of file.turns) if (!keys.includes(key)) keys.push(key);
+    const load = async (key: string): Promise<Receipt | null> => {
+      const [sessionId, index] = [key.slice(0, key.lastIndexOf(":")), Number(key.slice(key.lastIndexOf(":") + 1))];
       try {
-        response = readResponse(await rpc.call<unknown>("session.receipt", { session_id: turn.session_id, project_path: this.host.projectPath(), turn_index: turn.turn_index }));
+        const response = readResponse(await rpc.call<unknown>("session.receipt", { session_id: sessionId, project_path: this.host.projectPath(), turn_index: index }));
+        return response.success && response.receipt && response.receipt.turn_index === index && response.receipt.session_id === sessionId ? response.receipt : null;
       } catch {
-        response = readResponse(null);
+        return null;
       }
-      if (!response.success || !response.receipt || !response.markdown || response.receipt.turn_index !== turn.turn_index) {
-        missing.push(label(turn));
-        continue;
-      }
-      receipts.push({
-        label: label(turn),
-        files: response.receipt.files_changed.length,
-        needsEyes: response.receipt.needs_attention.some((finding) => finding.severity === "high"),
-        markdown: response.markdown,
-      });
+    };
+    const turns: RecordTurn[] = [];
+    const skipped = Math.max(0, keys.length - MAX_RECORD_TURNS);
+    let unread = 0;
+    for (const key of keys.slice(0, MAX_RECORD_TURNS)) {
+      const receipt = await load(key);
+      if (receipt) turns.push({ key, receipt });
+      else unread++;
     }
-    if (!totals.files) return null;
-    const head = typeof res.head === "string" ? res.head : "";
-    this.trackOnce(totals.covered === totals.files ? "pr_receipts_all_covered" : totals.covered ? "pr_receipts_some_covered" : "pr_receipts_none_covered");
-    if (chats.length > 1) this.trackOnce("pr_receipts_many_chats");
-    return composeProvenance({ rows, totals, receipts, missing, head, truncated: res.truncated === true }, budget).text;
+    const later: RecordTurn[] = [];
+    const newest = new Map<string, number>();
+    for (const key of keys) {
+      const chat = key.slice(0, key.lastIndexOf(":"));
+      newest.set(chat, Math.max(newest.get(chat) ?? -1, Number(key.slice(key.lastIndexOf(":") + 1))));
+    }
+    for (const [chat, index] of newest) {
+      for (let next = index + 1; next <= index + MAX_LATER_TURNS; next++) {
+        const receipt = await load(`${chat}:${next}`);
+        if (!receipt) break;
+        later.push({ key: `${chat}:${next}`, receipt });
+      }
+    }
+    const record = buildChangeRecord({ head: typeof res.head === "string" ? res.head : "", scope: "pull_request", files, turns, later, unread, skipped, truncated: res.truncated === true });
+    const withAi = record.files.withAi;
+    this.trackOnce(withAi === record.files.total && !record.files.modifiedOutside.length ? "pr_receipts_all_covered" : withAi ? "pr_receipts_some_covered" : "pr_receipts_none_covered");
+    if (newest.size > 1) this.trackOnce("pr_receipts_many_chats");
+    return composeChangeRecord(record, budget);
   }
 
-  /** The published body: the description, then the receipts of every turn in the pull request, or the one
-   *  turn's receipt when the engine can't match the pushed files to turns. */
+  /** The published body: the description, then the AI change record of the whole pull request, or of the one
+   *  turn when the engine can't match the pushed files to turns. */
   private async publishedBody(commit: string, committedPaths?: readonly string[]): Promise<string> {
     const description = closeOpenBlocks(plainText(this.form.description, MAX_DESCRIPTION).trim());
-    const section = await this.receiptsSection(GITHUB_BODY_LIMIT - 512 - description.length - 4);
+    const section = await this.recordSection(GITHUB_BODY_LIMIT - 512 - description.length - 4);
     this.publishedSection = section !== null;
     if (section === null) return this.bodyFor(commit, committedPaths);
     return `${description ? description + "\n\n" : ""}${section}`;
   }
 
   private previewBody(): string {
-    if (!this.receipt) return "";
-    const link = this.receiptLink(undefined) as ReceiptLink;
-    return this.updating()
-      ? composeReceiptComment({ markdown: this.receipt.markdown, link }).body
-      : composeBody("", { markdown: this.receipt.markdown, link }).body;
+    return this.turnRecord(undefined) ?? "";
   }
 
   // ── Async helpers ───────────────────────────────────────────
@@ -1461,8 +1466,7 @@ export class PullRequestController {
       teams: reviewers?.teams ?? [],
       existingPull: ctx.existingPull,
       commentFor: mode === "update" && receipt && this.form.commentReceipt
-        ? async (commit) => (await this.receiptsSection(GITHUB_BODY_LIMIT - 512))
-          ?? (receipt ? composeReceiptComment({ markdown: receipt.markdown, link: this.receiptLink(commit, committedPaths) as ReceiptLink }).body : "")
+        ? async (commit) => (await this.recordSection(GITHUB_BODY_LIMIT - 512)) ?? this.turnRecord(commit, committedPaths) ?? ""
         : null,
     };
   }
@@ -1479,7 +1483,7 @@ export class PullRequestController {
       case "push": return `${done ? "Pushed" : status === "running" ? "Pushing" : "Push"} to ${plan.remote}${status === "running" ? "…" : ""}`;
       case "pull": return done && this.runState.pull ? `Opened pull request #${this.runState.pull.number} into ${plan.base}` : `Open the pull request into ${plan.base}`;
       case "reviewers": return status === "failed" ? "Couldn't ask everyone for a review" : `${done ? "Asked" : "Ask"} for reviews`;
-      case "comment": return `${done ? "Added" : "Add"} this turn's receipt to #${plan.existingPull?.number}`;
+      case "comment": return `${done ? "Added" : "Add"} an AI change record to #${plan.existingPull?.number}`;
     }
   }
 
@@ -1566,17 +1570,17 @@ export class PullRequestController {
       heading = `Added to pull request #${result.pull.number}`;
       url = pullUrl(plan.target, result.pull.number);
       lines.push(`A pull request for ${plan.branch} was already open, so the commit was added to it and its title and description were left as they were.`);
-      if (result.existingComment === "posted") lines.push(`Your description${this.receipt && this.form.attachReceipt ? " and the receipts" : ""} were added as a comment.`);
-      else if (result.existingComment === "failed") lines.push(`GitHub refused the comment, so your description${this.receipt && this.form.attachReceipt ? " and the receipts were" : " was"} not added. Copy them and add them on GitHub.`);
-      else lines.push("No receipt was attached.");
+      if (result.existingComment === "posted") lines.push(`Your description${this.receipt && this.form.attachReceipt ? " and the AI change record" : ""} ${this.receipt && this.form.attachReceipt ? "were" : "was"} added as a comment.`);
+      else if (result.existingComment === "failed") lines.push(`GitHub refused the comment, so your description${this.receipt && this.form.attachReceipt ? " and the AI change record were" : " was"} not added. Copy them and add them on GitHub.`);
+      else lines.push("No AI change record was added.");
       actions.push({ id: "open_link", label: "Open on GitHub", primary: true }, { id: "copy_link", label: "Copy link" });
       if (result.existingComment === "failed") actions.push({ id: "copy_description", label: "Copy description" });
     } else if (result.mode === "pull_request" && result.pull && plan.target) {
       heading = `Pull request #${result.pull.number} opened`;
       url = pullUrl(plan.target, result.pull.number);
-      lines.push(!(this.receipt && this.form.attachReceipt) ? "No receipt was attached."
-        : this.publishedSection ? "The receipts of the turns whose changes are in this pull request are at the end of the description."
-        : `The receipt for turn ${this.receipt.receipt.turn_index + 1} is at the end of the description.`);
+      lines.push(!(this.receipt && this.form.attachReceipt) ? "No AI change record was added."
+        : this.publishedSection ? "The AI change record for the turns whose changes are in this pull request is at the end of the description."
+        : `The AI change record for turn ${this.receipt.receipt.turn_index + 1} is at the end of the description.`);
       actions.push({ id: "open_link", label: "Open on GitHub", primary: true }, { id: "copy_link", label: "Copy link" });
       if (result.reviewerProblem) {
         lines.push(result.reviewerProblem.kind === "invalid"
@@ -1589,10 +1593,10 @@ export class PullRequestController {
       heading = `Pull request #${result.pull.number} updated`;
       url = pullUrl(plan.target, result.pull.number);
       actions.push({ id: "open_link", label: "Open on GitHub", primary: true }, { id: "copy_link", label: "Copy link" });
-      if (this.runState.commented) lines.push("Added this turn's receipt as a comment.");
+      if (this.runState.commented) lines.push("Added an AI change record as a comment.");
     } else if (result.mode === "host_page") {
       heading = `Pushed to ${plan.remote}`;
-      lines.push(`${hostName(plan.parsed?.kind)} ${noun}s are created on ${hostName(plan.parsed?.kind)}'s page. The title and description${this.receipt && this.form.attachReceipt ? ", with the receipt," : ""} are on your clipboard: paste them there.`);
+      lines.push(`${hostName(plan.parsed?.kind)} ${noun}s are created on ${hostName(plan.parsed?.kind)}'s page. The title and description${this.receipt && this.form.attachReceipt ? ", with the AI change record," : ""} are on your clipboard: paste them there.`);
       actions.push({ id: "open_page", label: `Open ${noun} page`, primary: true }, { id: "copy_description", label: "Copy description again" });
     } else if (result.mode === "push") {
       heading = `Pushed ${plan.branch} to ${plan.remote}`;

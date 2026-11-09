@@ -382,10 +382,10 @@ describe("controller: the run, the token and URLs (4, 5, 7.1, 7.2 rules 5, 7)", 
     const pushes = h.repo.calls.filter((c) => c.name === "push");
     assert.deepEqual(pushes.map((c) => c.args), [["origin", "andromity/round-totals-to-cents", true]], "push with set-upstream and no force mode");
     const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
-    assert.match(create.body.body, /Receipt for Andromity turn 1, committed as `[0-9a-f]{7}`\./);
+    assert.match(create.body.body, /\*\*AI change record\*\* · Generated from Andromity session records · Commit `[0-9a-f]{7}`/);
     // .env is left unticked by name (engine's sensitive-path rule) even though this fake receipt doesn't flag it;
     // a real receipt always flags a changed .env (DESIGN 3.2 as amended in 2358148).
-    assert.match(create.body.body, /leaves out 1 file the turn changed: `\.env`/);
+    assert.ok(!create.body.body.includes(".env"), "a file left out of the commit is named in the record");
     assert.equal(gitSync(h.sb.work, h.sb.env, ["log", "--format=%H", "andromity/round-totals-to-cents", "--", ".env"]).stdout.trim().split("\n").filter(Boolean).length, 1, ".env was committed by default");
     const everything = JSON.stringify({ posts: h.posts, logs: h.logs, rpc: h.rpcCalls, features, infos: state.infos, warnings: state.warnings, clipboard: state.clipboard, commands: state.commands });
     assert.ok(!everything.includes(TOKEN) && !everything.includes(TOKEN.slice(4, 20)), "the token leaked");
@@ -436,7 +436,7 @@ describe("controller: the run, the token and URLs (4, 5, 7.1, 7.2 rules 5, 7)", 
     assert.equal(lastView(h).phase, "done", JSON.stringify(lastView(h)));
     assert.deepEqual(state.opened, ["https://github.com/test/orders/compare/main...andromity/round-totals-to-cents?expand=1"]);
     assert.ok(state.clipboard[0].includes("Secretless description & stuff #1"));
-    assert.ok(state.clipboard[0].includes("### Andromity receipt"), "the receipt is copied with the description");
+    assert.ok(state.clipboard[0].includes("AI change record"), "the record is copied with the description");
     assert.ok(!state.opened[0].includes("Secretless"));
     assert.equal(fetchLog.length, fetchesBefore, "GitHub's API was called while signed out");
   });
@@ -571,7 +571,7 @@ describe("controller: attacking the fixes in 2358148", { timeout: 90_000 }, () =
     assert.equal(form(h).receipt.available, false, "the form still offers turn 1's receipt for a different turn");
     await h.ctrl.handle({ type: "pr_submit", action: "primary" });
     const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"));
-    assert.ok(!create || !create.body.body.includes("Receipt for Andromity turn 1"), "the pull request carries the previous turn's receipt");
+    assert.ok(!create || !create.body.body.includes("AI change record"), "the pull request carries the previous turn's record");
   });
 
   it("switching to a turn whose receipt fails to load drops the previous turn's receipt (3.5)", async () => {
@@ -593,8 +593,7 @@ describe("controller: attacking the fixes in 2358148", { timeout: 90_000 }, () =
     await waitFor(() => form(h).primary.enabled === true, `the button (${form(h).disabledReason})`);
     await h.ctrl.handle({ type: "pr_submit", action: "primary" });
     const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
-    assert.match(create.body.body, /Receipt for Andromity turn 2/);
-    assert.ok(create.body.body.includes("### Andromity receipt for turn 2"));
+    assert.match(create.body.body, /AI change record/);
   });
 
   it("while the receipt loads the button waits, and the draft never contains a secret from any ticked file", async () => {
@@ -775,13 +774,14 @@ describe("round 4: receipt recovered after a restart (DESIGN 3.5)", { timeout: 1
     assert.ok(!("turn_index" in call.params), "asked for a specific turn although none is known");
     assert.equal(form(h).receipt.available, true, form(h).receipt.reason);
     assert.match(form(h).receipt.summary, /turn 5 \(found by matching these changes\)/);
-    assert.match(form(h).plan, /The receipt for turn 5 is attached/);
+    assert.match(form(h).plan, /An AI change record/);
     await h.ctrl.handle({ type: "pr_submit", action: "primary" });
     assert.equal(lastView(h).phase, "done", JSON.stringify(lastView(h).failed ?? form(h)?.disabledReason));
     const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
-    assert.match(create.body.body, /Receipt for Andromity turn 5, found by matching the changed files, committed as `[0-9a-f]{7}`\./);
-    assert.ok(create.body.body.includes("### Receipt s9 turn 5"));
-    assert.ok(lastView(h).done.lines.some((l: string) => /receipt for turn 5 is at the end/.test(l)));
+    assert.match(create.body.body, /Commit `[0-9a-f]{7}`/);
+    assert.match(create.body.body, /\| \*\*Files changed with AI\*\* \| 1 of 1 \|/);
+    assert.ok(!/matched by file names only/.test(create.body.body), "an exact match is labelled as a name-only match");
+    assert.ok(lastView(h).done.lines.some((l: string) => /AI change record for turn 5 is at the end/.test(l)));
   });
 
   it("a follow-up turn that changed nothing (a question) doesn't hide the turn that made these changes", async () => {
@@ -802,7 +802,7 @@ describe("round 4: receipt recovered after a restart (DESIGN 3.5)", { timeout: 1
     await h.ctrl.handle({ type: "pr_submit", action: "primary" });
     const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
     assert.ok(create, JSON.stringify(lastView(h)));
-    assert.match(create.body.body, /Receipt for Andromity turn 8, found by file name; these files also have changes this receipt does not cover, committed as/);
+    assert.match(create.body.body, /matched by file names only, so these files may also hold changes from other turns or from outside Andromity/);
   });
 
   it("no session, a hostile session id, or an unknown session: no receipt, no request with the bad id", async () => {
@@ -812,7 +812,7 @@ describe("round 4: receipt recovered after a restart (DESIGN 3.5)", { timeout: 1
       await new Promise((r) => setTimeout(r, 200));
       assert.equal(h.rpcCalls.filter((c) => c.method === "session.receipt").length, 0, `asked the engine with ${JSON.stringify(id)}`);
       assert.equal(form(h).receipt.available, false);
-      assert.match(form(h).plan, /No receipt is attached/);
+      assert.match(form(h).plan, /No AI change record is added/);
       h.ctrl.dispose();
     }
     const unknown = await harness({ findings: [], turn: null, currentSession: "nope", engineSessions: { s9: { 0: [totals()] } } });
@@ -841,8 +841,8 @@ describe("round 4: receipt recovered after a restart (DESIGN 3.5)", { timeout: 1
     await h.ctrl.handle({ type: "pr_submit", action: "primary" });
     const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
     assert.ok(create, JSON.stringify(lastView(h)));
-    assert.match(create.body.body, /leaves out 1 file the turn changed: `docs\/already-committed\.md`/);
-    assert.match(create.body.body, /It also commits 1 file the turn did not change: `\.env`/);
+    assert.match(create.body.body, /\| \*\*Not recorded by Andromity\*\* \| `\.env` \|/);
+    assert.ok(!create.body.body.includes("docs/already-committed.md"), "a file outside the commit is named in the record");
   });
 
   it("engine offline: no receipt, the plan sentence says so, nothing breaks", async () => {
@@ -852,7 +852,7 @@ describe("round 4: receipt recovered after a restart (DESIGN 3.5)", { timeout: 1
     await new Promise((r) => setTimeout(r, 200));
     assert.equal(form(h).receipt.available, false);
     assert.match(form(h).receipt.reason, /Reconnect/);
-    assert.match(form(h).plan, /No receipt is attached/);
+    assert.match(form(h).plan, /No AI change record is added/);
   });
 
   it("reopening the form after the chat switched sessions uses the new session; a known turn always wins over recovery", async () => {
@@ -943,8 +943,8 @@ describe("round 4 with the real engine's session.receipt (founder's path: turn e
     await h.ctrl.handle({ type: "pr_submit", action: "primary" });
     const create = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!;
     assert.ok(create, JSON.stringify(lastView(h)));
-    assert.match(create.body.body, /Receipt for Andromity turn 1, found by matching the changed files, committed as/);
-    assert.ok(create.body.body.includes("### Andromity receipt · turn 1"), "the engine's own receipt Markdown is in the body");
+    assert.match(create.body.body, /\*\*AI change record\*\*/);
+    assert.ok(!/matched by file names only/.test(create.body.body));
   });
 
   it("the founder asked a follow-up question after the edit: the editing turn's receipt is still recovered", { skip }, async () => {
@@ -970,10 +970,9 @@ describe("round 5: the receipt line is built from what was committed, not from t
     assert.equal(lastView(h).phase, "done", JSON.stringify(lastView(h).failed ?? form(h)?.disabledReason));
     assert.ok(!h.host.files().some((f: PrFile) => f.path === "orders/totals.py"), "precondition: the panel no longer lists the committed file");
     const body: string = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!.body.body;
-    const line = /<sub>Receipt for[^\n]*<\/sub>/.exec(body)![0];
-    assert.match(line, /leaves out 1 file the turn changed: `\.env`\./, line);
-    assert.ok(!line.includes("orders/totals.py"), `the committed file is listed as left out: ${line}`);
-    assert.ok(!line.includes("also commits"), line);
+    assert.match(body, /\| \*\*Files changed with AI\*\* \| 1 of 1 \|/, body);
+    assert.match(body, /\| \*\*Not recorded by Andromity\*\* \| None \|/, body);
+    assert.ok(!body.includes(".env"), `a file left out of the commit is named: ${body}`);
   });
 
   it("the same holds for the copied description on a host page, including 'Copy description again' after the panel refreshed", async () => {
@@ -984,8 +983,8 @@ describe("round 5: the receipt line is built from what was committed, not from t
     await h.ctrl.handle({ type: "pr_action", action: "copy_description" });
     assert.equal(state.clipboard.length, 2);
     for (const text of state.clipboard) {
-      const line = /<sub>Receipt for[^\n]*<\/sub>/.exec(text)![0];
-      assert.ok(!line.includes("orders/totals.py") && line.includes("`.env`"), line);
+      assert.match(text, /\| \*\*Files changed with AI\*\* \| 1 of 1 \|/, text);
+      assert.ok(!text.includes(".env"), text);
     }
   });
 });
@@ -1021,9 +1020,8 @@ describe("round 5: the recovery walk (DESIGN 3.5)", { timeout: 120_000 }, () => 
     await openReady(h);
     await h.ctrl.handle({ type: "pr_submit", action: "primary" });
     const body: string = api.calls.find((c) => c.method === "POST" && c.path.endsWith("/pulls"))!.body.body;
-    const line = /<sub>Receipt for[^\n]*<\/sub>/.exec(body)![0];
-    assert.match(line, /Receipt for Andromity turn 5/);
-    assert.ok(!/changed again after that turn/.test(line), `the pull request states as fact something the code doesn't know: ${line}`);
+    assert.match(body, /\*\*AI change record\*\*/);
+    assert.ok(!/Modified outside Andromity/.test(body), `the pull request states as fact something the code doesn't know: ${body}`);
   });
 });
 

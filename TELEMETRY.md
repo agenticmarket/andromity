@@ -42,7 +42,7 @@ Model and provider names are the identifiers you configured (for example `anthro
 | `pr_mode_*`, `pr_scope_turn`, `pr_scope_all`, `pr_opt_*` | What was chosen at submit, for example a new branch, starting from the latest main, attaching the receipt or not, a draft, reviewers, a template, or whether the drafted description was edited |
 | `pr_check_*` | A check came up: high findings, a secret, a large change, staged files outside the selection, a sensitive file left out |
 | `pr_github_*`, `pr_blocked_*`, `pr_receipt_unavailable` | Sign-in state, why the form couldn't start, or that no receipt could be attached |
-| `pr_receipts_all_covered`, `pr_receipts_some_covered`, `pr_receipts_none_covered`, `pr_receipts_many_chats` | Whether the pushed files were all, partly or not matched to turns with receipts, and whether those turns came from more than one chat. No file names or counts |
+| `pr_receipts_all_covered`, `pr_receipts_some_covered`, `pr_receipts_none_covered`, `pr_receipts_many_chats` | Whether the pushed files were all, partly or not changed with AI according to Andromity's records (for the AI change record), and whether those turns came from more than one chat. No file names or counts |
 | `pr_fail_<step>`, `pr_err_<kind>`, `pr_cancelled_running` | Which step failed and a fixed category, such as `pr_err_push_rejected` |
 | `pr_draft_ok`, `pr_draft_failed`, `pr_checks_changed`, `pr_sign_in`, `pr_sign_in_again`, `pr_sign_in_declined`, `pr_retry`, `pr_push_new_name`, `pr_switch_back`, `pr_open_link`, `pr_copy_link`, `pr_open_page`, `pr_publish`, `pr_reviewers_failed` | Drafting results and the buttons used after a step |
 

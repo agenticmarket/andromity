@@ -10,7 +10,7 @@ import {
   FlowDeps, FlowError, RepoContext, RunPlan, RunState, evaluateSelection, moveToFreshBranch, pathsToStage, prepareContext, runPlan,
 } from "../src/integrations/pullRequest/flow.js";
 import { FetchLike, GitHubClient, HttpResponse } from "../src/integrations/pullRequest/github.js";
-import { composeBody } from "../src/integrations/pullRequest/body.js";
+
 import { PrFile } from "../src/integrations/pullRequest/types.js";
 import { FakeApi, GitCliPort, Sandbox, gitOk, gitSync, makeSandbox, otherClone, startFakeGitHub, writeHook } from "./helpers/prRealGit.js";
 
@@ -70,7 +70,7 @@ function buildPlan(ctx: RepoContext, files: PrFile[], fingerprints: Record<strin
     commitMessage: "fix(orders): round totals to cents\n\nCo-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>",
     signoff: false,
     title: "fix(orders): round totals to cents",
-    bodyFor: (commit) => composeBody("Rounds totals.", { markdown: "### Receipt\n- turn 1", link: { turnIndex: 0, commitSha: commit, leftOut: [], extra: [] } }).body,
+    bodyFor: (commit) => `Rounds totals. Commit ${commit}`,
     draft: false,
     reviewers: [],
     teams: [],
@@ -128,7 +128,7 @@ describe("real git: the whole flow", { timeout: 120_000 }, () => {
     const create = api.requests.find((r) => r.method === "POST" && r.url.endsWith("/pulls"))!;
     assert.equal(create.body.head, "andromity/round-totals");
     assert.equal(create.body.base, "main");
-    assert.ok(create.body.body.includes(`committed as \`${result.commit.slice(0, 7)}\``));
+    assert.ok(create.body.body.includes(`Commit ${result.commit}`) || create.body.body.includes(`Commit \`${result.commit.slice(0, 7)}\``));
     assert.equal(result.pull?.number, 42);
     for (const request of api.requests) {
       assert.equal(request.headers.authorization, `Bearer ${TOKEN}`);

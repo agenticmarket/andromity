@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { classifyGitError, evaluateSelection, pathsToStage, prepareContext, runPlan, FlowError, FlowDeps, RunPlan } from "../src/integrations/pullRequest/flow.js";
-import { composeBody, closeOpenBlocks } from "../src/integrations/pullRequest/body.js";
+import { closeOpenBlocks } from "../src/integrations/pullRequest/body.js";
 import { looksSensitive } from "../src/integrations/pullRequest/checks.js";
 import { GitHubClient, GitHubError } from "../src/integrations/pullRequest/github.js";
 import { parseRemoteUrl } from "../src/integrations/pullRequest/remotes.js";
@@ -96,14 +96,14 @@ function insideFence(body: string, marker: string): boolean {
 }
 
 describe("closeOpenBlocks: the receipt must still render after any description (3.5, 7.2 rule 9)", () => {
-  const link = { turnIndex: 0, commitSha: "abcdef1", leftOut: [], extra: [] };
+  const composeBody = (description: string, section: { markdown: string }) => ({ body: [closeOpenBlocks(description), "<sub>Receipt for Andromity</sub>", section.markdown].join(String.fromCharCode(10, 10)) });
   const cases = [
     "Looks fine.\n```", "Looks fine.\n````", "````\n```\n````", "Looks fine.\n~~~~", "```js\ncode\n``", "````md\n```\nnested\n```",
     "   ```\nindented fence", "~~~\n```\n", "```\n~~~\n",
   ];
   for (const description of cases) {
     it(JSON.stringify(description), () => {
-      const { body } = composeBody(description, { markdown: "### Receipt\nNeeds your eyes", link });
+      const { body } = composeBody(description, { markdown: "### Receipt\nNeeds your eyes" });
       assert.equal(insideFence(body, "<sub>Receipt for Andromity"), false, `the receipt line renders inside a code block:\n${body}`);
       assert.equal(insideFence(body, "### Receipt"), false, "the receipt renders inside a code block");
     });
@@ -116,7 +116,7 @@ describe("closeOpenBlocks: the receipt must still render after any description (
   });
 
   it("still closes an unclosed comment, details and pre", () => {
-    const { body } = composeBody("x <!-- hidden\n<details>\n<pre>", { markdown: "### Receipt", link });
+    const { body } = composeBody("x <!-- hidden\n<details>\n<pre>", { markdown: "### Receipt" });
     const before = body.slice(0, body.indexOf("<sub>Receipt for"));
     assert.ok(before.lastIndexOf("-->") > before.lastIndexOf("<!--"));
     assert.ok(/<\/details>/.test(before) && /<\/pre>/.test(before));

@@ -3,7 +3,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  GITHUB_BODY_LIMIT, MAX_DESCRIPTION, cleanDraft, cleanTitle, composeBody, composeReceiptComment, mdCode, plainText, receiptLinkLine,
+  MAX_DESCRIPTION, cleanDraft, cleanTitle, closeOpenBlocks, mdCode, plainText,
 } from "../src/integrations/pullRequest/body.js";
 import {
   MAX_REVIEWERS, addedLines, chooseReviewers, closedIssuesIn, isLockfile, looksBinary, mentionsIn, secretsInDiff, secretsInFile,
@@ -16,37 +16,8 @@ const { extractTagged } = require("../src/integrations/GitCommit.js") as typeof 
 
 const AWS = "AKIA" + "ABCDEFGHIJKLMNOP";
 const GH = "ghp_" + "A".repeat(36);
-const link = { turnIndex: 2, commitSha: "a1b2c3d4e5f6a7b8c9d0", leftOut: [] as string[], extra: [] as string[] };
 
-function receipt(details = 0, detailSize = 2000): string {
-  const head = "### Andromity receipt · turn 3\n\n**Needs your eyes**\n- High · Changed a file that runs code: `.github/workflows/ci.yml`\n- High · Changed a sensitive file: `.env`\n";
-  let out = head;
-  for (let i = 0; i < details; i++) out += `\n<details>\n<summary>Section ${i}</summary>\n\n${("line " + i + " ").repeat(detailSize / 8)}\n</details>\n`;
-  return out + "\n<sub>Built from Andromity's records, not by the AI. checksum abc</sub>";
-}
-
-describe("body: the receipt is the engine's text, unmodified (7.2 rule 9)", () => {
-  it("contains the receipt byte for byte after a rule and the fixed line", () => {
-    const md = "### Receipt\n\n| a | b |\n|---|---|\n| `x` | <b>y</b> |\n\u202eRTL in a path\u202c\n\t- tab\r\nCRLF line\n\u0007bell";
-    const { body, receiptShortened } = composeBody("What changed.", { markdown: md, link });
-    assert.equal(receiptShortened, false);
-    assert.ok(body.endsWith(md), "receipt changed on the way into the body");
-    const [desc, rest] = body.split("\n\n---\n\n");
-    assert.equal(desc, "What changed.");
-    assert.ok(rest.startsWith("<sub>Receipt for Andromity turn 3, committed as `a1b2c3d`.</sub>\n\n"), rest.slice(0, 120));
-  });
-
-  it("the fixed line names left-out and extra files, safely", () => {
-    const line = receiptLinkLine({ turnIndex: 0, leftOut: [".env"], extra: ["README.md", "a`b.md", "x\ny</sub><img src=x>.md"] });
-    assert.match(line, /^<sub>Receipt for Andromity turn 1\. This pull request leaves out 1 file the turn changed: `\.env`\. It also commits 3 files the turn did not change: /);
-    assert.ok(line.endsWith("</sub>"));
-    assert.ok(!line.includes("\n"), "a newline in a path breaks the line");
-    assert.ok(line.includes("``a`b.md``"), line);
-    const many = receiptLinkLine({ turnIndex: 4, leftOut: Array.from({ length: 25 }, (_, i) => `f${i}`), extra: [] });
-    assert.match(many, /and 15 more/);
-    assert.ok(!receiptLinkLine({ turnIndex: 0, commitSha: "not-a-sha; rm -rf", leftOut: [], extra: [] }).includes("rm -rf"));
-  });
-
+describe("body: description text and inline code", () => {
   it("mdCode can't be closed by the value", () => {
     for (const value of ["`", "``", "a ``` b", "`x`", " lead", "trail`"]) {
       const code = mdCode(value);
@@ -55,60 +26,23 @@ describe("body: the receipt is the engine's text, unmodified (7.2 rule 9)", () =
     }
   });
 
-  it("a model- or user-written description can't hide or swallow the receipt (unclosed comment, fence, details)", () => {
+  it("a model- or user-written description can't hide or swallow what follows it (unclosed comment, fence, details)", () => {
     for (const description of [
       "Looks fine.\n<!--", "Looks fine.\n```", "Looks fine.\n<details><summary>x</summary>", "Looks fine.\n~~~", "Looks fine.\n<pre>",
     ]) {
-      const { body } = composeBody(description, { markdown: receipt(), link });
-      const at = body.indexOf("<sub>Receipt for Andromity");
-      const before = body.slice(0, at);
+      const before = closeOpenBlocks(description);
       const opens = (re: RegExp) => (before.match(re) || []).length;
       const openComment = opens(/<!--/g) > opens(/-->/g);
       const openFence = opens(/^```/gm) % 2 === 1 || opens(/^~~~/gm) % 2 === 1;
       const openDetails = opens(/<details>/gi) > opens(/<\/details>/gi);
       const openPre = opens(/<pre>/gi) > opens(/<\/pre>/gi);
       assert.ok(!openComment && !openFence && !openDetails && !openPre,
-        `receipt rendered inside an unclosed construct from the description ${JSON.stringify(description)}`);
-    }
-  });
-});
-
-describe("body: GitHub's 65,536-character limit (3.5)", () => {
-  it("cuts folded details first and keeps the header and Needs your eyes", () => {
-    const md = receipt(60, 2000);
-    const { body, receiptShortened } = composeBody("d".repeat(30_000), { markdown: md, link });
-    assert.equal(receiptShortened, true);
-    assert.ok(body.length <= GITHUB_BODY_LIMIT, String(body.length));
-    assert.ok(body.includes("**Needs your eyes**") && body.includes("Changed a sensitive file"));
-    assert.ok(body.includes("Receipt shortened to fit GitHub's limit"));
-    assert.ok(body.includes("<sub>Receipt for Andromity turn 3"));
-  });
-
-  it("stays under the limit with the longest description the form accepts", () => {
-    const { body } = composeBody("x".repeat(MAX_DESCRIPTION), { markdown: receipt(40, 4000), link: { ...link, leftOut: Array(10).fill("a/".repeat(100)), extra: Array(10).fill("b/".repeat(100)) } });
-    assert.ok(body.length <= GITHUB_BODY_LIMIT, String(body.length));
-    assert.ok(body.includes("Needs your eyes"));
-  });
-
-  it("a receipt without details is cut at a line boundary", () => {
-    const md = receipt() + "\n" + Array.from({ length: 5000 }, (_, i) => `- command ${i} ran`).join("\n");
-    const { body } = composeBody("y".repeat(20_000), { markdown: md, link });
-    assert.ok(body.length <= GITHUB_BODY_LIMIT);
-    const beforeNote = body.split("\n\n<sub>Receipt shortened")[0];
-    assert.match(beforeNote.split("\n").pop()!, /^- command \d+ ran$/, "cut mid-line");
-  });
-
-  it("a receipt whose Needs-your-eyes list alone is huge still fits", () => {
-    const md = "### Receipt\n**Needs your eyes**\n" + "- High · x\n".repeat(20_000);
-    for (const fn of [() => composeBody("", { markdown: md, link }).body, () => composeReceiptComment({ markdown: md, link }).body]) {
-      const body = fn();
-      assert.ok(body.length <= GITHUB_BODY_LIMIT, String(body.length));
+        `text after the description would render inside an unclosed construct from ${JSON.stringify(description)}`);
     }
   });
 
   it("description text is stripped of control and bidi characters and capped", () => {
-    const { body } = composeBody("a\u0000b\u0007c\u202ed\u2066e\u200bf\r\ng", undefined);
-    assert.equal(body, "abcdef\ng");
+    assert.equal(plainText("a\u0000b\u0007c\u202ed\u2066e\u200bf\r\ng", 100), "abcdef\ng");
     assert.equal(plainText("x".repeat(MAX_DESCRIPTION + 10), MAX_DESCRIPTION).length, MAX_DESCRIPTION);
   });
 });
