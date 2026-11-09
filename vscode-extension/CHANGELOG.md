@@ -2,7 +2,7 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
-## [Unreleased]
+## [0.2.26] — 2026-11-10
 
 ### Added
 - **Turn receipts.** A receipt line under each answer that changed files or ran commands shows what the turn did: files changed, commands and their results, sensitive files touched, and who approved or declined each risky step. Open it for the full receipt, copy it as Markdown for a pull request, or save it as JSON. Fixed code writes it from Andromity's own records; the model never does. Also available as **Andromity: Show Turn Receipt**. Long commands are kept up to 2,000 characters, with secrets masked first. Under Needs your eyes, a flagged command is shown in full, and long commands in the Commands list open with **show all**.
@@ -14,6 +14,8 @@ All notable changes to the "andromity" extension will be documented in this file
 ### Changed
 - **A suggested next step reads as your next message.** The card under a finished reply shows the exact text **Send** delivers, drafted like an unsent message of yours, with **Edit** to change it in the input first. Long suggestions show three lines and **Show all**. A choice shows its options above the text of the one you pick.
 - **Safer auto-approval.** Command checks were rebuilt against the published GuardFall bypasses, and "always allow this command" follows the same stricter rule.
+- **The MCP catalog filters by category.** Discover in Settings has a category filter next to the search box, the unfiltered catalog opens with a featured connector, and each category heading shows how many apps it holds.
+- **Telemetry is sent more reliably and carries less.** Events wait in a small outbox on disk and are retried, the weekly ping is gone, turning telemetry off deletes anything still waiting, and anything that looks like a key is removed before a value is shortened.
 
 ### Fixed
 - **The log keeps working when several Andromity processes share it.** When `andromity.log` reached its size limit while another daemon or terminal had it open, Windows refused to rotate it, and from then on every log line was lost and printed an error to the daemon output. Each line is now one append that processes can't write over, one process at a time renames the files when the log is full, and a rotation that can't happen yet is retried later without printing anything.
