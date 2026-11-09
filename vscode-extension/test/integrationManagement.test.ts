@@ -72,7 +72,9 @@ function runMcpScript(call: string, state: { servers?: unknown[]; connectors?: u
     mcpView: "", CONNECTOR_ICONS, CONNECTOR_GUIDE_SLUGS, INTEGRATIONS_URL: "https://andromity.agenticmarket.dev/integrations",
     escapeHtml, document: { getElementById: element },
   };
-  vm.runInNewContext(html.slice(start, end) + "\n" + call, context);
+  const optionStart = html.indexOf("    function catalogOption(");
+  const optionEnd = html.indexOf("    function skillChip(", optionStart);
+  vm.runInNewContext(html.slice(optionStart, optionEnd) + html.slice(start, end) + "\n" + call, context);
   return { html: elements["connectors-list"]?.innerHTML ?? elements["mcp-grid"]?.innerHTML ?? "", context, elements };
 }
 
@@ -173,6 +175,21 @@ describe("Settings integration management", () => {
     assert.ok(renderConnectorTiles([NOTION, GMAIL], "google").includes("Gmail"));
     assert.ok(!renderConnectorTiles([NOTION, GMAIL], "google").includes("Notion"));
     assert.ok(renderConnectorTiles([NOTION, GMAIL], "zzz").includes("No apps match"));
+  });
+
+  it("features Linear in the unfiltered catalog and preserves the category selection", () => {
+    const linear = { ...NOTION, id: "linear", name: "Linear" };
+    const page = runMcpScript("renderConnectors();", { connectors: [linear, GMAIL] });
+    assert.ok(page.html.includes('class="catalog-feature"'));
+    assert.ok(page.html.includes('data-action="connector_connect" data-id="linear"'));
+    assert.ok(page.elements["connectors-category-filter"].innerHTML.includes("Google Workspace"));
+
+    const filtered = runMcpScript('document.getElementById("connectors-category-filter").value = "Google"; renderConnectors();', {
+      connectors: [linear, GMAIL],
+    });
+    assert.equal(filtered.elements["connectors-category-filter"].value, "Google");
+    assert.ok(filtered.html.includes("Gmail"));
+    assert.ok(!filtered.html.includes("Linear") && !filtered.html.includes('class="catalog-feature"'));
   });
 
   it("opens Discover first when there are no servers, and Yours once servers exist", () => {
