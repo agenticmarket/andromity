@@ -464,7 +464,7 @@ export const SEARCH_QUERY = `query($q: String!, $first: Int!, $after: String) {
   }
 }`;
 
-export const COUNT_QUERY = `query($q: String!) { search(query: $q, type: ISSUE, first: 0) { issueCount } }`;
+export const COUNT_QUERY = `query($q: String!) { search(query: $q, type: ISSUE, first: 1) { issueCount } }`;
 
 const COMMENT_FIELDS = "author { login } authorAssociation body createdAt";
 

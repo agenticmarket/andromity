@@ -162,6 +162,7 @@ details.file summary { cursor: pointer; padding: 7px 10px; font-size: 12.5px; }
 .empty h2 { margin: 0; color: var(--vscode-foreground); font-size: 16px; }
 .empty p { margin: 0; max-width: 480px; line-height: 1.55; }
 .row-actions { display: flex; gap: 8px; }
+.detail-line { font-size: 12px; max-width: 640px; overflow-wrap: anywhere; }
 @media (max-width: 980px) { .side { width: 340px; } }
 @media (max-width: 760px) { .main { flex-direction: column; } .side { width: auto; max-height: 45vh; border-right: none; border-bottom: 1px solid var(--vscode-panel-border); } .search { max-width: none; flex-basis: 100%; order: 9; } }
 `;

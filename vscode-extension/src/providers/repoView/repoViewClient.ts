@@ -570,7 +570,7 @@ export function repoViewClient(vscode: RepoVsCodeApi): void {
   function emptyView(): HTMLElement {
     const e = state.empty;
     return h("div", { class: "empty" }, icon(e.kind === "signedout" || e.kind === "notfound" ? "account" : e.kind === "sso" ? "shield" : e.kind === "oauth" ? "organization" : e.kind === "offline" ? "debug-disconnect" : e.kind === "airgap" ? "lock" : "repo"),
-      h("h2", { text: e.title }), h("p", { text: e.text }),
+      h("h2", { text: e.title }), h("p", { text: e.text }), e.detail ? h("p", { class: "detail-line" }, "Details: ", h("code", { text: e.detail })) : null,
       e.actions.length ? h("div", { class: "row-actions" }, e.actions.map((a: any) => h("button", { class: "btn" + (a.primary ? " primary" : ""), type: "button", onclick: () => send({ type: "empty_action", id: a.id }) }, a.label))) : null);
   }
 

@@ -101,6 +101,7 @@ export class RepoViewPanel {
       notify: (text) => { void vscode.window.showInformationMessage(text); },
       track: (name) => recordFeatureUse(name),
       now: () => Date.now(),
+      log: (text) => console.warn(`[Andromity] Pull Requests and Issues: ${text}`),
     });
     panel.webview.html = getRepoViewHtml(panel.webview, extensionUri);
     if (focus) this.queued = () => this.focus(focus);

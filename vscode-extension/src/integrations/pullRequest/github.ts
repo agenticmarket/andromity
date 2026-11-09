@@ -23,6 +23,8 @@ export class GitHubError extends Error {
     public readonly status = 0,
     public readonly ssoUrl: string | null = null,
     public readonly resetAt: number | null = null,
+    /** GitHub's own error message, for showing to the user. Never contains the token. */
+    public readonly detail: string | null = null,
   ) {
     super(`GitHub request failed (${kind})`);
     this.name = "GitHubError";
@@ -190,7 +192,9 @@ export class GitHubClient {
         data = null;
       }
     }
-    throw this.errorFor(response, data);
+    const error = this.errorFor(response, data);
+    const said = str(obj(data)?.message, 300);
+    throw said && !error.detail ? new GitHubError(error.kind, error.status, error.ssoUrl, error.resetAt, said) : error;
   }
 
   private errorFor(response: HttpResponse, data: unknown): GitHubError {
@@ -371,13 +375,14 @@ export class GitHubClient {
     if (errors.length) {
       const first = obj(errors[0]);
       const type = str(first?.type, 100) || "";
-      const message = (str(first?.message, 2000) || "").toLowerCase();
-      if (type === "RATE_LIMITED" || message.includes("rate limit")) throw new GitHubError("rate_limited", 200);
-      if (message.includes("saml")) throw new GitHubError("sso", 200);
-      if (message.includes("oauth app access restrictions")) throw new GitHubError("oauth_restricted", 200);
-      if (type === "NOT_FOUND") throw new GitHubError("not_found", 200);
-      if (type === "FORBIDDEN") throw new GitHubError("forbidden", 200);
-      if (!result) throw new GitHubError("invalid", 200);
+      const said = (str(first?.message, 2000) || "").slice(0, 300) || null;
+      const message = (said || "").toLowerCase();
+      if (type === "RATE_LIMITED" || message.includes("rate limit")) throw new GitHubError("rate_limited", 200, null, null, said);
+      if (message.includes("saml")) throw new GitHubError("sso", 200, null, null, said);
+      if (message.includes("oauth app access restrictions")) throw new GitHubError("oauth_restricted", 200, null, null, said);
+      if (type === "NOT_FOUND") throw new GitHubError("not_found", 200, null, null, said);
+      if (type === "FORBIDDEN") throw new GitHubError("forbidden", 200, null, null, said);
+      if (!result) throw new GitHubError("invalid", 200, null, null, said);
     }
     if (!result) throw new GitHubError("server");
     return result;

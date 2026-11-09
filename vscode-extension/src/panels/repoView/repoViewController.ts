@@ -5,7 +5,7 @@ import { GitHubClient, GitHubError } from "../../integrations/pullRequest/github
 import type { ReviewHost } from "../../integrations/pullRequest/reviewPullRequest.js";
 import {
   ASK_SUGGESTIONS, COUNT_QUERY, ISSUE_DETAIL_QUERY, PR_DETAIL_QUERY, SEARCH_QUERY, PAGE_SIZE,
-  askPrompt, httpsUrl, issueMaterial, prMaterial, readFiles, readIssueDetail, readPrDetail, readSearch, searchQuery,
+  askPrompt, httpsUrl, issueMaterial, line, prMaterial, readFiles, readIssueDetail, readPrDetail, readSearch, searchQuery,
   type ChangedFile, type IssueDetail, type ItemKind, type ListItem, type PrDetail, type RepoRef, type SortOrder,
 } from "../../integrations/pullRequest/repoViewData.js";
 
@@ -15,6 +15,8 @@ export interface EmptyState {
   kind: EmptyKind;
   title: string;
   text: string;
+  /** What GitHub or the error said, shown as a detail line so a failure can be reported. */
+  detail?: string;
   actions: { id: string; label: string; primary?: boolean }[];
 }
 
@@ -45,6 +47,8 @@ export interface RepoViewDeps {
   notify(text: string): void;
   track(name: string): void;
   now(): number;
+  /** Diagnostics for the extension's output; never contains tokens. */
+  log?(text: string): void;
 }
 
 interface ListKey {
@@ -98,6 +102,16 @@ function errorKind(error: unknown): EmptyKind {
     case "network": case "timeout": return "offline";
     default: return "error";
   }
+}
+
+/** A short, safe description of a failure for the error screen: GitHub's own message, or the error's name. */
+export function errorDetail(error: unknown): string {
+  if (error instanceof GitHubError) {
+    const said = line(error.detail ?? "", 300);
+    return `${error.status ? `HTTP ${error.status}` : error.kind}${said ? `: ${said}` : ` (${error.kind})`}`;
+  }
+  if (error instanceof Error) return line(`${error.name}: ${error.message}`, 300);
+  return "";
 }
 
 function resetText(error: unknown): string {
@@ -197,9 +211,11 @@ export class RepoViewController {
     ];
   }
 
-  private setEmpty(kind: EmptyKind, extra = ""): void {
+  private setEmpty(kind: EmptyKind, extra = "", error?: unknown): void {
     this.status = "empty";
     this.empty = this.emptyFor(kind, extra);
+    const detail = errorDetail(error);
+    if (detail && (kind === "error" || kind === "notfound")) this.empty = { ...this.empty, detail };
     this.deps.track(`prv_fail_${kind}`);
     this.publish();
   }
@@ -239,7 +255,7 @@ export class RepoViewController {
     try {
       this.account = await client.viewer();
     } catch (error) {
-      return this.setEmpty(errorKind(error), resetText(error));
+      return this.setEmpty(errorKind(error), resetText(error), error);
     }
     await this.useParentIfFork();
     this.deps.track("prv_opened");
@@ -297,7 +313,8 @@ export class RepoViewController {
         this.deps.track(`prv_fail_${kind}`);
       } else {
         this.loadingList = false;
-        return this.setEmpty(kind, resetText(error));
+        this.deps.log?.(`list failed: ${errorDetail(error)}`);
+        return this.setEmpty(kind, resetText(error), error);
       }
     } finally {
       if (seq === this.listSeq) this.loadingList = false;
@@ -414,7 +431,8 @@ export class RepoViewController {
     } catch (error) {
       if (seq !== this.detailSeq) return;
       const why = errorKind(error);
-      this.detailError = why === "ratelimit" ? `GitHub is limiting requests.${resetText(error)}` : why === "offline" ? "Can't reach GitHub." : `#${number} couldn't be loaded. Try again, or open it on GitHub.`;
+      this.deps.log?.(`detail failed: ${errorDetail(error)}`);
+      this.detailError = why === "ratelimit" ? `GitHub is limiting requests.${resetText(error)}` : why === "offline" ? "Can't reach GitHub." : `#${number} couldn't be loaded. Try again, or open it on GitHub. (${errorDetail(error)})`;
     } finally {
       if (seq === this.detailSeq) this.detailLoading = false;
     }
