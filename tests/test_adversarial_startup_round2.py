@@ -607,7 +607,7 @@ async def test_s3_a_huge_method_name_is_cheap_to_log(slow_requests, caplog):
 
 def _old_list_models():
     """The committed implementation, evaluated against the live rpc_handler module namespace."""
-    source = subprocess.run(["git", "show", "HEAD:src/andromity/server/rpc_handler.py"], cwd=REPO, capture_output=True,
+    source = subprocess.run(["git", "show", "135ef98^:src/andromity/server/rpc_handler.py"], cwd=REPO, capture_output=True,
                             text=True, encoding="utf-8", check=True).stdout
     tree = ast.parse(source)
     for node in ast.walk(tree):

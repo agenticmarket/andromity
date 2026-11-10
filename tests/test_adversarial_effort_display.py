@@ -494,7 +494,7 @@ def _old_effort():
     if "mod" not in _OLD:
         root = Path(__file__).resolve().parents[1]
         try:
-            source = subprocess.run(["git", "show", "dev:src/andromity/core/effort.py"], cwd=root,
+            source = subprocess.run(["git", "show", "d9205f8^:src/andromity/core/effort.py"], cwd=root,
                                     capture_output=True, text=True, timeout=20, check=True).stdout
         except Exception as exc:  # pragma: no cover
             pytest.skip(f"dev branch not available: {exc}")
