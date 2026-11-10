@@ -1988,7 +1988,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 .map((m: any) => m.name || m.model);
 
               const models = chatModels.length > 0 ? chatModels : allModels;
-              const localModels = models.filter((m: string) => !cloudModels.includes(m));
+              const localModels = chatModels.filter((m: string) => !cloudModels.includes(m));
               const pick = (list: string[]) =>
                 list.find((m: string) => /qwen.*coder/i.test(m)) ||
                 list.find((m: string) => /deepseek.*coder/i.test(m)) ||
@@ -2001,7 +2001,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 list[0] ||
                 null;
               const bestLocalModel = pick(localModels);
-              const bestModel = bestLocalModel || pick(models);
+              const bestModel = bestLocalModel || pick(chatModels);
 
               resolve({
                 running: true,
@@ -2250,16 +2250,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return { model: status.bestModel, connected: false, status };
   }
 
+  private _pendingOllamaAnnouncement(detected: OllamaDetection, providerBefore: string) {
+    const announce = this._ollamaAnnouncement(detected, this._ollamaAnnouncePending ? "" : providerBefore);
+    if (announce) this._ollamaAnnouncePending = false;
+    else if (detected.connected) this._ollamaAnnouncePending = true;
+    return announce;
+  }
+
   /** The once-ever Ollama notice, for someone not already using Ollama; null once it has been shown. */
   private _ollamaAnnouncement(detected: OllamaDetection, providerBefore: string): { model: string; cloud: boolean; connected: boolean } | null {
     const state = this._context?.globalState;
-    if (providerBefore === "ollama" || !state || !this._view) return null;
+    if (providerBefore === "ollama" || !state || !this._view || !this._webviewReady) return null;
     try {
       if (state.get<boolean>(OLLAMA_BANNER_SHOWN_KEY, false)) return null;
+      Promise.resolve(state.update(OLLAMA_BANNER_SHOWN_KEY, true)).catch(() => {});
     } catch {
       return null;
     }
-    Promise.resolve(state.update(OLLAMA_BANNER_SHOWN_KEY, true)).catch(() => {});
     const cloud = Boolean(detected.status.cloudModels?.includes(detected.model)) || !isLoopbackHost(detected.status.host);
     return { model: detected.model, cloud, connected: detected.connected };
   }
@@ -2277,6 +2284,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _ollamaRefresh: Promise<void> | null = null;
+  private _ollamaAnnouncePending = false;
 
   /** Background Ollama detection that patches the already-rendered chat state. */
   private _refreshOllamaDetection(): Promise<void> {
@@ -2285,7 +2293,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         try {
           const providerBefore = this._currentProvider;
           const detected = await this._checkAndAutoConnectOllama(this._providers);
-          const status = this._lastOllamaStatus;
+          const status = detected?.status || this._lastOllamaStatus;
           if (!detected) {
             if (status) this._postToWebview({ type: "ollama_status_updated", status });
             return;
@@ -2293,7 +2301,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this._addOllamaModel(detected.model);
           this._postToWebview({
             type: "ollama_detected", model: detected.model, models: this._models, status,
-            announce: this._ollamaAnnouncement(detected, providerBefore),
+            announce: this._pendingOllamaAnnouncement(detected, providerBefore),
           });
           if (providerBefore === "ollama" && this._currentProvider === "ollama") {
             this._postToWebview({ type: "config_updated", key: "model", value: this._currentModel, provider: "ollama" });

@@ -9458,8 +9458,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const provider = currentProvider || 'openrouter';
       const found = allModels.find(m => m.id === currentModel && (m.provider || 'openrouter') === provider)
         || allModels.find(m => m.id === currentModel);
-      const label = currentModel ? (found ? (found.name || found.id) : formatModelDisplayName(currentModel)) : '';
-      const name = label && label !== 'Choose a model' && label !== 'Loading model...' ? compactModelName(label) : 'The model';
+      const label = currentModel ? (found ? (String(found.name || '').trim() || found.id) : formatModelDisplayName(currentModel)) : '';
+      const compact = label && label !== 'Choose a model' && label !== 'Loading model...' ? compactModelName(label).trim() : '';
+      const usable = compact && !/:$/.test(compact) && /[A-Za-z0-9]/.test(compact.replace(/[(][^)]*[)]/g, ''));
+      const name = usable ? compact : ((found && String(found.id || '').trim()) || 'The model');
       if (elapsed < QUIET_THINKING_NOTE_AFTER_S) return name + ' is thinking… ' + elapsed + 's';
       return name + ' is still thinking… ' + elapsed + 's · some models don\\'t show their reasoning until they answer';
     }
