@@ -135,8 +135,11 @@ def model_supports_vision(provider: str, model: str) -> bool:
         or (cfg.get("type") and cfg.get("type") != provider)
     if routed_or_local:
         return True
+    from andromity.core.litellm_loader import loaded_litellm
+    litellm = loaded_litellm()
+    if litellm is None:
+        return True
     try:
-        import litellm
         return litellm.supports_vision(litellm_model) is not False
     except Exception:
         return True

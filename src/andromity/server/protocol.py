@@ -18,6 +18,10 @@ TOOL_REJECTED = -32004
 UNAUTHORIZED = -32005
 
 
+class RpcRefusal(ValueError):
+    """A request the server declines on purpose, such as git review in an untrusted folder."""
+
+
 @dataclass
 class JsonRpcRequest:
     id: Optional[Union[str, int]]

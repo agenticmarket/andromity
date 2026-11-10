@@ -12,7 +12,7 @@ function rpc(responses: Record<string, any>) {
     calls,
     call: async (method: string) => {
       calls.push(method);
-      const value = responses[method];
+      const value = method === "trust.status" && !(method in responses) ? { is_trusted: true } : responses[method];
       if (value instanceof Error) throw value;
       return value;
     },

@@ -198,8 +198,8 @@ def test_rpc_catalog_discovers_custom_models_and_classifies_free_routes(monkeypa
 
 def test_rpc_manual_model_remains_free_when_discovery_is_unavailable(monkeypatch):
     from andromity.server import rpc_handler as rpc
-    async def to_thread(*args, **kwargs):
-        return []
+    async def to_thread(function, *args, **kwargs):
+        return [] if function is rpc.fetch_live_models_sync else function(*args, **kwargs)
     async def wait_for(awaitable, timeout):
         return await awaitable
     async def gather(*awaitables):

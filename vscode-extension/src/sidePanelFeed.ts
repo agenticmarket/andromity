@@ -15,6 +15,8 @@ export function runSidePanelCommand(command: unknown): boolean {
 export class SidePanelFeed {
   private _timer: ReturnType<typeof setTimeout> | undefined;
   private readonly _parts = new Set<SidePanelPart>();
+  private readonly _latest = new Map<SidePanelPart, number>();
+  private _sends = 0;
 
   constructor(
     private readonly _rpc: () => RpcClient | null | undefined,
@@ -39,10 +41,16 @@ export class SidePanelFeed {
     const rpc = this._rpc();
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!rpc || !folder) return;
+    const send = ++this._sends;
+    for (const part of wanted) this._latest.set(part, send);
     const data = await loadSidePanelData(rpc, folder.uri.fsPath, wanted);
+    const fresh: typeof data = {};
+    if (data.mcp !== undefined && this._latest.get("mcp") === send) fresh.mcp = data.mcp;
+    if (data.changes !== undefined && this._latest.get("changes") === send) fresh.changes = data.changes;
+    if (fresh.mcp === undefined && fresh.changes === undefined) return;
     this._post({
-      type: "side_panel_data", ...data, folder: folder.name,
-      mcpTooltip: data.mcp ? mcpTooltip(data.mcp) : undefined,
+      type: "side_panel_data", ...fresh, folder: folder.name,
+      mcpTooltip: fresh.mcp ? mcpTooltip(fresh.mcp) : undefined,
     });
   }
 }

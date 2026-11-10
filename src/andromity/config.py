@@ -450,6 +450,8 @@ class ConfigManager:
         self.save()
         from andromity.core.models import invalidate_model_catalog
         invalidate_model_catalog(saved["name"])
+        from andromity.core.effort import invalidate_reasoning_capabilities
+        invalidate_reasoning_capabilities(saved["name"])
         return saved["name"]
 
     def set_ollama_base_url(self, url: str) -> str:

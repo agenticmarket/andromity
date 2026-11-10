@@ -435,7 +435,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
         removeAttribute: () => {},
         addEventListener: () => {},
         classList: { add: () => {}, remove: () => {}, contains: () => false, toggle: () => {} },
-        style: {},
+        style: { setProperty: () => {} },
         value: "",
         innerHTML: "",
         textContent: "",
@@ -1654,7 +1654,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
         return {
           addEventListener: () => {},
           classList: { add: () => {}, remove: () => {}, contains: () => false, toggle: () => {} },
-          style: {},
+          style: { setProperty: () => {} },
           setAttribute: () => {},
           removeAttribute: () => {},
           remove: () => {},

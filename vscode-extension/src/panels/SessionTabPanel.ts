@@ -701,6 +701,7 @@ export class SessionTabPanel {
         }
         const trust = await this._rpcClient.call<{ is_trusted: boolean }>("trust.set", { project_path: workspaceFolder });
         this._postMessage({ type: "trust_updated", isTrusted: trust.is_trusted });
+        this._sidePanelFeed.refresh(["changes"]);
         break;
       }
       case "toggle_pin": {

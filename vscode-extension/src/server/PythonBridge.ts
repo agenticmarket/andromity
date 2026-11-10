@@ -744,7 +744,7 @@ export class PythonBridge {
       if (proc.stdin && !proc.stdin.destroyed) {
         proc.stdin.write(msg);
       }
-    }, { log: (m) => this._log(m) });
+    }, { log: (m) => this._log(m), waitForDaemon: true });
 
     // Only the tail is needed to classify a crash; the full log is in the output channel.
     let stderrBuffer = "";
@@ -760,6 +760,7 @@ export class PythonBridge {
     const onFirstDaemonOutput = (source: "stdout" | "stderr") => {
       if (!hasReceivedFirstOutput) {
         hasReceivedFirstOutput = true;
+        client.markDaemonReady();
         const readyDuration = Date.now() - overallStartTime;
         this._log(`[Andromity] Daemon engine ready / first response received (via ${source}, total startup time: ${readyDuration}ms)`);
       }

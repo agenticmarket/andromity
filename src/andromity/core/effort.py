@@ -25,6 +25,65 @@ class ReasoningMode(str, Enum):
     ROUTER = "router"
 
 
+KNOWN_EFFORTS: frozenset[str] = frozenset({
+    "none", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "on",
+})
+
+
+def configured_reasoning_efforts(provider: str, saved: Optional[Dict[str, Any]]) -> List[str]:
+    """Effort names a custom OpenAI-compatible connection declares, read without raising.
+
+    Built-in providers and other adapters get none, so a hand-edited config cannot unlock controls
+    that no request would carry.
+    """
+    from andromity.core.connections import PRESETS
+    if provider in PRESETS or not isinstance(saved, dict):
+        return []
+    if str(saved.get("type") or "openai").strip().lower() not in ("openai", "custom"):
+        return []
+    raw = saved.get("reasoning_efforts")
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    result: List[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        value = item.strip().lower()
+        value = "off" if value == "none" else value
+        if value in KNOWN_EFFORTS and value not in ("auto", "on") and value not in result:
+            result.append(value)
+    return result
+
+
+def validate_reasoning_efforts(raw: Any) -> List[str]:
+    """Validate and normalize a list of reasoning effort names.
+
+    Accepts only known effort names (e.g. low, medium, high, xhigh) and rejects anything else with ValueError.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items = [p.strip() for p in raw.split(",") if p.strip()]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        raise ValueError("reasoning_efforts must be a list of effort names.")
+
+    result: List[str] = []
+    for item in items:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError("Reasoning effort names must be non-empty strings.")
+        val = item.strip().lower()
+        if val not in KNOWN_EFFORTS and val != "auto":
+            raise ValueError(f"Unknown reasoning effort '{item}'. Supported efforts: {', '.join(sorted(KNOWN_EFFORTS))}.")
+        val = "off" if val == "none" else val
+        if val != "auto" and val not in result:
+            result.append(val)
+    return result
+
+
 @dataclass
 class ReasoningCapability:
     mode: ReasoningMode
@@ -38,6 +97,7 @@ class ReasoningCapability:
     budget_min: Optional[int] = None
     budget_max: Optional[int] = None
     off_effort: Optional[str] = None
+    thinks_by_default: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         result = asdict(self)
@@ -89,6 +149,13 @@ def _from_metadata(provider: str, metadata: Dict[str, Any]) -> Optional[Reasonin
             if reasoning.get("mandatory") is not True:
                 values.append("off")
             request_format = "openrouter_toggle"
+        elif provider not in ("openrouter", "anthropic", "google", "openai"):
+            from andromity.config import config
+            from andromity.core.connections import PRESETS
+            saved = config.get_provider_config(provider) or {}
+            adapter = str(saved.get("type") or "openai").strip().lower()
+            if provider not in PRESETS and adapter in ("openai", "custom"):
+                request_format = "openai"
         return _cap(_efforts(values), "provider metadata", request_format,
                     str(reasoning.get("default_effort", "auto")).lower(),
                     reasoning.get("mandatory") is True,
@@ -121,6 +188,7 @@ _DISCOVERED: Dict[tuple[str, str], tuple[float, ReasoningCapability]] = {}
 _DOCS: Dict[str, tuple[float, str]] = {}
 _LOCK = threading.RLock()
 _TTL = 3600
+_RETRY_AFTER_FAILURE = 60
 
 
 def invalidate_reasoning_capabilities(provider: str) -> None:
@@ -150,6 +218,13 @@ def get_model_reasoning_capability(provider_key: str, model_id: str,
         cached = _DISCOVERED.get((provider, model))
         if cached and time.monotonic() - cached[0] < _TTL:
             return cached[1]
+    from andromity.config import config
+    efforts = configured_reasoning_efforts(provider, config.get_provider_config(provider))
+    if efforts:
+        cap = _cap(efforts, source="connection configuration", request_format="openai")
+        with _LOCK:
+            _DISCOVERED[(provider, model)] = (time.monotonic(), cap)
+        return cap
     return ReasoningCapability(ReasoningMode.UNKNOWN,
                                description="Effort controls unavailable; using the provider default.")
 
@@ -266,6 +341,8 @@ def enrich_anthropic_capability(html: str, model: str, cap: ReasoningCapability)
         if not table or '"disabled"' not in table[0]:
             continue
         column = table[0].index('"disabled"')
+        headers = [re.sub(r"[^a-z ]", "", cell.lower()).strip() for cell in table[0]]
+        omitted = headers.index("no thinking field") if "no thinking field" in headers else None
         for row in table[1:]:
             if len(row) <= column or normalize(row[0]) != normalize(model):
                 continue
@@ -277,8 +354,9 @@ def enrich_anthropic_capability(html: str, model: str, cap: ReasoningCapability)
             if allowed:
                 values.append("off")
             mandatory = rule.startswith("400")
+            thinks = omitted is not None and len(row) > omitted and row[omitted].lower().startswith("adaptive")
             return replace(cap, supported_efforts=values, off_effort=off_effort,
-                           is_mandatory=mandatory,
+                           is_mandatory=mandatory, thinks_by_default=thinks,
                            mode=ReasoningMode.TOGGLEABLE if allowed else ReasoningMode.MANDATORY if mandatory else cap.mode,
                            source="provider metadata and official Anthropic thinking documentation")
     return cap
@@ -313,6 +391,7 @@ def discover_model_reasoning_capability(provider: str, model: str) -> ReasoningC
         cached = _DISCOVERED.get((provider, model))
         if cached and time.monotonic() - cached[0] < (60 if cached[1].mode == ReasoningMode.UNKNOWN else _TTL):
             return cached[1]
+    complete = False
     try:
         if provider == "openai" and re.fullmatch(r"[a-zA-Z0-9_.-]+", model):
             cap = parse_openai_efforts(_fetch_document("https://developers.openai.com/api/docs/models/" + model))
@@ -337,10 +416,13 @@ def discover_model_reasoning_capability(provider: str, model: str) -> ReasoningC
             metadata = next((row for row in rows if row.get("id") == model), None)
             if metadata is not None:
                 cap = get_model_reasoning_capability(provider, model, metadata)
+        complete = True
     except Exception:
         pass  # Offline or changed schemas leave provider defaults intact.
+    retry_soon = not complete and cap.mode != ReasoningMode.UNKNOWN
+    stamp = time.monotonic() - (_TTL - _RETRY_AFTER_FAILURE) if retry_soon else time.monotonic()
     with _LOCK:
-        _DISCOVERED[(provider, model)] = (time.monotonic(), cap)
+        _DISCOVERED[(provider, model)] = (stamp, cap)
     return cap
 
 
@@ -356,6 +438,16 @@ def is_valid_effort(cap: ReasoningCapability, value: str) -> bool:
             and (budget != 0 or "off" in cap.supported_efforts))
 
 
+def _visible_thinking() -> Dict[str, str]:
+    return {"type": "adaptive", "display": "summarized"}
+
+
+def _provider_default(cap: ReasoningCapability, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    if cap.request_format == "anthropic_adaptive" and cap.thinks_by_default:
+        kwargs["thinking"] = _visible_thinking()
+    return kwargs
+
+
 def apply_reasoning_to_request(provider_name: str, model_id: str, effort: Optional[str],
                                kwargs: Dict[str, Any], capability: Optional[ReasoningCapability] = None) -> Dict[str, Any]:
     cap = capability or get_model_reasoning_capability(provider_name, model_id)
@@ -369,10 +461,16 @@ def apply_reasoning_to_request(provider_name: str, model_id: str, effort: Option
         generation.pop("thinkingConfig", None)
     if isinstance(kwargs.get("output_config"), dict):
         kwargs["output_config"].pop("effort", None)
+    if isinstance(kwargs.get("allowed_openai_params"), list):
+        kwargs["allowed_openai_params"] = [p for p in kwargs["allowed_openai_params"] if p != "reasoning_effort"]
+        if not kwargs["allowed_openai_params"]:
+            kwargs.pop("allowed_openai_params")
     value = (effort or "auto").strip().lower()
     value = "off" if value == "none" else value
-    if cap.mode in (ReasoningMode.NONE, ReasoningMode.UNKNOWN) or value == "auto":
+    if cap.mode in (ReasoningMode.NONE, ReasoningMode.UNKNOWN):
         return kwargs
+    if value == "auto":
+        return _provider_default(cap, kwargs)
     budget = None
     if value.startswith("budget:") and cap.supports_max_tokens:
         try:
@@ -393,7 +491,7 @@ def apply_reasoning_to_request(provider_name: str, model_id: str, effort: Option
     if value not in cap.supported_efforts:
         value = cap.default_effort
     if value == "auto":
-        return kwargs
+        return _provider_default(cap, kwargs)
     if provider_name == "openrouter" and cap.request_format == "openrouter_toggle":
         kwargs.setdefault("extra_body", {})["reasoning"] = {"enabled": value != "off"}
     elif provider_name == "openrouter":
@@ -404,7 +502,7 @@ def apply_reasoning_to_request(provider_name: str, model_id: str, effort: Option
             if cap.off_effort:
                 kwargs.setdefault("output_config", {})["effort"] = cap.off_effort
         else:
-            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["thinking"] = _visible_thinking()
             kwargs.setdefault("output_config", {})["effort"] = value
     elif cap.request_format == "anthropic_budget":
         if value == "off":
@@ -420,4 +518,7 @@ def apply_reasoning_to_request(provider_name: str, model_id: str, effort: Option
         kwargs.setdefault("extra_body", {}).setdefault("generationConfig", {})["thinkingConfig"] = {"thinkingBudget": 0 if value == "off" else -1}
     elif cap.request_format == "openai":
         kwargs["reasoning_effort"] = "none" if value == "off" else value
+        if provider_name != "openai":
+            allowed = [p for p in kwargs.get("allowed_openai_params") or [] if p != "reasoning_effort"]
+            kwargs["allowed_openai_params"] = allowed + ["reasoning_effort"]
     return kwargs

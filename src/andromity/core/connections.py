@@ -62,7 +62,7 @@ def validate_base_url(base_url: str, adapter: str) -> str:
     return normalize_base_url(base_url, adapter)
 
 
-def validate_connection(values: dict[str, Any]) -> dict[str, str]:
+def validate_connection(values: dict[str, Any]) -> dict[str, Any]:
     connection_id = str(values.get("id") or values.get("name") or "").strip().lower()
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", connection_id):
         raise ValueError("Use a connection ID with letters, numbers, hyphens, or underscores.")
@@ -77,9 +77,19 @@ def validate_connection(values: dict[str, Any]) -> dict[str, str]:
     model = str(values.get("model") or "").strip()
     if connection_id not in PRESETS and not model:
         raise ValueError("Enter the model ID provided by your endpoint.")
-    return {"name": connection_id, "display_name": str(values.get("display_name") or connection_id).strip(),
-            "type": adapter, "base_url": base_url, "model": model,
-            "api_version": str(values.get("api_version") or "").strip()}
+    result: dict[str, Any] = {
+        "name": connection_id,
+        "display_name": str(values.get("display_name") or connection_id).strip(),
+        "type": adapter,
+        "base_url": base_url,
+        "model": model,
+        "api_version": str(values.get("api_version") or "").strip(),
+    }
+    if values.get("reasoning_efforts") is not None and connection_id not in PRESETS and adapter in ("openai", "custom"):
+        from andromity.core.effort import validate_reasoning_efforts
+        result["reasoning_efforts"] = [e for e in validate_reasoning_efforts(values["reasoning_efforts"])
+                                       if e not in ("auto", "on")]
+    return result
 
 
 def provider_info() -> list[dict[str, Any]]:
@@ -88,7 +98,7 @@ def provider_info() -> list[dict[str, Any]]:
     for name in dict.fromkeys([*PRESETS, *configured]):
         saved = configured.get(name, {})
         label, portal = PRESETS.get(name, (name, ""))
-        result.append({
+        entry: dict[str, Any] = {
             "id": name, "name": saved.get("display_name") or label,
             "type": saved.get("type") or name,
             "base_url": saved.get("base_url", ""), "model": saved.get("model", ""),
@@ -97,7 +107,12 @@ def provider_info() -> list[dict[str, Any]]:
             "key_required": key_required(name, saved),
             "portal": portal,
             "airgap_blocked": not network_policy.url_allowed(_effective_base_url(name, saved)),
-        })
+        }
+        from andromity.core.effort import configured_reasoning_efforts
+        efforts = configured_reasoning_efforts(name, saved)
+        if efforts:
+            entry["reasoning_efforts"] = efforts
+        result.append(entry)
     return result
 
 
