@@ -5399,7 +5399,27 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     let availableProfiles = ['builder', 'coder', 'reviewer', 'planner'];
     let REASONING_LEVELS = [];
+    let REASONING_SCALE = [];
     let currentModelReasoningCapability = null;
+    let lastManualReasoning = null;
+    let reasoningRailSignature = '';
+    const REASONING_LABELS = { xhigh: 'X-High' };
+    const REASONING_HINTS = {
+      auto: 'The model decides how long to think',
+      off: 'No extra thinking. Fastest.',
+      minimal: 'A brief pause before answering',
+      low: 'Quick answers, light reasoning',
+      medium: 'Balanced speed and depth',
+      high: 'Thinks longer on harder problems',
+      xhigh: 'Extended reasoning for hard tasks',
+      max: 'Deepest reasoning. Slowest.',
+      ultra: 'Longest reasoning available',
+      on: 'Thinking is enabled',
+    };
+
+    function ownReasoningText(map, id) {
+      return Object.prototype.hasOwnProperty.call(map, id) ? map[id] : '';
+    }
 
     function getActiveModelReasoningCapability() {
       if (currentModelReasoningCapability && currentModelReasoningCapability._modelId === currentModel &&
@@ -5412,7 +5432,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function getReasoningChoices(cap) {
       const ids = ['auto'];
-      (cap.supported_efforts || []).forEach(value => {
+      (Array.isArray(cap.supported_efforts) ? cap.supported_efforts : []).forEach(value => {
         if (typeof value !== 'string') return;
         const id = value === 'none' ? 'off' : value;
         if (cap.is_mandatory && id === 'off') return;
@@ -5421,23 +5441,79 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const ascending = ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'on'];
       const rank = id => ascending.includes(id) ? ascending.indexOf(id) : ascending.length;
       ids.sort((a, b) => rank(a) - rank(b));
-      return ids.map((id, idx) => ({
-        id, label: id === 'auto' ? 'Auto' : id.charAt(0).toUpperCase() + id.slice(1),
-        pct: ids.length > 1 ? idx * 100 / (ids.length - 1) : 0,
+      return ids.map(id => ({
+        id, label: ownReasoningText(REASONING_LABELS, id) || id.charAt(0).toUpperCase() + id.slice(1),
       }));
     }
 
+    function reasoningScale(choices) {
+      return choices.filter(level => level.id !== 'auto');
+    }
+
+    function reasoningBaseId(value) {
+      return typeof value === 'string' && value.indexOf('budget:') === 0 ? 'on' : value;
+    }
+
+    function reasoningHue(scale, id) {
+      const steps = scale.filter(level => level.id !== 'off');
+      const at = steps.findIndex(level => level.id === id);
+      if (at < 0) return null;
+      return Math.round(195 + 90 * (steps.length > 1 ? at / (steps.length - 1) : 0.5));
+    }
+
+    function reasoningLitBars(scale, id) {
+      const steps = scale.filter(level => level.id !== 'off');
+      const at = steps.findIndex(level => level.id === id);
+      if (at < 0) return 0;
+      return Math.max(1, Math.round((at + 1) / steps.length * 4));
+    }
+
+    function applyEffortState(el, state) {
+      if (!el) return;
+      el.style.setProperty('--effort-hue', String(state.hue));
+      el.style.setProperty('--effort-p', String(state.p));
+      el.classList.toggle('is-auto', state.auto);
+      el.classList.toggle('is-custom', state.custom);
+      el.classList.toggle('is-off', state.off);
+    }
+
+    function clipReasoningLabel(text) {
+      return text.length > 18 ? text.slice(0, 17) + '…' : text;
+    }
+
+    function reasoningBudgetSupported(cap) {
+      return cap.supports_max_tokens === true && ['google_budget', 'anthropic_budget'].includes(cap.request_format) &&
+        Number.isInteger(cap.budget_min) && Number.isInteger(cap.budget_max);
+    }
+
     function hasReasoningControls(cap) {
-      return (Array.isArray(cap.supported_efforts) && cap.supported_efforts.length > 0) ||
-        (cap.supports_max_tokens === true && Number.isInteger(cap.budget_min) && Number.isInteger(cap.budget_max));
+      return getReasoningChoices(cap).length > 1 || reasoningBudgetSupported(cap);
     }
 
     function validReasoningBudget(cap, value) {
-      if (!cap.supports_max_tokens || !['google_budget', 'anthropic_budget'].includes(cap.request_format)) return false;
-      if (!/^budget:[0-9]+$/.test(value || '')) return false;
+      if (!reasoningBudgetSupported(cap)) return false;
+      if (typeof value !== 'string' || !/^budget:[0-9]+$/.test(value)) return false;
       const budget = Number(value.slice(7));
-      return Number.isInteger(cap.budget_min) && Number.isInteger(cap.budget_max) &&
-        budget >= cap.budget_min && budget <= cap.budget_max && (budget !== 0 || cap.supported_efforts.includes('off'));
+      return budget >= cap.budget_min && budget <= cap.budget_max &&
+        (budget !== 0 || getReasoningChoices(cap).some(level => level.id === 'off'));
+    }
+
+    function reasoningBudgetFraction(cap, value) {
+      const span = cap.budget_max - cap.budget_min;
+      return span > 0 ? Math.min(1, Math.max(0, (Number(value.slice(7)) - cap.budget_min) / span)) : 1;
+    }
+
+    function reasoningDefaultId(cap) {
+      if (typeof cap.default_effort !== 'string') return '';
+      return cap.default_effort === 'none' ? 'off' : cap.default_effort;
+    }
+
+    function resolveManualReasoning(cap, scale) {
+      const usable = value => typeof value === 'string' && !!value && (scale.some(level => level.id === value) || validReasoningBudget(cap, value));
+      if (usable(lastManualReasoning)) return lastManualReasoning;
+      if (usable(reasoningDefaultId(cap))) return reasoningDefaultId(cap);
+      if (scale.some(level => level.id === 'medium')) return 'medium';
+      return scale.length ? scale[Math.floor(scale.length / 2)].id : null;
     }
     let attachedImages = [];
     let attachedFiles = [];
@@ -5642,8 +5718,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function getReasoningLevelIndex(val) {
-      const idx = REASONING_LEVELS.findIndex(l => l.id === val);
-      return idx >= 0 ? idx : 0;
+      const id = reasoningBaseId(val);
+      return REASONING_SCALE.findIndex(level => level.id === id);
     }
 
     function setReasoningLevel(levelId, notifyExtension) {
@@ -5658,16 +5734,39 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     }
 
+    function toggleReasoningAuto() {
+      const cap = getActiveModelReasoningCapability();
+      if (!hasReasoningControls(cap)) return;
+      if (currentReasoning !== 'auto') {
+        setReasoningLevel('auto', true);
+        return;
+      }
+      const manual = resolveManualReasoning(cap, reasoningScale(getReasoningChoices(cap)));
+      if (manual) setReasoningLevel(manual, true);
+    }
+
     function updateReasoningUI() {
       const cap = getActiveModelReasoningCapability();
       const controlsAvailable = hasReasoningControls(cap);
       REASONING_LEVELS = getReasoningChoices(cap);
+      REASONING_SCALE = reasoningScale(REASONING_LEVELS);
       if (!REASONING_LEVELS.some(level => level.id === currentReasoning) && !validReasoningBudget(cap, currentReasoning)) {
-        currentReasoning = cap.default_effort && REASONING_LEVELS.some(level => level.id === cap.default_effort)
-          ? cap.default_effort : 'auto';
+        const fallback = reasoningDefaultId(cap);
+        currentReasoning = fallback && REASONING_LEVELS.some(level => level.id === fallback) ? fallback : 'auto';
       }
-      const idx = getReasoningLevelIndex(currentReasoning);
-      const lvl = REASONING_LEVELS[idx];
+      const auto = currentReasoning === 'auto';
+      if (!auto) lastManualReasoning = currentReasoning;
+      const manual = auto ? resolveManualReasoning(cap, REASONING_SCALE) : currentReasoning;
+      const manualId = manual ? reasoningBaseId(manual) : null;
+      const custom = !!manual && validReasoningBudget(cap, manual) && !REASONING_SCALE.some(level => level.id === 'on');
+      const steps = REASONING_SCALE.length;
+      const posIdx = Math.max(0, getReasoningLevelIndex(manual));
+      const budgetFraction = custom ? reasoningBudgetFraction(cap, manual) : 0;
+      const hue = custom ? Math.round(195 + 90 * budgetFraction) : reasoningHue(REASONING_SCALE, manualId);
+      const effortState = {
+        auto, custom, off: !auto && manualId === 'off', hue: hue === null ? 230 : hue, p: steps > 1 ? posIdx / (steps - 1) : 1,
+      };
+      const lvl = REASONING_LEVELS.find(level => level.id === currentReasoning) || REASONING_LEVELS[0];
       const isBudget = validReasoningBudget(cap, currentReasoning);
       const label = controlsAvailable
         ? (isBudget ? currentReasoning.slice(7) + ' tokens' : lvl.label)
@@ -5680,6 +5779,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         btn.title = controlsAvailable
           ? (cap.description || 'Thinking effort: ' + label)
           : 'Thinking controls are unavailable for this model';
+        applyEffortState(btn, effortState);
+      }
+      const glyph = document.getElementById('effort-glyph');
+      if (glyph) {
+        const lit = auto ? 0 : custom ? 1 + Math.round(3 * budgetFraction) : reasoningLitBars(REASONING_SCALE, manualId);
+        glyph.setAttribute('data-lit', String(lit));
       }
       const activeReasoningPopover = document.getElementById('reasoning-popover');
       if (!controlsAvailable && activeReasoningPopover) {
@@ -5689,49 +5794,78 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           btn.setAttribute('aria-expanded', 'false');
         }
       }
+      applyEffortState(activeReasoningPopover, effortState);
       const lbl = document.getElementById('prompt-reasoning-label');
       if (lbl) {
         lbl.textContent = label;
         if (typeof lbl.removeAttribute === 'function') lbl.removeAttribute('aria-busy');
         lbl.classList.remove('skeleton', 'skeleton-text');
       }
+      const autoSwitch = document.getElementById('reasoning-auto');
+      if (autoSwitch) {
+        autoSwitch.setAttribute('aria-checked', auto ? 'true' : 'false');
+        autoSwitch.classList.toggle('on', auto);
+        autoSwitch.disabled = auto && !manual;
+      }
+      const bubble = document.getElementById('reasoning-bubble');
+      if (bubble) bubble.textContent = clipReasoningLabel(auto ? 'Auto' : label);
+      const hint = document.getElementById('reasoning-hint');
+      if (hint) {
+        hint.textContent = isBudget ? 'Thinking budget set to ' + currentReasoning.slice(7) + ' tokens' : ownReasoningText(REASONING_HINTS, currentReasoning);
+      }
       const slider = document.getElementById('reasoning-slider-range');
       if (slider) {
         slider.min = '0';
-        slider.max = String(REASONING_LEVELS.length - 1);
-        slider.value = String(idx);
-        slider.disabled = REASONING_LEVELS.length < 2;
+        slider.max = String(Math.max(0, steps - 1));
+        slider.value = String(posIdx);
+        slider.disabled = steps < 2;
+        const posLabel = steps ? REASONING_SCALE[posIdx].label : '';
+        slider.setAttribute('aria-valuetext', auto ? posLabel + ' (Auto is on)' : label);
       }
-      const fill = document.getElementById('reasoning-slider-fill');
-      if (fill) {
-        fill.style.width = lvl.pct + '%';
-        fill.className = 'reasoning-slider-fill';
-      }
+      const wrap = document.getElementById('reasoning-slider-wrap');
       const labels = document.getElementById('reasoning-slider-labels');
       const ticks = document.getElementById('reasoning-slider-ticks');
-      if (labels) labels.innerHTML = "";
-      if (ticks) ticks.innerHTML = "";
-      REASONING_LEVELS.forEach((level, levelIdx) => {
-        if (labels) {
+      if (wrap) wrap.hidden = steps < 2;
+      if (labels) {
+        labels.hidden = steps < 2;
+        labels.classList.toggle('dense', steps > 6);
+      }
+      const signature = REASONING_SCALE.map(level => level.id + ':' + level.label).join('|');
+      if (labels && ticks && signature !== reasoningRailSignature) {
+        reasoningRailSignature = signature;
+        labels.innerHTML = '';
+        ticks.innerHTML = '';
+        REASONING_SCALE.forEach((level, levelIdx) => {
+          const x = String(steps > 1 ? levelIdx / (steps - 1) : 1);
           const button = document.createElement('button');
           button.type = 'button';
-          button.className = 'reasoning-step-btn' + (currentReasoning === level.id ? ' active' : '');
-          button.setAttribute("data-level", level.id);
+          button.className = 'reasoning-step-btn';
+          button.setAttribute('data-level', level.id);
+          button.setAttribute('tabindex', '-1');
+          button.style.setProperty('--x', x);
           button.textContent = level.label;
-          if (typeof button.addEventListener === 'function') button.addEventListener('click', () => setReasoningLevel(level.id, true));
+          button.addEventListener('click', () => {
+            setReasoningLevel(level.id, true);
+            const rail = document.getElementById('reasoning-slider-range');
+            if (rail && !rail.disabled) rail.focus();
+          });
           labels.appendChild(button);
-        }
-        if (ticks) {
           const tick = document.createElement('span');
-          tick.className = 'reasoning-tick-point' + (levelIdx <= idx ? ' active' : '');
-          tick.title = level.label;
-          if (typeof tick.addEventListener === 'function') tick.addEventListener('click', () => setReasoningLevel(level.id, true));
+          tick.className = 'reasoning-tick-point';
+          tick.style.setProperty('--x', x);
           ticks.appendChild(tick);
-        }
-      });
+        });
+      }
+      if (labels && ticks) {
+        REASONING_SCALE.forEach((level, levelIdx) => {
+          labels.children[levelIdx].classList.toggle('active', !auto && reasoningBaseId(currentReasoning) === level.id);
+          labels.children[levelIdx].classList.toggle('at', !custom && levelIdx === posIdx);
+          ticks.children[levelIdx].classList.toggle('lit', !custom && !effortState.off && level.id !== 'off' && levelIdx <= posIdx);
+        });
+      }
       const budgetInput = document.getElementById('reasoning-budget-input');
       const budgetRow = document.getElementById('reasoning-budget-row');
-      const hasBudget = cap.supports_max_tokens && Number.isInteger(cap.budget_min) && Number.isInteger(cap.budget_max);
+      const hasBudget = reasoningBudgetSupported(cap);
       if (budgetRow) budgetRow.hidden = !hasBudget;
       if (budgetInput && hasBudget) {
         budgetInput.min = String(cap.budget_min);
@@ -5878,6 +6012,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const btnReasoningEl = document.getElementById('btn-prompt-reasoning');
     const btnReasoningClose = document.getElementById('btn-reasoning-close');
     const reasoningSlider = document.getElementById('reasoning-slider-range');
+    const reasoningAutoSwitch = document.getElementById('reasoning-auto');
 
     function toggleReasoningPopover(forceState) {
       if (!reasoningPopover) return;
@@ -5898,9 +6033,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       if (show) {
         updateReasoningUI();
-        if (reasoningSlider) {
-          reasoningSlider.focus();
-        }
+        const focusTarget = reasoningSlider && !reasoningSlider.disabled ? reasoningSlider : reasoningAutoSwitch;
+        if (focusTarget && !focusTarget.disabled) focusTarget.focus();
       }
     }
 
@@ -5921,9 +6055,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     if (reasoningSlider) {
       reasoningSlider.addEventListener('input', (e) => {
         const valIdx = parseInt(e.target.value, 10);
-        const lvl = REASONING_LEVELS[valIdx];
+        const lvl = REASONING_SCALE[valIdx];
         if (lvl) setReasoningLevel(lvl.id, true);
       });
+    }
+
+    if (reasoningSlider) {
+      reasoningSlider.addEventListener('click', () => {
+        if (currentReasoning === 'auto' && !reasoningSlider.disabled) toggleReasoningAuto();
+      });
+    }
+
+    if (reasoningAutoSwitch) {
+      reasoningAutoSwitch.addEventListener('click', toggleReasoningAuto);
     }
 
     document.getElementById('reasoning-budget-apply')?.addEventListener('click', () => {
