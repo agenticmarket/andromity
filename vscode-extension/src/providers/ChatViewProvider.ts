@@ -3879,10 +3879,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               }
               if (modelReasoningCap && typeof modelReasoningCap === "object") {
                 modelReasoningCap._modelId = value;
+                modelReasoningCap._providerId = this._currentProvider;
               }
               break;
             }
-            case "provider": this._currentProvider = value; break;
+            case "provider": {
+              this._currentProvider = value;
+              const foundModel = this._models.find((m: any) => m.id === this._currentModel && m.provider === value);
+              modelReasoningCap = (foundModel as any)?.reasoning;
+              if (this._rpcClient && this._currentModel) {
+                try {
+                  modelReasoningCap = await this._rpcClient.call("model.reasoning_capability", {
+                    provider: value,
+                    model: this._currentModel,
+                  });
+                } catch {
+                  // Keep cached capabilities if discovery is unavailable.
+                }
+              }
+              if (modelReasoningCap && typeof modelReasoningCap === "object") {
+                modelReasoningCap._modelId = this._currentModel;
+                modelReasoningCap._providerId = value;
+              }
+              break;
+            }
             case "profile": this._currentProfile = value; break;
             case "reasoningEffort": this._currentReasoning = value; break;
           }

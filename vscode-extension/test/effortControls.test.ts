@@ -107,4 +107,42 @@ describe("Model-specific effort controls", () => {
     assert.equal(h.context.currentReasoning, "auto");
     assert.equal(h.elements.get("reasoning-budget-row").hidden, true);
   });
+
+  it("unlocks reasoning effort controls for custom provider with declared efforts", () => {
+    const h = harness();
+    h.context.currentProvider = "anymodel";
+    h.context.currentModel = "cx/gpt-6-luna";
+    h.context.allModels = [{
+      id: "cx/gpt-6-luna",
+      provider: "anymodel",
+      reasoning: {
+        mode: "configurable",
+        supported_efforts: ["low", "medium", "high", "xhigh"],
+        default_effort: "auto",
+        request_format: "openai",
+      },
+    }];
+    h.run("updateReasoningUI()");
+    assert.equal(h.elements.get("btn-prompt-reasoning").disabled, false);
+    assert.deepEqual(
+      h.elements.get("reasoning-slider-labels").children.map((b: any) => b.textContent),
+      ["Auto", "Low", "Medium", "High", "Xhigh"]
+    );
+    h.run("setReasoningLevel('high', true)");
+    assert.equal(h.posts.length, 1);
+    assert.equal(h.posts[0].value, "high");
+  });
+
+  it("locks reasoning effort controls to auto when custom provider has no declared efforts", () => {
+    const h = harness();
+    h.context.currentProvider = "anymodel";
+    h.context.currentModel = "cx/gpt-6-luna";
+    h.context.allModels = [{
+      id: "cx/gpt-6-luna",
+      provider: "anymodel",
+    }];
+    h.run("updateReasoningUI()");
+    assert.equal(h.elements.get("btn-prompt-reasoning").disabled, true);
+    assert.equal(h.elements.get("prompt-reasoning-label").textContent, "N/A");
+  });
 });
