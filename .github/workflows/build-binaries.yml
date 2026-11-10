@@ -7,12 +7,19 @@ name: Build Platform Binaries
 # `vsce publish --target <platform>` or `ovsx publish --target <platform>`.
 #
 # Triggers: push of a v* tag  OR  manual workflow_dispatch.
+# A tag push publishes. A manual run publishes only from main with `publish` ticked,
+# for a version whose tag build could not publish.
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish to the VS Code Marketplace and Open VSX (main only)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -148,7 +155,7 @@ jobs:
     name: Publish to VS Code Marketplace
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main')
     environment: marketplace
     permissions:
       contents: read
@@ -176,7 +183,7 @@ jobs:
     name: Publish to Open VSX
     needs: build                         # wait for ALL platform builds to pass
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main')
     steps:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
