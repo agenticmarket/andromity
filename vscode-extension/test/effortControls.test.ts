@@ -110,11 +110,11 @@ describe("Model-specific effort controls", () => {
 
   it("unlocks reasoning effort controls for custom provider with declared efforts", () => {
     const h = harness();
-    h.context.currentProvider = "anymodel";
+    h.context.currentProvider = "example-endpoint";
     h.context.currentModel = "cx/gpt-6-luna";
     h.context.allModels = [{
       id: "cx/gpt-6-luna",
-      provider: "anymodel",
+      provider: "example-endpoint",
       reasoning: {
         mode: "configurable",
         supported_efforts: ["low", "medium", "high", "xhigh"],
@@ -135,11 +135,11 @@ describe("Model-specific effort controls", () => {
 
   it("locks reasoning effort controls to auto when custom provider has no declared efforts", () => {
     const h = harness();
-    h.context.currentProvider = "anymodel";
+    h.context.currentProvider = "example-endpoint";
     h.context.currentModel = "cx/gpt-6-luna";
     h.context.allModels = [{
       id: "cx/gpt-6-luna",
-      provider: "anymodel",
+      provider: "example-endpoint",
     }];
     h.run("updateReasoningUI()");
     assert.equal(h.elements.get("btn-prompt-reasoning").disabled, true);

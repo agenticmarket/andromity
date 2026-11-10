@@ -85,9 +85,10 @@ def validate_connection(values: dict[str, Any]) -> dict[str, Any]:
         "model": model,
         "api_version": str(values.get("api_version") or "").strip(),
     }
-    if "reasoning_efforts" in values and values.get("reasoning_efforts") is not None:
+    if values.get("reasoning_efforts") is not None and connection_id not in PRESETS and adapter in ("openai", "custom"):
         from andromity.core.effort import validate_reasoning_efforts
-        result["reasoning_efforts"] = validate_reasoning_efforts(values["reasoning_efforts"])
+        result["reasoning_efforts"] = [e for e in validate_reasoning_efforts(values["reasoning_efforts"])
+                                       if e not in ("auto", "on")]
     return result
 
 
@@ -107,8 +108,10 @@ def provider_info() -> list[dict[str, Any]]:
             "portal": portal,
             "airgap_blocked": not network_policy.url_allowed(_effective_base_url(name, saved)),
         }
-        if saved.get("reasoning_efforts"):
-            entry["reasoning_efforts"] = list(saved["reasoning_efforts"])
+        from andromity.core.effort import configured_reasoning_efforts
+        efforts = configured_reasoning_efforts(name, saved)
+        if efforts:
+            entry["reasoning_efforts"] = efforts
         result.append(entry)
     return result
 

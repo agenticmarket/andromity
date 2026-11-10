@@ -130,17 +130,17 @@ def provider_catalog() -> dict:
         info = {**result.get(name, {}), "name": saved.get("display_name") or result.get(name, {}).get("name", name)}
         if saved.get("base_url"):
             info["base_url"] = saved["base_url"]
-        models = list(info.get("models", []))
+        from andromity.core.effort import configured_reasoning_efforts
+        efforts = configured_reasoning_efforts(name, saved)
+        models = [dict(m) for m in info.get("models", [])]
         if saved.get("model") and not any(m["id"] == saved["model"] for m in models):
             model_item: dict[str, Any] = {"id": saved["model"], "description": "Configured model"}
-            if saved.get("reasoning_efforts"):
-                model_item["reasoning"] = {"supported_efforts": list(saved["reasoning_efforts"])}
+            if efforts:
+                model_item["reasoning"] = {"supported_efforts": list(efforts)}
             models.insert(0, normalize_endpoint_model(model_item, name))
-        elif saved.get("reasoning_efforts"):
-            efforts_list = list(saved["reasoning_efforts"])
+        elif efforts:
             for m in models:
-                if "reasoning" not in m:
-                    m["reasoning"] = {"supported_efforts": efforts_list}
+                m.setdefault("reasoning", {"supported_efforts": list(efforts)})
         info["models"] = models
         result[name] = info
     return result

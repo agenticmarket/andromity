@@ -136,7 +136,7 @@ def test_opencode_never_falls_back_to_another_credential(monkeypatch):
 
 def test_custom_connection_reasoning_efforts_missing_and_defaults():
     saved = connections.validate_connection({
-        "id": "custom", "model": "gpt-6-luna", "base_url": "https://api.anymodel.com/v1",
+        "id": "custom", "model": "gpt-6-luna", "base_url": "https://api.example.test/v1",
     })
     assert "reasoning_efforts" not in saved
 
@@ -152,21 +152,21 @@ def test_custom_connection_reasoning_efforts_missing_and_defaults():
 def test_custom_connection_reasoning_efforts_rejects_bad_values(bad_efforts):
     with pytest.raises(ValueError, match="Unknown reasoning effort|must be a list|must be non-empty strings"):
         connections.validate_connection({
-            "id": "custom", "model": "gpt-6-luna", "base_url": "https://api.anymodel.com/v1",
+            "id": "custom", "model": "gpt-6-luna", "base_url": "https://api.example.test/v1",
             "reasoning_efforts": bad_efforts,
         })
 
 
 def test_custom_connection_reasoning_efforts_accepts_and_normalizes_known_efforts():
     saved = connections.validate_connection({
-        "id": "custom", "model": "gpt-6-luna", "base_url": "https://api.anymodel.com/v1",
+        "id": "custom", "model": "gpt-6-luna", "base_url": "https://api.example.test/v1",
         "reasoning_efforts": ["LOW", "none", "Medium", "high", "xhigh"],
     })
     assert saved["reasoning_efforts"] == ["low", "off", "medium", "high", "xhigh"]
 
     # String input from comma-separated field in UI
     saved_str = connections.validate_connection({
-        "id": "custom", "model": "gpt-6-luna", "base_url": "https://api.anymodel.com/v1",
+        "id": "custom", "model": "gpt-6-luna", "base_url": "https://api.example.test/v1",
         "reasoning_efforts": "low, medium, high, xhigh",
     })
     assert saved_str["reasoning_efforts"] == ["low", "medium", "high", "xhigh"]

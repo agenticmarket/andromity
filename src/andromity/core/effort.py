@@ -30,6 +30,33 @@ KNOWN_EFFORTS: frozenset[str] = frozenset({
 })
 
 
+def configured_reasoning_efforts(provider: str, saved: Optional[Dict[str, Any]]) -> List[str]:
+    """Effort names a custom OpenAI-compatible connection declares, read without raising.
+
+    Built-in providers and other adapters get none, so a hand-edited config cannot unlock controls
+    that no request would carry.
+    """
+    from andromity.core.connections import PRESETS
+    if provider in PRESETS or not isinstance(saved, dict):
+        return []
+    if str(saved.get("type") or "openai").strip().lower() not in ("openai", "custom"):
+        return []
+    raw = saved.get("reasoning_efforts")
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    result: List[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        value = item.strip().lower()
+        value = "off" if value == "none" else value
+        if value in KNOWN_EFFORTS and value not in ("auto", "on") and value not in result:
+            result.append(value)
+    return result
+
+
 def validate_reasoning_efforts(raw: Any) -> List[str]:
     """Validate and normalize a list of reasoning effort names.
 
@@ -124,9 +151,11 @@ def _from_metadata(provider: str, metadata: Dict[str, Any]) -> Optional[Reasonin
             request_format = "openrouter_toggle"
         elif provider not in ("openrouter", "anthropic", "google", "openai"):
             from andromity.config import config
+            from andromity.core.connections import PRESETS
             saved = config.get_provider_config(provider) or {}
-            adapter = str(saved.get("type") or metadata.get("type") or "openai").strip().lower()
-            request_format = "openai" if adapter in ("openai", "custom") else adapter
+            adapter = str(saved.get("type") or "openai").strip().lower()
+            if provider not in PRESETS and adapter in ("openai", "custom"):
+                request_format = "openai"
         return _cap(_efforts(values), "provider metadata", request_format,
                     str(reasoning.get("default_effort", "auto")).lower(),
                     reasoning.get("mandatory") is True,
@@ -189,22 +218,12 @@ def get_model_reasoning_capability(provider_key: str, model_id: str,
         if cached and time.monotonic() - cached[0] < _TTL:
             return cached[1]
     from andromity.config import config
-    saved = config.get_provider_config(provider)
-    if saved and isinstance(saved.get("reasoning_efforts"), list):
-        efforts = _efforts(saved["reasoning_efforts"])
-        efforts = [e for e in efforts if e in KNOWN_EFFORTS or e == "off"]
-        if efforts:
-            adapter = str(saved.get("type") or "openai").strip().lower()
-            req_format = "openai" if adapter in ("openai", "custom") else adapter
-            cap = _cap(
-                efforts,
-                source="connection configuration",
-                request_format=req_format,
-                default=str(saved.get("default_effort", "auto")).lower(),
-            )
-            with _LOCK:
-                _DISCOVERED[(provider, model)] = (time.monotonic(), cap)
-            return cap
+    efforts = configured_reasoning_efforts(provider, config.get_provider_config(provider))
+    if efforts:
+        cap = _cap(efforts, source="connection configuration", request_format="openai")
+        with _LOCK:
+            _DISCOVERED[(provider, model)] = (time.monotonic(), cap)
+        return cap
     return ReasoningCapability(ReasoningMode.UNKNOWN,
                                description="Effort controls unavailable; using the provider default.")
 
@@ -437,6 +456,10 @@ def apply_reasoning_to_request(provider_name: str, model_id: str, effort: Option
         generation.pop("thinkingConfig", None)
     if isinstance(kwargs.get("output_config"), dict):
         kwargs["output_config"].pop("effort", None)
+    if isinstance(kwargs.get("allowed_openai_params"), list):
+        kwargs["allowed_openai_params"] = [p for p in kwargs["allowed_openai_params"] if p != "reasoning_effort"]
+        if not kwargs["allowed_openai_params"]:
+            kwargs.pop("allowed_openai_params")
     value = (effort or "auto").strip().lower()
     value = "off" if value == "none" else value
     if cap.mode in (ReasoningMode.NONE, ReasoningMode.UNKNOWN):
@@ -490,4 +513,7 @@ def apply_reasoning_to_request(provider_name: str, model_id: str, effort: Option
         kwargs.setdefault("extra_body", {}).setdefault("generationConfig", {})["thinkingConfig"] = {"thinkingBudget": 0 if value == "off" else -1}
     elif cap.request_format == "openai":
         kwargs["reasoning_effort"] = "none" if value == "off" else value
+        if provider_name != "openai":
+            allowed = [p for p in kwargs.get("allowed_openai_params") or [] if p != "reasoning_effort"]
+            kwargs["allowed_openai_params"] = allowed + ["reasoning_effort"]
     return kwargs

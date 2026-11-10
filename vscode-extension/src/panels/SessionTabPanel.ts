@@ -866,7 +866,7 @@ export class SessionTabPanel {
           if (key === "model" && message.provider) {
             await this._rpcClient.call("config.set", { section: "default", key: "provider", value: message.provider });
           }
-          const reasoningCapability = (key === "model" || key === "provider") ? await this._rpcClient?.call<any>("model.reasoning_capability", {
+          const reasoningCapability = key === "model" ? await this._rpcClient?.call<any>("model.reasoning_capability", {
             provider: this._currentProvider, model: this._currentModel,
           }).catch(() => null) : undefined;
           this._postMessage({ type: "config_updated", key, value, provider: this._currentProvider, reasoningCapability });

@@ -283,48 +283,37 @@ def test_refresh_invalidates_discovered_capabilities():
 
 def test_custom_provider_reasoning_capabilities_and_request_body(monkeypatch):
     from andromity.config import config
-    # 1. Missing reasoning_efforts -> unknown mode, no reasoning_effort injected
     monkeypatch.setattr(config, "get_provider_config", lambda p: {
-        "name": "anymodel", "type": "openai", "model": "cx/gpt-6-luna",
+        "name": "example-endpoint", "type": "openai", "model": "cx/gpt-6-luna",
     })
-    cap = get_model_reasoning_capability("anymodel", "cx/gpt-6-luna")
+    cap = get_model_reasoning_capability("example-endpoint", "cx/gpt-6-luna")
     assert cap.mode == ReasoningMode.UNKNOWN
     assert cap.supported_efforts == []
-    req = apply_reasoning_to_request("anymodel", "cx/gpt-6-luna", "high", {})
+    req = apply_reasoning_to_request("example-endpoint", "cx/gpt-6-luna", "high", {})
     assert "reasoning_effort" not in req
 
-    # 2. Declared reasoning_efforts -> configurable mode, mapped to openai request_format
     monkeypatch.setattr(config, "get_provider_config", lambda p: {
-        "name": "anymodel", "type": "openai", "model": "cx/gpt-6-luna",
+        "name": "example-endpoint", "type": "openai", "model": "cx/gpt-6-luna",
         "reasoning_efforts": ["low", "medium", "high", "xhigh"],
     })
-    effort.invalidate_reasoning_capabilities("anymodel")
-    cap = get_model_reasoning_capability("anymodel", "cx/gpt-6-luna")
+    effort.invalidate_reasoning_capabilities("example-endpoint")
+    cap = get_model_reasoning_capability("example-endpoint", "cx/gpt-6-luna")
     assert cap.mode == ReasoningMode.CONFIGURABLE
     assert cap.supported_efforts == ["low", "medium", "high", "xhigh"]
     assert cap.default_effort == "auto"
     assert cap.request_format == "openai"
 
-    # Outgoing request body mapping:
-    # high -> reasoning_effort="high"
-    assert apply_reasoning_to_request("anymodel", "cx/gpt-6-luna", "high", {}) == {"reasoning_effort": "high"}
-    # low -> reasoning_effort="low"
-    assert apply_reasoning_to_request("anymodel", "cx/gpt-6-luna", "low", {}) == {"reasoning_effort": "low"}
-    # xhigh -> reasoning_effort="xhigh"
-    assert apply_reasoning_to_request("anymodel", "cx/gpt-6-luna", "xhigh", {}) == {"reasoning_effort": "xhigh"}
-    # auto -> provider default, no reasoning_effort in body
-    assert apply_reasoning_to_request("anymodel", "cx/gpt-6-luna", "auto", {}) == {}
-    # None -> provider default, no reasoning_effort in body
-    assert apply_reasoning_to_request("anymodel", "cx/gpt-6-luna", None, {}) == {}
-    # Unsupported / undeclared runtime value -> falls back to auto, no reasoning_effort
-    assert apply_reasoning_to_request("anymodel", "cx/gpt-6-luna", "ultra", {}) == {}
-    assert apply_reasoning_to_request("anymodel", "cx/gpt-6-luna", "off", {}) == {}
+    for value in ("high", "low", "xhigh"):
+        assert apply_reasoning_to_request("example-endpoint", "cx/gpt-6-luna", value, {}) == {
+            "reasoning_effort": value, "allowed_openai_params": ["reasoning_effort"]}
+    for value in ("auto", None, "ultra", "off"):
+        assert apply_reasoning_to_request("example-endpoint", "cx/gpt-6-luna", value, {}) == {}
 
-    # 3. Provider declaring off/none support maps off -> "none" for openai request_format
     monkeypatch.setattr(config, "get_provider_config", lambda p: {
-        "name": "anymodel-off", "type": "openai", "model": "cx/gpt-6-luna",
+        "name": "example-endpoint-off", "type": "openai", "model": "cx/gpt-6-luna",
         "reasoning_efforts": ["off", "low", "high"],
     })
-    effort.invalidate_reasoning_capabilities("anymodel-off")
-    assert apply_reasoning_to_request("anymodel-off", "cx/gpt-6-luna", "off", {}) == {"reasoning_effort": "none"}
-    assert apply_reasoning_to_request("anymodel-off", "cx/gpt-6-luna", "none", {}) == {"reasoning_effort": "none"}
+    effort.invalidate_reasoning_capabilities("example-endpoint-off")
+    for value in ("off", "none"):
+        assert apply_reasoning_to_request("example-endpoint-off", "cx/gpt-6-luna", value, {}) == {
+            "reasoning_effort": "none", "allowed_openai_params": ["reasoning_effort"]}

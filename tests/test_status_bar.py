@@ -229,15 +229,15 @@ if __name__ == "__main__":
 def test_click_effort_segment_custom_provider_cycle():
     """Custom provider with declared reasoning_efforts cycles through those efforts."""
     config.save_provider({
-        "id": "anymodel",
-        "display_name": "AnyModel Custom",
-        "base_url": "https://api.anymodel.com/v1",
+        "id": "example-endpoint",
+        "display_name": "Example endpoint Custom",
+        "base_url": "https://api.example.test/v1",
         "model": "cx/gpt-6-luna",
         "type": "openai",
         "reasoning_efforts": ["low", "high", "xhigh"],
     })
     sb = StatusBar()
-    sb._provider = "anymodel"
+    sb._provider = "example-endpoint"
     sb._model = "cx/gpt-6-luna"
     sb._effort = "auto"
     sb._refresh_text = lambda: None
