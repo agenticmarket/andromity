@@ -190,7 +190,7 @@ describe("opening a path from a webview", () => {
   });
 });
 
-describe("links to network shares", () => {
+describe("links to network shares", { skip: process.platform !== "win32" && "UNC share targets are Windows paths" }, () => {
   const share = "\\\\203.0.113.9\\share\\";
   const links: Record<string, string> = {
     "/ws/share": share,

@@ -162,12 +162,10 @@ export async function prepareContext(deps: FlowDeps): Promise<RepoContext> {
     if (!deps.github) {
       context.github.problem = "signed_out";
     } else {
+      const github = deps.github;
+      const viewerCall = github.viewer().then((login) => { context.github.viewer = login; return login; });
       try {
-        const github = deps.github;
-        const [viewer, repo] = await Promise.all([
-          github.viewer().then((login) => { context.github.viewer = login; return login; }),
-          github.repository(parsed.owner, parsed.repo),
-        ]);
+        const [viewer, repo] = await Promise.all([viewerCall, github.repository(parsed.owner, parsed.repo)]);
         context.github.viewer = viewer;
         context.github.repo = repo;
         context.github.headOwner = repo.owner;
@@ -176,6 +174,7 @@ export async function prepareContext(deps: FlowDeps): Promise<RepoContext> {
         context.baseOptions = (await deps.github.branches(context.github.target.owner, context.github.target.repo).catch(() => [] as string[]))
           .filter((name) => name.toLowerCase() !== SNAPSHOT_BRANCH);
       } catch (error) {
+        await viewerCall.catch(() => null);
         context.github.problem = githubProblemOf(error);
         context.github.ssoUrl = error instanceof GitHubError ? error.ssoUrl : null;
       }

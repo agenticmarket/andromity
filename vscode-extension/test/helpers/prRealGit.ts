@@ -59,7 +59,7 @@ export function gitOk(cwd: string, env: NodeJS.ProcessEnv, args: string[], input
 
 /** A work repository on `main` with one commit, pushed to a bare repository that origin is redirected to. */
 export function makeSandbox(name = "orders"): Sandbox {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "andromity-pr-e2e-")));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "andromity-pr-e2e-")));
   const env = isolatedEnv(dir);
   const bare = path.join(dir, "remote", `${name}.git`);
   const work = path.join(dir, "work");
@@ -150,6 +150,7 @@ export class GitCliPort implements GitPort {
         if (code === 0) resolve({ stdout, stderr });
         else reject(new GitError(args, stderr, code ?? 1, vscodeGitErrorCode(args, stderr)));
       });
+      child.stdin.on("error", () => {});
       if (input !== undefined) child.stdin.end(input);
       else child.stdin.end();
     });
@@ -364,6 +365,7 @@ export function runGit(cwd: string, env: NodeJS.ProcessEnv, args: string[], inpu
       if (code === 0) resolve({ stdout, stderr });
       else reject(new GitError(args, stderr, code ?? 1, vscodeGitErrorCode(args, stderr)));
     });
+    child.stdin.on("error", () => {});
     child.stdin.end(input ?? "");
   });
 }
