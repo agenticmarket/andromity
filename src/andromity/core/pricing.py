@@ -107,6 +107,7 @@ def calculate_cost(usage: dict[str, Any], provider: str, model: str) -> CostResu
     prompt = int(usage.get("prompt_tokens", 0) or 0)
     completion = int(usage.get("completion_tokens", 0) or 0)
     cached = int(usage.get("cached_tokens", 0) or 0)
+    cache_write = int(usage.get("cache_write_tokens", 0) or 0)
     reasoning = int(usage.get("reasoning_tokens", 0) or 0)
     # Reasoning tokens are billed as output (OpenAI o-series, DeepSeek-R1, etc.)
     # Some providers report them separately; add to completion if not already included.
@@ -125,6 +126,8 @@ def calculate_cost(usage: dict[str, Any], provider: str, model: str) -> CostResu
                 }
                 if cached:
                     kwargs["cache_read_input_tokens"] = cached
+                if cache_write:
+                    kwargs["cache_creation_input_tokens"] = cache_write
                 try:
                     result = litellm.cost_per_token(**kwargs)
                 except TypeError:

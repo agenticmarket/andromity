@@ -156,7 +156,7 @@ def test_anthropic_live_effort_flags_and_adaptive_request():
     assert cap.supported_efforts == ["low", "xhigh"]
     request = apply_reasoning_to_request("anthropic", "future", "xhigh", {}, cap)
     assert request["output_config"] == {"effort": "xhigh"}
-    assert request["thinking"] == {"type": "adaptive"}
+    assert request["thinking"] == {"type": "adaptive", "display": "summarized"}
     assert apply_reasoning_to_request("anthropic", "future", "off", {}, cap) == {}
 
 
@@ -268,7 +268,7 @@ def test_anthropic_off_rules_from_live_official_table(model, off, mandatory):
     assert ("off" in cap.supported_efforts) is off
     assert cap.is_mandatory is mandatory
     request = apply_reasoning_to_request("anthropic", model, "off", {}, cap)
-    assert bool(request) is off
+    assert (request.get("thinking", {}).get("type") == "disabled") is off
     if model == "claude-opus-5":
         assert request["output_config"] == {"effort": "high"}
 

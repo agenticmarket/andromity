@@ -70,6 +70,7 @@ class ReasoningCapability:
     budget_min: Optional[int] = None
     budget_max: Optional[int] = None
     off_effort: Optional[str] = None
+    thinks_by_default: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         result = asdict(self)
@@ -320,6 +321,8 @@ def enrich_anthropic_capability(html: str, model: str, cap: ReasoningCapability)
         if not table or '"disabled"' not in table[0]:
             continue
         column = table[0].index('"disabled"')
+        headers = [re.sub(r"[^a-z ]", "", cell.lower()).strip() for cell in table[0]]
+        omitted = headers.index("no thinking field") if "no thinking field" in headers else None
         for row in table[1:]:
             if len(row) <= column or normalize(row[0]) != normalize(model):
                 continue
@@ -331,8 +334,9 @@ def enrich_anthropic_capability(html: str, model: str, cap: ReasoningCapability)
             if allowed:
                 values.append("off")
             mandatory = rule.startswith("400")
+            thinks = omitted is not None and len(row) > omitted and row[omitted].lower().startswith("adaptive")
             return replace(cap, supported_efforts=values, off_effort=off_effort,
-                           is_mandatory=mandatory,
+                           is_mandatory=mandatory, thinks_by_default=thinks,
                            mode=ReasoningMode.TOGGLEABLE if allowed else ReasoningMode.MANDATORY if mandatory else cap.mode,
                            source="provider metadata and official Anthropic thinking documentation")
     return cap
@@ -410,6 +414,16 @@ def is_valid_effort(cap: ReasoningCapability, value: str) -> bool:
             and (budget != 0 or "off" in cap.supported_efforts))
 
 
+def _visible_thinking() -> Dict[str, str]:
+    return {"type": "adaptive", "display": "summarized"}
+
+
+def _provider_default(cap: ReasoningCapability, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    if cap.request_format == "anthropic_adaptive" and cap.thinks_by_default:
+        kwargs["thinking"] = _visible_thinking()
+    return kwargs
+
+
 def apply_reasoning_to_request(provider_name: str, model_id: str, effort: Optional[str],
                                kwargs: Dict[str, Any], capability: Optional[ReasoningCapability] = None) -> Dict[str, Any]:
     cap = capability or get_model_reasoning_capability(provider_name, model_id)
@@ -425,8 +439,10 @@ def apply_reasoning_to_request(provider_name: str, model_id: str, effort: Option
         kwargs["output_config"].pop("effort", None)
     value = (effort or "auto").strip().lower()
     value = "off" if value == "none" else value
-    if cap.mode in (ReasoningMode.NONE, ReasoningMode.UNKNOWN) or value == "auto":
+    if cap.mode in (ReasoningMode.NONE, ReasoningMode.UNKNOWN):
         return kwargs
+    if value == "auto":
+        return _provider_default(cap, kwargs)
     budget = None
     if value.startswith("budget:") and cap.supports_max_tokens:
         try:
@@ -447,7 +463,7 @@ def apply_reasoning_to_request(provider_name: str, model_id: str, effort: Option
     if value not in cap.supported_efforts:
         value = cap.default_effort
     if value == "auto":
-        return kwargs
+        return _provider_default(cap, kwargs)
     if provider_name == "openrouter" and cap.request_format == "openrouter_toggle":
         kwargs.setdefault("extra_body", {})["reasoning"] = {"enabled": value != "off"}
     elif provider_name == "openrouter":
@@ -458,7 +474,7 @@ def apply_reasoning_to_request(provider_name: str, model_id: str, effort: Option
             if cap.off_effort:
                 kwargs.setdefault("output_config", {})["effort"] = cap.off_effort
         else:
-            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["thinking"] = _visible_thinking()
             kwargs.setdefault("output_config", {})["effort"] = value
     elif cap.request_format == "anthropic_budget":
         if value == "off":

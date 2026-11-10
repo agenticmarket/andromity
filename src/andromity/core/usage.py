@@ -43,11 +43,13 @@ def normalize_usage(raw: Any, source: str = "provider") -> Dict[str, Any]:
         raw, "reasoning_tokens", "thoughts_token_count", "thoughtsTokenCount",
         default=_get(completion_details, "reasoning_tokens")
     )
+    cache_write = _get(raw, "cache_write_tokens", "cache_creation_input_tokens",
+                       default=_get(prompt_details, "cache_creation_tokens"))
     total = _get(raw, "total_tokens", "totalTokenCount")
     if not total:
         total = prompt + completion + reasoning
 
-    return {
+    result = {
         "prompt_tokens": prompt,
         "completion_tokens": completion,
         "total_tokens": total,
@@ -55,3 +57,6 @@ def normalize_usage(raw: Any, source: str = "provider") -> Dict[str, Any]:
         "reasoning_tokens": reasoning,
         "usage_source": source,
     }
+    if cache_write:
+        result["cache_write_tokens"] = cache_write
+    return result

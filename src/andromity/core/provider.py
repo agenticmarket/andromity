@@ -86,13 +86,64 @@ def _rejection_error(seen: List[BaseException]) -> ProviderRejectedError:
     return ProviderRejectedError(text.strip() or "The provider returned no response.", status)
 
 
-def _format_stall_text(provider_name: str, model: str, timeout: float) -> str:
+def _format_stall_text(provider_name: str, model: str, timeout: float, reasoning_hidden: bool = False) -> str:
+    if reasoning_hidden:
+        return (
+            f"\n**[Provider stalled]** {provider_name}/{model} sent nothing within {timeout:.0f}s. "
+            "This model does not show its reasoning while it thinks, so it may still have been working.\n"
+            "• Lower the effort for this task and try again.\n"
+            "• Or switch model with /model.\n"
+        )
     return (
         f"\n**[Provider stalled]** {provider_name}/{model} sent nothing within {timeout:.0f}s "
         "(upstream queued or overloaded).\n"
         "• Try again — queued requests usually clear quickly.\n"
         "• Or switch model with /model.\n"
     )
+
+
+FIRST_TOKEN_TIMEOUT = 60.0
+LOCAL_FIRST_TOKEN_TIMEOUT = 600.0
+HIDDEN_REASONING_DEFAULT_WINDOW = 300.0
+HIDDEN_REASONING_WINDOWS = {
+    "minimal": 120.0, "low": 120.0, "medium": 300.0, "high": 600.0, "xhigh": 900.0, "max": 900.0,
+}
+ANTHROPIC_CACHE_POINTS = (
+    {"location": "message", "role": "system"},
+    {"location": "message", "index": -1},
+)
+
+
+def _requested_effort(kwargs: Dict[str, Any], effort: Optional[str]) -> str:
+    output_config = kwargs.get("output_config") if isinstance(kwargs.get("output_config"), dict) else {}
+    extra_body = kwargs.get("extra_body") if isinstance(kwargs.get("extra_body"), dict) else {}
+    reasoning = extra_body.get("reasoning") if isinstance(extra_body.get("reasoning"), dict) else {}
+    if reasoning.get("enabled") is False:
+        return "off"
+    for value in (kwargs.get("reasoning_effort"), output_config.get("effort"), reasoning.get("effort")):
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return (effort or "auto").strip().lower()
+
+
+def _hidden_reasoning_window(provider_name: str, kwargs: Dict[str, Any], capability: Any,
+                             effort: Optional[str]) -> Optional[float]:
+    """Seconds a request may stay silent while its model reasons out of sight.
+
+    None when the request does not reason, or its reasoning streams back as it happens.
+    """
+    thinking = kwargs.get("thinking")
+    if isinstance(thinking, dict) and (thinking.get("type") == "disabled" or thinking.get("display") == "summarized"):
+        return None
+    value = _requested_effort(kwargs, effort)
+    if value in ("off", "none"):
+        return None
+    from andromity.core.effort import ReasoningMode
+    reasons = getattr(capability, "mode", None) in (
+        ReasoningMode.MANDATORY, ReasoningMode.TOGGLEABLE, ReasoningMode.CONFIGURABLE, ReasoningMode.ROUTER)
+    if not reasons and provider_name != "anthropic":
+        return None
+    return HIDDEN_REASONING_WINDOWS.get(value, HIDDEN_REASONING_DEFAULT_WINDOW)
 
 
 def _is_local_base_url(base_url: Optional[str]) -> bool:
@@ -449,15 +500,22 @@ async def stream_completion(
     apply_reasoning_to_request(provider_name, model, reasoning_effort, kwargs, capability)
     if max_tokens:
         kwargs.setdefault("max_tokens", int(max_tokens))
+    if provider_name == "anthropic":
+        kwargs.setdefault("cache_control_injection_points", [dict(point) for point in ANTHROPIC_CACHE_POINTS])
 
     # Upstream retry with backoff for stalls, rate limits, and transient drops
     backoff = list(STREAM_BACKOFF_DELAYS) if retry else []
     total_attempts = len(backoff) + 1
 
+    reasoning_window = None
     if first_token_timeout is None:
-        first_token_timeout = (
-            600.0 if (provider_name == "ollama" or _is_local_base_url(base_url)) else 60.0
-        )
+        if provider_name == "ollama" or _is_local_base_url(base_url):
+            first_token_timeout = LOCAL_FIRST_TOKEN_TIMEOUT
+        else:
+            reasoning_window = _hidden_reasoning_window(provider_name, kwargs, capability, reasoning_effort)
+            first_token_timeout = max(FIRST_TOKEN_TIMEOUT, reasoning_window or 0.0)
+            if reasoning_window:
+                log.info("stream_completion: reasoning is not streamed; allowing %.0fs of silence", first_token_timeout)
 
     for attempt in range(total_attempts):
         has_emitted_content = False
@@ -519,7 +577,8 @@ async def stream_completion(
                         yield event
                     return
 
-                if attempt < len(backoff):
+                stalled_while_reasoning = isinstance(e, ProviderStalledError) and reasoning_window is not None
+                if attempt < len(backoff) and not stalled_while_reasoning:
                     hinted = _retry_hint(msg, _response_headers(_exception_chain(e)))
                     wait_s = min(max(hinted, 1.0), 30.0) if hinted is not None else backoff[attempt]
                     log.warning(
@@ -529,13 +588,15 @@ async def stream_completion(
                     await asyncio.sleep(wait_s)
                     continue
                 else:
-                    log.error("Provider call failed after %d attempts: %s (HTTP %s).", total_attempts, type(e).__name__, getattr(e, "status_code", "unknown"))
-                    for event in _error_events(e, provider_name, model, has_images, secrets=(resolved.get("api_key"),)):
+                    log.error("Provider call failed after %d attempts: %s (HTTP %s).", attempt + 1, type(e).__name__, getattr(e, "status_code", "unknown"))
+                    for event in _error_events(e, provider_name, model, has_images, secrets=(resolved.get("api_key"),),
+                                               reasoning_hidden=stalled_while_reasoning):
                         yield event
                     return
 
             # 2. Watchdog: guard against upstream queue stall
-            response_stream = _first_token_guard(response_stream, first_token_timeout)
+            idle_window = (first_token_timeout,) if reasoning_window else ()
+            response_stream = _first_token_guard(response_stream, first_token_timeout, *idle_window)
 
             # 3. Stream chunks
             async for chunk in response_stream:
@@ -644,8 +705,10 @@ async def stream_completion(
                 or (provider_name == GATEWAY_PROVIDER and gateway_error(e, "quota_exceeded") is not None)
             )
 
+            stalled_while_reasoning = isinstance(e, ProviderStalledError) and reasoning_window is not None
             # If stalled or failed BEFORE emitting any tokens, retry with backoff ONLY for transient errors
-            if not has_emitted_content and not is_non_retryable and attempt < len(backoff):
+            if (not has_emitted_content and not is_non_retryable and not stalled_while_reasoning
+                    and attempt < len(backoff)):
                 wait_s = backoff[attempt]
                 log.warning(
                     "Upstream stalled or failed before emitting tokens (%s). Retrying in %.0fs (attempt %d/%d)...",
@@ -655,7 +718,8 @@ async def stream_completion(
                 continue
 
             log.error("Provider stream error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
-            for event in _error_events(e, provider_name, model, has_images, usage, secrets=(resolved.get("api_key"),)):
+            for event in _error_events(e, provider_name, model, has_images, usage, secrets=(resolved.get("api_key"),),
+                                       reasoning_hidden=stalled_while_reasoning):
                 yield event
             return
 
@@ -666,11 +730,12 @@ def _is_final_client_error(status: Optional[int]) -> bool:
 
 
 def _error_events(e: Exception, provider_name: str, model: str, has_images: bool,
-                  usage: Optional[Dict[str, Any]] = None, secrets: Iterable[Optional[str]] = ()) -> List[StreamEvent]:
+                  usage: Optional[Dict[str, Any]] = None, secrets: Iterable[Optional[str]] = (),
+                  reasoning_hidden: bool = False) -> List[StreamEvent]:
     """The card for a failed call and the Done event that ends the turn with its error type."""
     info = classify_error_info(e, provider=provider_name, model=model, has_images=has_images)
     if isinstance(e, ProviderStalledError):
-        text = _format_stall_text(provider_display_name(provider_name), model, e.timeout)
+        text = _format_stall_text(provider_display_name(provider_name), model, e.timeout, reasoning_hidden)
     else:
         text = format_error_for_client(info)
     message = None if _no_reply(e) else short_error_detail(e, secrets=secrets)
