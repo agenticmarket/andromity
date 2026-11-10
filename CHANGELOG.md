@@ -2,6 +2,30 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.27] — 2026-11-11
+
+### Added
+- **Search the Andromity Hub (VS Code).** A search box at the top of the Hub's sidebar finds sections, settings, models, MCP servers, skills and anything else the Hub lists, and tolerates typos. Enter or a click opens the match and highlights it. `/` or Ctrl+F (Cmd+F) jumps to the box.
+- **Reasoning effort for custom OpenAI-compatible connections.** A custom connection can declare the effort levels its endpoint supports (`reasoning_efforts` in config.toml, or the new field in the connection form), and the effort picker then offers them and sends `reasoning_effort` with each request. Thanks to Nikunj Maheshwari (#19).
+- **A new effort picker (VS Code).** A stepped rail shows only the levels the model supports, with an Auto switch and a short hint per level.
+- **Slow-request and freeze logging.** The engine logs requests that take 5 seconds or more, and when its event loop is blocked for 2 seconds or more it logs the code that was running, so a slow start can be diagnosed from the Andromity output.
+
+### Changed
+- **Claude shows its thinking as it happens.** Claude 5 models think without returning any text by default. Andromity now asks for the summarized thinking, so the thinking block fills in while the model works, at the same token cost.
+- **Models that keep their reasoning hidden are given time to think.** Requests whose reasoning can't stream (such as OpenAI reasoning models) may stay silent for longer before Andromity treats them as stalled: 2 minutes at low effort up to 15 minutes at the highest, and such a stall is not retried. While a reply hasn't started, the chat says the model is thinking and, after 30 seconds, that some models don't show their reasoning.
+- **Prompt caching for Anthropic.** The system prompt and the newest message are marked as cache points, so long sessions reuse the earlier conversation instead of sending it at full price every step, and replies start sooner. Cache writes are priced in the cost display.
+- **The Ollama notice appears once (VS Code)**, says whether the model runs on this computer or on Ollama's cloud, never switches you to a cloud model on its own, and no longer replaces a model you chose.
+- **Model picker (VS Code):** each model shows its full name, provider, id and price on hover, and the price badge gives way to the name.
+
+### Fixed
+- **VS Code stopped responding after startup.** Listing MCP servers waited for every server to start, up to 30 seconds each, and enough of those calls blocked creating or opening a session ("RPC timeout (30000ms) for method: session.create"). MCP servers now start in the background, and session, trust, status and prompt calls never wait behind other requests. Importing the model library no longer freezes the engine during the first prompt, request timeouts start only once the engine is running, and the chat no longer waits for the model, provider and skill lists before it appears.
+- **Thinking models were cut off at 60 seconds.** A Claude model thinking for more than a minute was treated as stalled and the request was sent again three times.
+- **Effort for custom connections never reached the endpoint**, because LiteLLM dropped `reasoning_effort` for model names it doesn't know.
+- **Allowed commands from config.toml were missing from Trust & Security (VS Code)**, and removing one could have erased the whole list.
+- **An empty or non-UTF-8 MCP config file** (such as `~/.gemini/config/mcp_config.json`) no longer warns on every action or hides the servers in other config files.
+- **Untrusted folders no longer log git errors with tracebacks**, and the chat's side panel doesn't run git there.
+- **Several Andromity processes opening a new database at once** no longer fail with "database is locked".
+
 ## [0.2.26] — 2026-11-10
 
 ### Added
