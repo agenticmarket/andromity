@@ -10112,6 +10112,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
 
+        case 'startup_lists': {
+          if (Array.isArray(msg.models) && msg.models.length > 0) allModels = msg.models;
+          if (Array.isArray(msg.providers)) allProviders = msg.providers;
+          if (Array.isArray(msg.skills)) allSkills = msg.skills;
+          syncKeyRequiredNote();
+          updateModelBadge();
+          break;
+        }
+
         case 'ollama_detected': {
           if (Array.isArray(msg.models) && msg.models.length > 0) {
             allModels = msg.models;

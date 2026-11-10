@@ -2,9 +2,13 @@ import asyncio
 import json
 import logging
 import os
+import queue
+import re
 import sys
 import threading
-from typing import Optional
+import time
+import traceback
+from typing import Any, Awaitable, Callable, Optional, TextIO
 
 from andromity.server.protocol import (
     PARSE_ERROR,
@@ -93,13 +97,94 @@ UNQUEUED_METHODS = frozenset({
 })
 
 
-async def _dispatch_limited(semaphore: asyncio.Semaphore, msg_data: dict, run) -> None:
+SLOW_REQUEST_LOG_S = 5.0
+SHUTDOWN_REPLY_WAIT_S = 2.0
+LOOP_STALL_LOG_S = 2.0
+LOOP_HEARTBEAT_S = 0.25
+
+
+async def _dispatch_limited(semaphore: asyncio.Semaphore, msg_data: dict,
+                            run: Callable[[dict], Awaitable[None]]) -> None:
     method = msg_data.get("method")
+    name = re.sub(r"[\x00-\x1f\x7f]", "?", method[:80]) if isinstance(method, str) else "?"
+    received = time.monotonic()
+    waited = 0.0
     if isinstance(method, str) and method in UNQUEUED_METHODS:
         await run(msg_data)
-        return
-    async with semaphore:
-        await run(msg_data)
+    else:
+        async with semaphore:
+            waited = time.monotonic() - received
+            await run(msg_data)
+    took = time.monotonic() - received
+    if took >= SLOW_REQUEST_LOG_S:
+        log.info("RPC %s took %.1fs (%.1fs of it waiting for a free slot).", name, took, waited)
+
+
+class _LineWriter:
+    """Writes reply lines from its own thread, so a client that reads slowly never stalls the event loop."""
+
+    def __init__(self, stream: TextIO):
+        self._stream = stream
+        self._lines: "queue.Queue[Optional[str]]" = queue.Queue()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="andromity-stdout")
+        self._thread.start()
+
+    def write(self, line: str) -> None:
+        self._lines.put(line)
+
+    def _run(self) -> None:
+        while True:
+            line = self._lines.get()
+            if line is None:
+                return
+            try:
+                self._stream.write(line)
+                self._stream.flush()
+            except Exception as e:
+                log.debug("Could not write a reply to the client: %s", e)
+
+    def close(self, timeout: float = 2.0) -> None:
+        self._lines.put(None)
+        self._thread.join(timeout)
+
+
+class _LoopWatchdog:
+    """Logs what the event loop is running when it stops turning, so a frozen daemon explains itself in the log."""
+
+    def __init__(self) -> None:
+        self._beat = time.monotonic()
+        self._loop_thread = threading.get_ident()
+        self._stop = threading.Event()
+        self._task: Optional[asyncio.Task] = None
+        self._thread = threading.Thread(target=self._watch, daemon=True, name="andromity-loop-watchdog")
+
+    def start(self) -> None:
+        self._task = asyncio.get_running_loop().create_task(self._heartbeat())
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._task is not None:
+            self._task.cancel()
+
+    async def _heartbeat(self) -> None:
+        while True:
+            self._beat = time.monotonic()
+            await asyncio.sleep(LOOP_HEARTBEAT_S)
+
+    def _watch(self) -> None:
+        stalled_since: Optional[float] = None
+        while not self._stop.wait(LOOP_HEARTBEAT_S * 2):
+            last = self._beat
+            silent = time.monotonic() - last
+            if silent >= LOOP_STALL_LOG_S and stalled_since != last:
+                stalled_since = last
+                frame: Any = sys._current_frames().get(self._loop_thread)
+                where = "".join(traceback.format_stack(frame)[-12:]) if frame is not None else "(no stack)\n"
+                log.warning("The event loop has been blocked for %.1fs. It is running:\n%s", silent, where.rstrip())
+            elif stalled_since is not None and last != stalled_since:
+                log.warning("The event loop is running again after %.1fs.", last - stalled_since)
+                stalled_since = None
 
 
 def _get_or_create_daemon_token() -> str:
@@ -157,14 +242,12 @@ async def start_stdio_server():
     reader_thread = threading.Thread(target=_stdin_reader_thread, daemon=True)
     reader_thread.start()
 
-    write_lock = asyncio.Lock()
+    writer = _LineWriter(sys.stdout)
+    watchdog = _LoopWatchdog()
     semaphore = asyncio.Semaphore(16)
 
     async def _send_dict(data: dict):
-        line = json.dumps(data) + "\n"
-        async with write_lock:
-            sys.stdout.write(line)
-            sys.stdout.flush()
+        writer.write(json.dumps(data) + "\n")
 
     async def _send_notification(notif: JsonRpcNotification):
         await _send_dict(notif.to_dict())
@@ -190,37 +273,48 @@ async def start_stdio_server():
     async def _dispatch_request(msg_data: dict):
         await _dispatch_limited(semaphore, msg_data, _run_request)
 
+    in_flight: set = set()
+
     log.info("Andromity JSON-RPC stdio server ready and listening.")
     loop.call_later(PREWARM_DELAY_S, _start_prewarm)
+    watchdog.start()
     from andromity.telemetry import send_feature_used
     send_feature_used("app_started")
 
-    while True:
-        try:
-            line = await input_queue.get()
-            if line is None:
-                log.info("EOF received on stdin, shutting down stdio server.")
-                break
-
-            line_str = line.strip()
-            if not line_str:
-                continue
-
+    try:
+        while True:
             try:
-                msg = json.loads(line_str)
-            except json.JSONDecodeError as e:
-                err_resp = JsonRpcResponse.err(None, PARSE_ERROR, f"Invalid JSON: {e}")
-                await _send_dict(err_resp.to_dict())
-                continue
+                line = await input_queue.get()
+                if line is None:
+                    log.info("EOF received on stdin, shutting down stdio server.")
+                    break
 
-            if isinstance(msg, dict):
-                asyncio.create_task(_dispatch_request(msg))
+                line_str = line.strip()
+                if not line_str:
+                    continue
 
-        except asyncio.CancelledError:
-            log.info("Server task cancelled.")
-            break
-        except Exception as e:
-            log.exception("Unexpected error in stdio server loop: %s", e)
+                try:
+                    msg = json.loads(line_str)
+                except json.JSONDecodeError as e:
+                    err_resp = JsonRpcResponse.err(None, PARSE_ERROR, f"Invalid JSON: {e}")
+                    await _send_dict(err_resp.to_dict())
+                    continue
+
+                if isinstance(msg, dict):
+                    task = asyncio.create_task(_dispatch_request(msg))
+                    in_flight.add(task)
+                    task.add_done_callback(in_flight.discard)
+
+            except asyncio.CancelledError:
+                log.info("Server task cancelled.")
+                break
+            except Exception as e:
+                log.exception("Unexpected error in stdio server loop: %s", e)
+        if in_flight:
+            await asyncio.wait(set(in_flight), timeout=SHUTDOWN_REPLY_WAIT_S)
+    finally:
+        watchdog.stop()
+        writer.close()
 
 
 async def start_tcp_server(host: str = "127.0.0.1", port: int = 8765, allow_remote: bool = False):

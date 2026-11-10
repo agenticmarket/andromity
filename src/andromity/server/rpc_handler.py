@@ -2759,62 +2759,63 @@ class JsonRpcHandler:
                 except Exception:
                     pass
 
-            for p in providers_to_check:
-                cached = get_cached_live_models(p)
-                if p == "ollama":
-                    saved = config.get_provider_config(p) or {}
-                    try:
-                        cached = await asyncio.wait_for(asyncio.to_thread(
-                            fetch_live_models_sync, p, base_url=saved.get("base_url"),
-                        ), timeout=3.0)
-                    except Exception:
-                        cached = []
-                    if not cached:
-                        continue
-                if p == "openrouter" and openrouter_cached and not cached:
-                    cached = openrouter_cached
+            ollama_models: List[Dict[str, Any]] = []
+            if "ollama" in providers_to_check:
+                saved = config.get_provider_config("ollama") or {}
+                try:
+                    ollama_models = await asyncio.wait_for(asyncio.to_thread(
+                        fetch_live_models_sync, "ollama", base_url=saved.get("base_url"),
+                    ), timeout=3.0) or []
+                except Exception:
+                    ollama_models = []
 
+            def _build_rows() -> List[Dict[str, Any]]:
+                from andromity.core.models import get_models_for_provider
+                rows: List[Dict[str, Any]] = []
+                for p in providers_to_check:
+                    if p == "ollama":
+                        cached = ollama_models
+                        if not cached:
+                            continue
+                    else:
+                        cached = get_cached_live_models(p)
+                        if p == "openrouter" and openrouter_cached and not cached:
+                            cached = openrouter_cached
+                    try:
+                        flags = _key_flags(p)
+                        entries = cached or get_models_for_provider(p)
+                    except Exception as e:
+                        log.warning("Could not list models for %s: %s", p, e)
+                        continue
+                    for m in entries:
+                        m_id = m.get("id") if isinstance(m, dict) else None
+                        if not isinstance(m_id, str) or not m_id:
+                            continue
+                        try:
+                            rows.append(_row(p, m, m_id, cached, flags))
+                        except Exception as e:
+                            log.debug("Skipped a model row for %s: %s", p, e)
+                return rows
+
+            def _row(p: str, m: Dict[str, Any], m_id: str, cached: Any, flags: Dict[str, bool]) -> Dict[str, Any]:
                 from andromity.core.reasoning import get_model_reasoning_capability
-                flags = _key_flags(p)
-                if cached:
-                    for m in cached:
-                        m_id = m.get("id")
-                        models.append({
-                            "id": m_id,
-                            "name": m.get("name", m_id),
-                            "desc": m.get("desc", ""),
-                            "provider": p,
-                            "context": m.get("context", ""),
-                            "context_limit": m.get("context_limit") or get_context_limit_for_model(p, m_id),
-                            "pricing": m.get("pricing", ""),
-                            "is_free": m.get("is_free", False) or m_id.lower().endswith(":free"),
-                            "tags": m.get("tags", []),
-                            "is_pinned": _is_pinned(m_id, p),
-                            "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
-                            "source": "live",
-                            **flags,
-                        })
-                else:
-                    # Fallback to catalog instantly
-                    from andromity.core.models import get_models_for_provider
-                    for m in get_models_for_provider(p):
-                        m_id = m.get("id")
-                        ctx = get_context_limit_for_model(p, m_id)
-                        models.append({
-                            "id": m_id,
-                            "name": m.get("name", m_id),
-                            "desc": m.get("desc", ""),
-                            "provider": p,
-                            "context": m.get("context", ""),
-                            "context_limit": ctx,
-                            "pricing": m.get("pricing", ""),
-                            "is_free": m.get("is_free", False) or m_id.lower().endswith(":free"),
-                            "tags": m.get("tags", []),
-                            "is_pinned": _is_pinned(m_id, p),
-                            "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
-                            "source": "catalog",
-                            **flags,
-                        })
+                return {
+                    "id": m_id,
+                    "name": m.get("name", m_id),
+                    "desc": m.get("desc", ""),
+                    "provider": p,
+                    "context": m.get("context", ""),
+                    "context_limit": (m.get("context_limit") if cached else None) or get_context_limit_for_model(p, m_id),
+                    "pricing": m.get("pricing", ""),
+                    "is_free": m.get("is_free", False) or m_id.lower().endswith(":free"),
+                    "tags": m.get("tags", []),
+                    "is_pinned": _is_pinned(m_id, p),
+                    "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
+                    "source": "live" if cached else "catalog",
+                    **flags,
+                }
+
+            models = await asyncio.to_thread(_build_rows)
         except Exception as e:
             log.warning("Error listing models: %s", e)
         return models

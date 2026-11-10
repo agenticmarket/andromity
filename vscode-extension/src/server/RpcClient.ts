@@ -8,22 +8,62 @@ import {
 /** Matches the daemon's own 64 MB frame limit (server/main.py MAX_LINE_LENGTH). */
 export const MAX_BUFFERED_LINE_CHARS = 64 * 1024 * 1024;
 
+/** Request timers held for a daemon that has not spoken yet start anyway after this long. */
+export const DAEMON_READY_WAIT_LIMIT_MS = 120000;
+
+/** Calls slower than this are written to the output channel, so a slow start can be read from the log. */
+export const SLOW_CALL_LOG_MS = 5000;
+
+interface PendingRequest {
+  resolve: (res: any) => void;
+  reject: (err: any) => void;
+  timer: NodeJS.Timeout | null;
+  timeoutMs: number;
+  method: string;
+  sentAt: number;
+}
+
 export class RpcClient extends EventEmitter {
   private _nextId = 1;
-  private _pendingRequests = new Map<
-    string | number,
-    { resolve: (res: any) => void; reject: (err: any) => void; timer: NodeJS.Timeout }
-  >();
+  private _pendingRequests = new Map<string | number, PendingRequest>();
   private _sendRaw: (msg: string) => void;
   private _buffer = "";
   private _log: (msg: string) => void;
+  private _daemonReady: boolean;
+  private _readyLimit: NodeJS.Timeout | null = null;
 
-  constructor(sendRaw: (msg: string) => void, options?: { log?: (msg: string) => void }) {
+  /** With waitForDaemon, request timeouts only start counting once markDaemonReady() is called. */
+  constructor(sendRaw: (msg: string) => void, options?: { log?: (msg: string) => void; waitForDaemon?: boolean }) {
     super();
     this._sendRaw = sendRaw;
     // Route parse problems to the extension's output channel (visible to users)
     // instead of only the hidden DevTools console.
     this._log = options?.log ?? ((msg: string) => console.error(msg));
+    this._daemonReady = !options?.waitForDaemon;
+    if (!this._daemonReady) {
+      this._readyLimit = setTimeout(() => {
+        this._log(`[Andromity RPC] The engine has not answered after ${DAEMON_READY_WAIT_LIMIT_MS / 1000}s; starting request timeouts anyway.`);
+        this.markDaemonReady();
+      }, DAEMON_READY_WAIT_LIMIT_MS);
+    }
+  }
+
+  /** The daemon has produced output, so it is running: start the timeouts of calls sent before that. */
+  public markDaemonReady(): void {
+    if (this._daemonReady) return;
+    this._daemonReady = true;
+    if (this._readyLimit) clearTimeout(this._readyLimit);
+    this._readyLimit = null;
+    for (const [id, pending] of this._pendingRequests.entries()) {
+      if (!pending.timer) pending.timer = this._startTimer(id, pending);
+    }
+  }
+
+  private _startTimer(id: string | number, pending: PendingRequest): NodeJS.Timeout {
+    return setTimeout(() => {
+      this._pendingRequests.delete(id);
+      pending.reject(new Error(`RPC timeout (${pending.timeoutMs}ms) for method: ${pending.method}`));
+    }, pending.timeoutMs);
   }
 
   public handleIncomingMessage(raw: string): void {
@@ -110,12 +150,9 @@ export class RpcClient extends EventEmitter {
     };
 
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this._pendingRequests.delete(id);
-        reject(new Error(`RPC timeout (${timeoutMs}ms) for method: ${method}`));
-      }, timeoutMs);
-
-      this._pendingRequests.set(id, { resolve, reject, timer });
+      const pending: PendingRequest = { resolve, reject, timer: null, timeoutMs, method, sentAt: Date.now() };
+      if (this._daemonReady) pending.timer = this._startTimer(id, pending);
+      this._pendingRequests.set(id, pending);
       this._sendRaw(JSON.stringify(req) + "\n");
     });
   }
@@ -153,7 +190,11 @@ export class RpcClient extends EventEmitter {
     if (!pending) return;
 
     this._pendingRequests.delete(resp.id);
-    clearTimeout(pending.timer);
+    if (pending.timer) clearTimeout(pending.timer);
+    const took = Date.now() - pending.sentAt;
+    if (took >= SLOW_CALL_LOG_MS) {
+      this._log(`[Andromity RPC] ${pending.method.replace(/[\u0000-\u001f\u007f]/g, "?").slice(0, 80)} took ${(took / 1000).toFixed(1)}s.`);
+    }
 
     if (resp.error) {
       pending.reject(
@@ -189,8 +230,11 @@ export class RpcClient extends EventEmitter {
   }
 
   public close(reason = "RPC connection closed"): void {
-    for (const [id, pending] of this._pendingRequests.entries()) {
-      clearTimeout(pending.timer);
+    if (this._readyLimit) clearTimeout(this._readyLimit);
+    this._readyLimit = null;
+    this._daemonReady = true;
+    for (const pending of this._pendingRequests.values()) {
+      if (pending.timer) clearTimeout(pending.timer);
       pending.reject(new Error(reason));
     }
     this._pendingRequests.clear();

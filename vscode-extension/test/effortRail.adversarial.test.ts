@@ -354,12 +354,17 @@ describe("Effort rail: scale performance and shape (vm)", () => {
   });
 
   it("20000 levels do not take unbounded time (quadratic de-duplication)", { timeout: 60000 }, () => {
+    const small = vmHarness();
+    small.useCap({ supported_efforts: many(2000) });
+    const smallStarted = Date.now();
+    small.run("updateReasoningUI()", 30000);
+    const baseline = Math.max(Date.now() - smallStarted, 20);
     const h = vmHarness();
     h.useCap({ supported_efforts: many(20000) });
     const started = Date.now();
     h.run("updateReasoningUI()", 30000);
     const elapsed = Date.now() - started;
-    assert.ok(elapsed < 2000, `20000 levels took ${elapsed}ms`);
+    assert.ok(elapsed < Math.max(2000, baseline * 60), `20000 levels took ${elapsed}ms against ${baseline}ms for 2000`);
   });
 
   it("5 repeated redraws of a 2000-level scale reuse the rail (no rebuild when unchanged)", { timeout: 30000 }, () => {

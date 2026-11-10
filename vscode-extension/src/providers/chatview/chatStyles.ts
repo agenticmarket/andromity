@@ -1747,6 +1747,11 @@ ${STATUS_SHIMMER_STYLES}
       border-color: rgba(var(--tint), 0.06);
     }
 
+    .flyout-item:hover .flyout-item-meta,
+    .flyout-item:focus-within .flyout-item-meta {
+      display: none;
+    }
+
     .flyout-item.active {
       background: rgba(56, 189, 248, 0.08);
       border-color: rgba(56, 189, 248, 0.22);

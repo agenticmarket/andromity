@@ -85,6 +85,44 @@ interface OllamaDetection {
 
 const OLLAMA_BANNER_SHOWN_KEY = "andromity.ollamaBannerShown";
 
+/** How long the first chat render waits for the model, provider and skill lists before drawing without them. */
+const STARTUP_LISTS_WAIT_MS = 2500;
+
+interface StartupLists {
+  models?: ModelInfo[] | null;
+  providers?: ProviderInfo[] | null;
+  skills?: any[] | null;
+}
+
+/** An array result, or null when the call failed or answered with something that is not a list. */
+function listResult<T>(call: Promise<unknown>): Promise<T[] | null> {
+  return call.then((value) => (Array.isArray(value) ? (value as T[]) : null), () => null);
+}
+
+function withDefaultProviders(providers: ProviderInfo[] | null | undefined): ProviderInfo[] {
+  const result = Array.isArray(providers) ? [...providers] : [];
+  if (!result.some(p => p.id === "andromity")) {
+    result.unshift({ id: "andromity", name: "Andromity Auto", has_key: true, portal: "https://agenticmarket.dev" } as ProviderInfo);
+  }
+  return result;
+}
+
+function withDefaultModels(models: ModelInfo[] | null | undefined): ModelInfo[] {
+  const result = Array.isArray(models) ? [...models] : [];
+  if (!result.some(m => m.id === "auto" && m.provider === "andromity")) {
+    result.unshift({
+      id: "auto",
+      name: "Andromity Auto",
+      provider: "andromity",
+      desc: "Autonomous intelligence engine optimized for agentic coding",
+      context: "256K",
+      is_free: true,
+      tags: ["auto", "recommended"],
+    } as any);
+  }
+  return result;
+}
+
 function isOllamaCloudEntry(entry: any): boolean {
   const name = String(entry?.name || entry?.model || "");
   return Boolean(entry?.remote_host || entry?.remote_model) || /(?:^|[:-])cloud$/i.test(name);
@@ -2284,6 +2322,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _ollamaRefresh: Promise<void> | null = null;
+  private _startupListsGeneration = 0;
+
+  private _applyModelLists(models: ModelInfo[] | null | undefined, providers: ProviderInfo[] | null | undefined): void {
+    this._models = withDefaultModels(models);
+    this._providers = withDefaultProviders(providers);
+  }
+
+  /** Lists that missed the first render, applied only where nothing newer replaced them since. */
+  private _applyLateStartupLists(early: StartupLists, lists: StartupLists, postedModels: ModelInfo[], postedProviders: ProviderInfo[]): void {
+    const message: { type: string; models?: ModelInfo[]; providers?: ProviderInfo[]; skills?: any[] } = { type: "startup_lists" };
+    if (!early.models && lists.models?.length && this._models === postedModels) {
+      this._models = withDefaultModels(lists.models);
+      const known = this._lastOllamaStatus?.running ? this._lastOllamaStatus.bestModel : null;
+      if (known) this._addOllamaModel(known);
+      if (this._currentProvider === "ollama" && this._currentModel) this._addOllamaModel(this._currentModel);
+      message.models = this._models;
+    }
+    if (!early.providers && lists.providers?.length && this._providers === postedProviders) {
+      this._providers = withDefaultProviders(lists.providers);
+      message.providers = this._providers;
+    }
+    if (!early.skills && lists.skills) message.skills = lists.skills;
+    if (message.models || message.providers || message.skills) {
+      this._postToWebview({ ...message, models: this._models, providers: this._providers });
+    }
+  }
   private _ollamaAnnouncePending = false;
 
   /** Background Ollama detection that patches the already-rendered chat state. */
@@ -2337,36 +2401,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     try {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const [configData, models, providers, sessions, trustStatus, skills] = await Promise.all([
-        this._rpcClient.call<any>("config.get", { project_path: workspaceFolder }).catch(() => ({})),
-        this._rpcClient.call<ModelInfo[]>("config.list_models", {}).catch(() => []),
-        this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}).catch(() => []),
-        this._rpcClient.call<SessionInfo[]>("session.list", { project_path: workspaceFolder }).catch(() => []),
-        this._rpcClient.call<any>("trust.status", { project_path: workspaceFolder }).catch(() => ({ is_trusted: false })),
-        this._rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }).catch(() => []),
+      const rpc = this._rpcClient;
+      const generation = ++this._startupListsGeneration;
+      const lists: StartupLists = {};
+      const listsLoaded = Promise.all([
+        listResult<ModelInfo>(rpc.call("config.list_models", {})).then((v) => { lists.models = v; }),
+        listResult<ProviderInfo>(rpc.call("config.list_providers", {})).then((v) => { lists.providers = v; }),
+        listResult<any>(rpc.call("skills.list", { project_path: workspaceFolder })).then((v) => { lists.skills = v; }),
       ]);
-
-      this._models = models || [];
-      this._providers = providers || [];
-      if (!this._providers.some(p => p.id === "andromity")) {
-        this._providers.unshift({
-          id: "andromity",
-          name: "Andromity Auto",
-          has_key: true,
-          portal: "https://agenticmarket.dev",
-        });
-      }
-      if (!this._models.some(m => m.id === "auto" && m.provider === "andromity")) {
-        this._models.unshift({
-          id: "auto",
-          name: "Andromity Auto",
-          provider: "andromity",
-          desc: "Autonomous intelligence engine optimized for agentic coding",
-          context: "256K",
-          is_free: true,
-          tags: ["auto", "recommended"],
-        } as any);
-      }
+      const [configData, sessions, trustStatus] = await Promise.all([
+        rpc.call<any>("config.get", { project_path: workspaceFolder }).catch(() => ({})),
+        rpc.call<SessionInfo[]>("session.list", { project_path: workspaceFolder }).catch(() => []),
+        rpc.call<any>("trust.status", { project_path: workspaceFolder }).catch(() => ({ is_trusted: false })),
+      ]);
+      let listWait: NodeJS.Timeout | undefined;
+      await Promise.race([
+        listsLoaded,
+        new Promise<void>((resolve) => { listWait = setTimeout(resolve, STARTUP_LISTS_WAIT_MS); }),
+      ]);
+      if (listWait) clearTimeout(listWait);
+      const early: StartupLists = { ...lists };
+      const skills = early.skills;
+      this._applyModelLists(early.models?.length ? early.models : this._models, early.providers?.length ? early.providers : this._providers);
       this._configData = configData || {};
       this._pinnedModels = Array.isArray(configData?.pinned_models) && configData.pinned_models.length > 0
         ? configData.pinned_models
@@ -2488,6 +2544,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         mascotEnabled: vscode.workspace.getConfiguration("andromity").get<boolean>("mascotEnabled", true),
         ollamaStatus: this._lastOllamaStatus,
       });
+      const postedModels = this._models;
+      const postedProviders = this._providers;
+      void listsLoaded.then(() => {
+        if (generation !== this._startupListsGeneration || this._rpcClient !== rpc) return;
+        this._applyLateStartupLists(early, lists, postedModels, postedProviders);
+      }).catch((err) => console.error("[Andromity Chat] Late startup lists were not applied:", err));
       // A ready-wait that timed out may have posted into a page that wasn't
       // listening yet; leave it undelivered so the late ready message resends.
       if (loadSession && this._view && deliveredToReadyPage && deliveryClient && deliveryGeneration === this._viewGeneration) {
