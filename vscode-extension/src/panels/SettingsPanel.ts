@@ -21,6 +21,7 @@ import { DOCS, INTEGRATIONS_URL } from "../docsLinks.js";
 import { CONNECTOR_ICONS } from "./connectorIcons.js";
 import { CONNECTOR_GUIDE_SLUGS } from "./connectorGuides.js";
 import { applyGitSetting, getGitSettingsPane, gitSettingsClient, gitSettingsState, signInToGitHub } from "./settings/gitSettings.js";
+import { getHubSearchStyles, HUB_SEARCH_MARKUP, hubSearchClient } from "./settings/hubSearch.js";
 
 // Hub actions recorded as anonymous feature use (the action name only, never the values).
 const HUB_FEATURES: Record<string, string> = {
@@ -3385,6 +3386,7 @@ export class SettingsPanel {
     #usage-share-preview { max-width:100%; max-height:420px; object-fit:contain; border-radius:8px; }
     .setting-group-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); margin: 18px 0 8px; }
     .git-setting-error { color: var(--vscode-errorForeground); }
+    ${getHubSearchStyles()}
   </style>
 </head>
 <body>
@@ -3402,6 +3404,7 @@ export class SettingsPanel {
         </div>
       </div>
     </div>
+${HUB_SEARCH_MARKUP}
 
     <div class="nav-tabs" id="nav-tabs-container">
       <button class="nav-tab active" data-tab="models" id="tab-btn-models" data-tooltip="Model Hub" aria-label="Model Hub">
@@ -6013,6 +6016,7 @@ SOFTWARE.</pre>
 
     ${getUsageScript()}
     (${gitSettingsClient.toString()})(vscode);
+    (${hubSearchClient.toString()})(switchTab);
 
     function renderUsageChart(sessions, range) {
       const container = document.getElementById("usage-bar-chart-container");
