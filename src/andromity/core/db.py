@@ -2,6 +2,7 @@
 import json
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional
@@ -54,6 +55,21 @@ def get_db_path() -> Path:
     return config_dir / "andromity.db"
 
 
+WAL_SWITCH_ATTEMPTS = 20
+
+
+def _enable_wal(conn: sqlite3.Connection) -> None:
+    """Switch to WAL, retrying while other connections hold the file: SQLite's busy timeout does not cover this switch."""
+    for attempt in range(WAL_SWITCH_ATTEMPTS):
+        try:
+            conn.execute("PRAGMA journal_mode = WAL;")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt == WAL_SWITCH_ATTEMPTS - 1:
+                raise
+            time.sleep(min(0.02 * (attempt + 1), 0.25))
+
+
 def get_conn() -> sqlite3.Connection:
     """Return a thread-local SQLite connection with WAL mode and row factory."""
     db_path = get_db_path()
@@ -72,7 +88,7 @@ def get_conn() -> sqlite3.Connection:
         
         # High performance & safety PRAGMAs (set busy_timeout first so lock waiting applies to all pragmas)
         conn.execute("PRAGMA busy_timeout = 10000;")
-        conn.execute("PRAGMA journal_mode = WAL;")
+        _enable_wal(conn)
         conn.execute("PRAGMA synchronous = NORMAL;")
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.execute("PRAGMA cache_size = -32000;")  # 32MB page cache
@@ -107,10 +123,10 @@ def init_schema() -> None:
     # schema before beginning a transaction, including legacy imports.
     if conn.in_transaction:
         return
-    key = _schema_key(conn)
-    if key is not None and _SCHEMA_READY.get(key) == _schema_version(conn):
-        return
     with _INIT_LOCK:
+        key = _schema_key(conn)
+        if key is not None and _SCHEMA_READY.get(key) == _schema_version(conn):
+            return
         schema_path = Path(__file__).parent / "schema.sql"
         if schema_path.exists():
             schema_sql = schema_path.read_text(encoding="utf-8")

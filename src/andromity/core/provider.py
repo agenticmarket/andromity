@@ -114,36 +114,47 @@ ANTHROPIC_CACHE_POINTS = (
 )
 
 
-def _requested_effort(kwargs: Dict[str, Any], effort: Optional[str]) -> str:
+def _sent_effort(kwargs: Dict[str, Any]) -> Optional[str]:
+    """The effort level the request itself carries, or None when it leaves the provider's default."""
     output_config = kwargs.get("output_config") if isinstance(kwargs.get("output_config"), dict) else {}
     extra_body = kwargs.get("extra_body") if isinstance(kwargs.get("extra_body"), dict) else {}
     reasoning = extra_body.get("reasoning") if isinstance(extra_body.get("reasoning"), dict) else {}
-    if reasoning.get("enabled") is False:
+    generation = extra_body.get("generationConfig") if isinstance(extra_body.get("generationConfig"), dict) else {}
+    thinking_config = generation.get("thinkingConfig") if isinstance(generation.get("thinkingConfig"), dict) else {}
+    if reasoning.get("enabled") is False or thinking_config.get("thinkingBudget") == 0:
         return "off"
-    for value in (kwargs.get("reasoning_effort"), output_config.get("effort"), reasoning.get("effort")):
+    for value in (kwargs.get("reasoning_effort"), output_config.get("effort"), reasoning.get("effort"),
+                  thinking_config.get("thinkingLevel")):
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
-    return (effort or "auto").strip().lower()
+    return None
 
 
-def _hidden_reasoning_window(provider_name: str, kwargs: Dict[str, Any], capability: Any,
-                             effort: Optional[str]) -> Optional[float]:
+def _hidden_reasoning_window(provider_name: str, kwargs: Dict[str, Any], capability: Any) -> Optional[float]:
     """Seconds a request may stay silent while its model reasons out of sight.
 
     None when the request does not reason, or its reasoning streams back as it happens.
     """
-    thinking = kwargs.get("thinking")
-    if isinstance(thinking, dict) and (thinking.get("type") == "disabled" or thinking.get("display") == "summarized"):
-        return None
-    value = _requested_effort(kwargs, effort)
-    if value in ("off", "none"):
-        return None
     from andromity.core.effort import ReasoningMode
-    reasons = getattr(capability, "mode", None) in (
-        ReasoningMode.MANDATORY, ReasoningMode.TOGGLEABLE, ReasoningMode.CONFIGURABLE, ReasoningMode.ROUTER)
-    if not reasons and provider_name != "anthropic":
+    thinking = kwargs.get("thinking")
+    if isinstance(thinking, dict) and (thinking.get("type") in ("disabled", "enabled")
+                                       or thinking.get("display") == "summarized"):
         return None
-    return HIDDEN_REASONING_WINDOWS.get(value, HIDDEN_REASONING_DEFAULT_WINDOW)
+    sent = _sent_effort(kwargs)
+    if sent in ("off", "none"):
+        return None
+    window = HIDDEN_REASONING_WINDOWS.get(sent or "", HIDDEN_REASONING_DEFAULT_WINDOW)
+    mode = getattr(capability, "mode", None)
+    if provider_name == "anthropic":
+        if isinstance(thinking, dict):
+            return window
+        if mode == ReasoningMode.NONE or getattr(capability, "request_format", "") == "anthropic_budget":
+            return None
+        documented = "documentation" in (getattr(capability, "source", "") or "")
+        return window if getattr(capability, "thinks_by_default", False) or not documented else None
+    if mode not in (ReasoningMode.MANDATORY, ReasoningMode.TOGGLEABLE, ReasoningMode.CONFIGURABLE, ReasoningMode.ROUTER):
+        return None
+    return window
 
 
 def _is_local_base_url(base_url: Optional[str]) -> bool:
@@ -511,7 +522,7 @@ async def stream_completion(
         if provider_name == "ollama" or _is_local_base_url(base_url):
             first_token_timeout = LOCAL_FIRST_TOKEN_TIMEOUT
         else:
-            reasoning_window = _hidden_reasoning_window(provider_name, kwargs, capability, reasoning_effort)
+            reasoning_window = _hidden_reasoning_window(provider_name, kwargs, capability)
             first_token_timeout = max(FIRST_TOKEN_TIMEOUT, reasoning_window or 0.0)
             if reasoning_window:
                 log.info("stream_completion: reasoning is not streamed; allowing %.0fs of silence", first_token_timeout)

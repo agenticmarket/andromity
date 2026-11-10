@@ -459,7 +459,7 @@ async def test_constructed_manager_is_started_once_on_list(tmp_path, monkeypatch
     handler._mcp_manager = manager
     await handler.rpc_mcp_list({"project_path": str(tmp_path)})
     await handler.rpc_mcp_list({"project_path": str(tmp_path)})
-    await handler._mcp_start_task
+    await asyncio.gather(*list(handler._mcp_start_tasks.values()))
     await handler.rpc_mcp_list({"project_path": str(tmp_path)})
     manager.start_all.assert_awaited_once()
 

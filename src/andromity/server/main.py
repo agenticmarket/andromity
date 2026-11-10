@@ -94,7 +94,8 @@ UNQUEUED_METHODS = frozenset({
 
 
 async def _dispatch_limited(semaphore: asyncio.Semaphore, msg_data: dict, run) -> None:
-    if msg_data.get("method") in UNQUEUED_METHODS:
+    method = msg_data.get("method")
+    if isinstance(method, str) and method in UNQUEUED_METHODS:
         await run(msg_data)
         return
     async with semaphore:

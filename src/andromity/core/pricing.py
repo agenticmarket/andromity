@@ -94,6 +94,13 @@ def _pricing_cache_lookup(provider: str, model: str) -> dict | None:
     return None
 
 
+def _count(usage: dict[str, Any], key: str) -> int:
+    try:
+        return max(0, int(usage.get(key, 0) or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def calculate_cost(usage: dict[str, Any], provider: str, model: str) -> CostResult:
     """Calculate cost without claiming accuracy for unpriced models."""
     p_lower = (provider or "").strip().lower()
@@ -104,11 +111,11 @@ def calculate_cost(usage: dict[str, Any], provider: str, model: str) -> CostResu
     if ":free" in m_lower or p_lower in ("ollama", "local"):
         return CostResult(0.0, "free")
 
-    prompt = int(usage.get("prompt_tokens", 0) or 0)
-    completion = int(usage.get("completion_tokens", 0) or 0)
-    cached = int(usage.get("cached_tokens", 0) or 0)
-    cache_write = int(usage.get("cache_write_tokens", 0) or 0)
-    reasoning = int(usage.get("reasoning_tokens", 0) or 0)
+    prompt = _count(usage, "prompt_tokens")
+    completion = _count(usage, "completion_tokens")
+    cached = min(_count(usage, "cached_tokens"), prompt)
+    cache_write = min(_count(usage, "cache_write_tokens"), prompt - cached)
+    reasoning = _count(usage, "reasoning_tokens")
     # Reasoning tokens are billed as output (OpenAI o-series, DeepSeek-R1, etc.)
     # Some providers report them separately; add to completion if not already included.
     # If provider already includes reasoning in completion_tokens, double-count is still

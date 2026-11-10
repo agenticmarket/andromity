@@ -13,10 +13,10 @@ def _get(value: Any, *names: str, default: int = 0) -> int:
             candidate = value.get(name)
         else:
             candidate = getattr(value, name, None)
-        if candidate is not None:
+        if candidate is not None and not isinstance(candidate, bool):
             try:
-                return int(candidate)
-            except (TypeError, ValueError):
+                return max(0, int(candidate))
+            except (TypeError, ValueError, OverflowError):
                 continue
     return default
 
@@ -43,8 +43,11 @@ def normalize_usage(raw: Any, source: str = "provider") -> Dict[str, Any]:
         raw, "reasoning_tokens", "thoughts_token_count", "thoughtsTokenCount",
         default=_get(completion_details, "reasoning_tokens")
     )
-    cache_write = _get(raw, "cache_write_tokens", "cache_creation_input_tokens",
-                       default=_get(prompt_details, "cache_creation_tokens"))
+    cache_write = max(_get(raw, "cache_write_tokens", "cache_creation_input_tokens"),
+                      _get(prompt_details, "cache_creation_tokens", "cache_write_tokens"))
+    if prompt:
+        cached = min(cached, prompt)
+        cache_write = min(cache_write, max(0, prompt - cached))
     total = _get(raw, "total_tokens", "totalTokenCount")
     if not total:
         total = prompt + completion + reasoning

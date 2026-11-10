@@ -188,6 +188,7 @@ _DISCOVERED: Dict[tuple[str, str], tuple[float, ReasoningCapability]] = {}
 _DOCS: Dict[str, tuple[float, str]] = {}
 _LOCK = threading.RLock()
 _TTL = 3600
+_RETRY_AFTER_FAILURE = 60
 
 
 def invalidate_reasoning_capabilities(provider: str) -> None:
@@ -390,6 +391,7 @@ def discover_model_reasoning_capability(provider: str, model: str) -> ReasoningC
         cached = _DISCOVERED.get((provider, model))
         if cached and time.monotonic() - cached[0] < (60 if cached[1].mode == ReasoningMode.UNKNOWN else _TTL):
             return cached[1]
+    complete = False
     try:
         if provider == "openai" and re.fullmatch(r"[a-zA-Z0-9_.-]+", model):
             cap = parse_openai_efforts(_fetch_document("https://developers.openai.com/api/docs/models/" + model))
@@ -414,10 +416,13 @@ def discover_model_reasoning_capability(provider: str, model: str) -> ReasoningC
             metadata = next((row for row in rows if row.get("id") == model), None)
             if metadata is not None:
                 cap = get_model_reasoning_capability(provider, model, metadata)
+        complete = True
     except Exception:
         pass  # Offline or changed schemas leave provider defaults intact.
+    retry_soon = not complete and cap.mode != ReasoningMode.UNKNOWN
+    stamp = time.monotonic() - (_TTL - _RETRY_AFTER_FAILURE) if retry_soon else time.monotonic()
     with _LOCK:
-        _DISCOVERED[(provider, model)] = (time.monotonic(), cap)
+        _DISCOVERED[(provider, model)] = (stamp, cap)
     return cap
 
 

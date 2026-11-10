@@ -485,8 +485,8 @@ class AndromityApp(App):
         """Pre-import litellm in an isolated daemon worker thread so it never blocks the UI event loop or teardown."""
         def _import_job():
             try:
-                import litellm  # noqa: F401
-                from litellm import acompletion  # noqa: F401
+                from andromity.core.litellm_loader import import_litellm
+                import_litellm()
                 log.info("litellm warmed up in background thread")
             except Exception as e:
                 log.warning("litellm background warm-up failed: %s", e)

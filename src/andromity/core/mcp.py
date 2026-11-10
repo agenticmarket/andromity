@@ -524,19 +524,19 @@ def read_mcp_servers(path: Path) -> Dict[str, Any]:
 
     A broken file is reported once per version of it, not on every read.
     """
+    info = None
     try:
         if not path.is_file():
             return {}
         info = path.stat()
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
+        if not text.strip():
+            return {}
+        data = json.loads(text)
     except OSError:
         return {}
-    if not text.strip():
-        return {}
-    try:
-        data = json.loads(text)
-    except ValueError as e:
-        version = (str(path), info.st_mtime_ns, info.st_size)
+    except (ValueError, RecursionError) as e:
+        version = (str(path), info.st_mtime_ns if info else 0, info.st_size if info else 0)
         if version in _REPORTED_CONFIG_ERRORS:
             log.debug("MCP config at %s is still not valid JSON: %s", path, e)
         else:

@@ -117,6 +117,8 @@ from andromity.server.protocol import (
 
 log = logging.getLogger("andromity.server")
 
+MCP_START_RETRY_AFTER_S = 30.0
+
 MODEL_REFRESH_FAILURES = {
     "no_key": "No API key set.",
     "auth_error": "Key rejected.",
@@ -202,8 +204,8 @@ class JsonRpcHandler:
         self._git_mutating_roots: Set[str] = set()
         self._mcp_manager: Optional[Any] = None
         self._mcp_started: bool = False
-        self._mcp_start_task: Optional[asyncio.Task] = None
-        self._mcp_start_key: Optional[str] = None
+        self._mcp_start_tasks: Dict[str, asyncio.Task] = {}
+        self._mcp_start_failures: Dict[str, tuple[float, str]] = {}
         self._user_killed_processes: Set[str | tuple[str, str]] = set()
         self._model_refreshes: Dict[tuple[str, str], "asyncio.Future[Dict[str, Any]]"] = {}
         try:
@@ -713,24 +715,40 @@ class JsonRpcHandler:
             return None
         return mgr
 
-    def start_mcp_soon(self, project_path: Optional[str] = None) -> asyncio.Task:
+    def _mcp_start_failure(self, project_path: Optional[str]) -> Optional[str]:
+        """Why the last background start for this project failed, while it is too recent to retry."""
+        failed = self._mcp_start_failures.get(self._mcp_project_key(project_path))
+        if failed and time.monotonic() - failed[0] < MCP_START_RETRY_AFTER_S:
+            return failed[1]
+        return None
+
+    def start_mcp_soon(self, project_path: Optional[str] = None) -> Optional[asyncio.Task]:
         """Start MCP servers in the background once per project; callers never wait for them."""
         key = self._mcp_project_key(project_path)
-        task = self._mcp_start_task
-        if task is not None and not task.done() and self._mcp_start_key == key:
+        task = self._mcp_start_tasks.get(key)
+        if task is not None and not task.done():
             return task
-        self._mcp_start_key = key
-        self._mcp_start_task = asyncio.create_task(self._start_mcp_and_report(project_path))
-        return self._mcp_start_task
+        if self._mcp_start_failure(project_path) is not None:
+            return None
+        task = asyncio.create_task(self._start_mcp_and_report(project_path, key))
+        self._mcp_start_tasks[key] = task
+        return task
 
-    async def _start_mcp_and_report(self, project_path: Optional[str]) -> None:
+    async def _start_mcp_and_report(self, project_path: Optional[str], key: str) -> None:
         try:
             mgr = await self._ensure_mcp_started(project_path)
         except Exception as e:
             log.debug("MCP background start failed: %s", e)
+            self._mcp_start_failures[key] = (time.monotonic(), "MCP servers could not be started. Try again shortly.")
             return
+        finally:
+            self._mcp_start_tasks.pop(key, None)
+        self._mcp_start_failures.pop(key, None)
         for name, status in list((mgr.server_status or {}).items()):
-            self.notify("mcp/statusChanged", {"name": name, "status": dict(status)})
+            try:
+                self.notify("mcp/statusChanged", {"name": name, "status": dict(status)})
+            except Exception as e:
+                log.debug("MCP status notification failed: %s", e)
 
     # ── Session Methods ─────────────────────────────────────────────────────────
 
@@ -4076,9 +4094,11 @@ Your output must be:
             from andromity.core import tools as _tools_mod
             params = params or {}
             live_manager = self._started_mcp_manager(params.get("project_path"))
+            start_failure = None
             starting = live_manager is None
             if starting:
                 self.start_mcp_soon(params.get("project_path"))
+                start_failure = self._mcp_start_failure(params.get("project_path"))
 
             # Load raw config entries
             project_path = params.get("project_path") or str(Path.cwd().resolve())
@@ -4103,7 +4123,8 @@ Your output must be:
                 status_entry = live_status.get(name, {})
                 session = live_sessions.get(name)
                 tools_count = len(session.tools) if session and hasattr(session, "tools") else status_entry.get("tools", 0)
-                status = status_entry.get("status", "starting" if starting else "unknown")
+                pending = "error" if start_failure else "starting" if starting else "unknown"
+                status = status_entry.get("status", "disabled" if srv_conf.get("disabled") else pending)
                 command = srv_conf.get("command") or srv_conf.get("serverUrl") or srv_conf.get("url") or ""
                 args = srv_conf.get("args", [])
                 result.append({
@@ -4114,7 +4135,8 @@ Your output must be:
                     "tools_count": tools_count,
                     "tools": [{"name": tool.name, "description": tool.description}
                               for tool in session.tools] if session and hasattr(session, "tools") else [],
-                    "error": status_entry.get("error") or srv_conf.get("error") or None,
+                    "error": status_entry.get("error") or srv_conf.get("error") or (
+                        start_failure if status == "error" else None),
                     "error_detail": status_entry.get("error_detail") or None,
                     "disabled": srv_conf.get("disabled", False),
                     "remote": bool(srv_conf.get("serverUrl") or srv_conf.get("url") or "mcp-remote" in args or "mcp-remote" in str(srv_conf.get("command", ""))),
