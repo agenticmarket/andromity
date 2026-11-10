@@ -2563,7 +2563,14 @@ class JsonRpcHandler:
             "include_assisted_by": config.get("default", "include_assisted_by", False),
             "is_trusted": config.is_trusted(params.get("project_path") or str(Path.cwd())) if params else False,
             "pinned_models": config.get_pinned_models(),
+            "allowed_commands": self._configured_strings("allowed_commands"),
+            "allowed_domains": self._configured_strings("allowed_domains"),
         }
+
+    @staticmethod
+    def _configured_strings(key: str) -> List[str]:
+        values = config.get("default", key, [])
+        return [value for value in values if isinstance(value, str) and value] if isinstance(values, list) else []
 
     def _airgap_summary(self) -> Dict[str, Any]:
         from andromity.core import network_policy

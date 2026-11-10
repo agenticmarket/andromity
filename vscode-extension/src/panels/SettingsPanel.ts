@@ -888,8 +888,9 @@ export class SettingsPanel {
         if (!key || typeof message.value !== "string") break;
         try {
           const current = await this._rpcClient.call<any>("config.get", {});
-          const remembered = current?.config?.default?.[key];
-          const next = Array.isArray(remembered) ? remembered.filter((entry: unknown) => entry !== message.value) : [];
+          const remembered = current?.[key];
+          if (!Array.isArray(remembered)) throw new Error("the current list could not be read");
+          const next = remembered.filter((entry: unknown) => entry !== message.value);
           await this._rpcClient.call("config.set", { section: "default", key, value: next });
           await this.loadData(true);
         } catch (err: any) {
@@ -3938,8 +3939,8 @@ export class SettingsPanel {
         </div>
 
         <div class="settings-card">
-          <div class="setting-label">Remembered approvals</div>
-          <div class="setting-desc">Commands and web domains you chose to always allow. In TRUST mode they run without asking. Remove any you no longer want.</div>
+          <div class="setting-label">Allowed commands and domains</div>
+          <div class="setting-desc">In TRUST mode these run without asking. The list is <code>allowed_commands</code> and <code>allowed_domains</code> under <code>[default]</code> in your config file, and "Always allow" adds to it. Remove any you no longer want.</div>
           <div id="remembered-approvals-list" style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;"></div>
         </div>
 
@@ -5590,7 +5591,7 @@ SOFTWARE.</pre>
     function renderRememberedApprovals() {
       const list = document.getElementById("remembered-approvals-list");
       if (!list) return;
-      const defaults = (currentConfig && currentConfig.config && currentConfig.config.default) || {};
+      const defaults = currentConfig || {};
       const group = (title, kind, values) => {
         const items = Array.isArray(values) ? values.map(String).filter(Boolean) : [];
         return '<div style="font-size: 11px; font-weight: 600; color: var(--text-muted); margin-top: 4px;">' + title + ' (' + items.length + ')</div>' +
@@ -5794,7 +5795,7 @@ SOFTWARE.</pre>
                 '<span class="badge blue">' + escapeHtml(m.provider) + '</span>' +
               '</div>' +
             '</div>' +
-            '<div class="model-desc">' + escapeHtml(m.desc || "High-performance AI model.") + '</div>' +
+            '<div class="model-desc" title="' + escapeHtml(m.desc || "High-performance AI model.") + '">' + escapeHtml(m.desc || "High-performance AI model.") + '</div>' +
             '<div class="model-badges">' +
               (m.needs_key ? '<span class="badge orange" title="Set your ' + escapeHtml(providerName(m.provider)) + ' API key to use this model">Needs API key</span>' : '') +
               (ctxStr ? '<span class="badge purple">' + escapeHtml(ctxStr) + '</span>' : '') +

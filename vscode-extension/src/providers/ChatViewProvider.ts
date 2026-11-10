@@ -73,6 +73,23 @@ export interface OllamaStatus {
   models: string[];
   bestModel: string | null;
   host: string;
+  cloudModels?: string[];
+}
+
+const OLLAMA_BANNER_SHOWN_KEY = "andromity.ollamaBannerShown";
+
+function isOllamaCloudEntry(entry: any): boolean {
+  const name = String(entry?.name || entry?.model || "");
+  return Boolean(entry?.remote_host || entry?.remote_model) || /(?:^|[:-])cloud$/i.test(name);
+}
+
+function isLoopbackHost(host: string): boolean {
+  try {
+    const name = new URL(host).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return name === "localhost" || name.endsWith(".localhost") || name === "::1" || /^127\./.test(name);
+  } catch {
+    return false;
+  }
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -1955,19 +1972,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               const chatModels = (data.models || [])
                 .filter((m: any) => !isEmbeddingModel(m))
                 .map((m: any) => m.name || m.model);
+              const cloudModels = (data.models || [])
+                .filter((m: any) => isOllamaCloudEntry(m))
+                .map((m: any) => m.name || m.model);
 
               const models = chatModels.length > 0 ? chatModels : allModels;
-              const bestModel =
-                models.find((m: string) => /qwen.*coder/i.test(m)) ||
-                models.find((m: string) => /deepseek.*coder/i.test(m)) ||
-                models.find((m: string) => /codellama/i.test(m)) ||
-                models.find((m: string) => /qwen/i.test(m)) ||
-                models.find((m: string) => /deepseek/i.test(m)) ||
-                models.find((m: string) => /llama3/i.test(m)) ||
-                models.find((m: string) => /llama/i.test(m)) ||
-                models.find((m: string) => /mistral/i.test(m)) ||
-                models[0] ||
+              const localModels = models.filter((m: string) => !cloudModels.includes(m));
+              const pick = (list: string[]) =>
+                list.find((m: string) => /qwen.*coder/i.test(m)) ||
+                list.find((m: string) => /deepseek.*coder/i.test(m)) ||
+                list.find((m: string) => /codellama/i.test(m)) ||
+                list.find((m: string) => /qwen/i.test(m)) ||
+                list.find((m: string) => /deepseek/i.test(m)) ||
+                list.find((m: string) => /llama3/i.test(m)) ||
+                list.find((m: string) => /llama/i.test(m)) ||
+                list.find((m: string) => /mistral/i.test(m)) ||
+                list[0] ||
                 null;
+              const bestModel = pick(localModels) || pick(models);
 
               resolve({
                 running: true,
@@ -1975,6 +1997,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 models,
                 bestModel,
                 host: cleanHost,
+                cloudModels,
               });
             } catch {
               resolve({ running: true, installed: true, models: [], bestModel: null, host: cleanHost });
@@ -2195,19 +2218,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     t.sendText(`ollama pull ${raw}`);
   }
 
-  private async _checkAndAutoConnectOllama(providers: ProviderInfo[]): Promise<string | null> {
+  private async _checkAndAutoConnectOllama(providers: ProviderInfo[]): Promise<{ model: string; connected: boolean } | null> {
     const hasAnyKey = providers.some((p) => p.has_key);
     const status = await this.probeOllama();
-    if (status.running && status.bestModel) {
-      if (!hasAnyKey || this._currentProvider === "ollama") {
-        this._currentProvider = "ollama";
-        this._currentModel = status.bestModel;
-        void this._rpcClient?.call("config.set", { section: "default", key: "provider", value: "ollama" }).catch(() => {});
-        void this._rpcClient?.call("config.set", { section: "default", key: "model", value: status.bestModel }).catch(() => {});
-      }
-      return status.bestModel;
+    if (!status.running || !status.bestModel) return null;
+    const alreadyOllama = this._currentProvider === "ollama";
+    if (alreadyOllama && this._currentModel && status.models.includes(this._currentModel)) {
+      return { model: this._currentModel, connected: false };
     }
-    return null;
+    if (!hasAnyKey || alreadyOllama) {
+      this._currentProvider = "ollama";
+      this._currentModel = status.bestModel;
+      void this._rpcClient?.call("config.set", { section: "default", key: "provider", value: "ollama" }).catch(() => {});
+      void this._rpcClient?.call("config.set", { section: "default", key: "model", value: status.bestModel }).catch(() => {});
+      return { model: status.bestModel, connected: !alreadyOllama };
+    }
+    return { model: status.bestModel, connected: false };
+  }
+
+  private _ollamaAnnouncement(model: string, connected: boolean): { model: string; cloud: boolean } | null {
+    const state = this._context?.globalState;
+    if (!connected || !state || state.get<boolean>(OLLAMA_BANNER_SHOWN_KEY, false)) return null;
+    void state.update(OLLAMA_BANNER_SHOWN_KEY, true);
+    const status = this._lastOllamaStatus;
+    const cloud = Boolean(status?.cloudModels?.includes(model)) || !isLoopbackHost(status?.host || "");
+    return { model, cloud };
   }
 
   private _addOllamaModel(model: string) {
@@ -2236,8 +2271,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             if (status) this._postToWebview({ type: "ollama_status_updated", status });
             return;
           }
-          this._addOllamaModel(detected);
-          this._postToWebview({ type: "ollama_detected", model: detected, models: this._models, status });
+          this._addOllamaModel(detected.model);
+          this._postToWebview({
+            type: "ollama_detected", model: detected.model, models: this._models, status,
+            announce: this._ollamaAnnouncement(detected.model, detected.connected),
+          });
           if (providerBefore === "ollama" && this._currentProvider === "ollama") {
             this._postToWebview({ type: "config_updated", key: "model", value: this._currentModel, provider: "ollama" });
           }
@@ -2421,7 +2459,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         waterfallFirstSessionShown: this._context?.globalState.get<boolean>("andromity.waterfallFirstSessionShown", false) || false,
         wallpaper: this.getWallpaperConfig(this._view?.webview),
         mascotEnabled: vscode.workspace.getConfiguration("andromity").get<boolean>("mascotEnabled", true),
-        ollamaDetectedModel: knownOllamaModel,
         ollamaStatus: this._lastOllamaStatus,
       });
       // A ready-wait that timed out may have posted into a page that wasn't
@@ -3292,6 +3329,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this._rpcClient?.call("trust.set", { project_path: workspaceFolder });
         vscode.window.showInformationMessage("Workspace trusted. File editing and shell commands enabled.");
         this._postToWebview({ type: "trust_updated", isTrusted: true });
+        this._sidePanelFeed.refresh(["changes"]);
         SettingsPanel.currentPanel?.loadData();
         break;
       }

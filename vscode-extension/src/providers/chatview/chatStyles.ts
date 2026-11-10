@@ -1755,7 +1755,7 @@ ${STATUS_SHIMMER_STYLES}
     }
 
     .flyout-item-info {
-      flex: 1;
+      flex: 1 0 45%;
       min-width: 0;
       display: flex;
       align-items: center;
@@ -1805,13 +1805,20 @@ ${STATUS_SHIMMER_STYLES}
       padding: 2px 6px;
       border-radius: 4px;
       border: 1px solid rgba(var(--tint), 0.06);
-      flex-shrink: 0;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .flyout-item-actions {
       display: flex;
       align-items: center;
       gap: 6px;
+      flex: 0 1 auto;
+      min-width: 0;
+    }
+
+    .flyout-item-actions > :not(.flyout-item-meta) {
       flex-shrink: 0;
     }
 

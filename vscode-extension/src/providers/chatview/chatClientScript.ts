@@ -5311,7 +5311,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const isActive = isActiveModel(m);
         const isPinned = isModelPinned(m.id, m.provider);
         const catalogTag = !m.needs_key && m.source === 'catalog' && showsCatalogLabel(m.provider);
-        return '<div class="flyout-item ' + (isActive ? 'active' : '') + '"' + (isActive ? ' aria-current="true"' : '') + ' data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
+        const fullName = (m.name || m.id) + ' (' + (m.provider || 'openrouter') + ' · ' + m.id + ')' + (m.pricing ? ' · ' + m.pricing : '');
+        return '<div class="flyout-item ' + (isActive ? 'active' : '') + '"' + (isActive ? ' aria-current="true"' : '') + ' title="' + escapeHtml(fullName) + '" data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
           '<div class="flyout-item-info">' +
             (isActive ? '<span class="flyout-active-dot"></span>' : '') +
             '<span class="flyout-item-name">' + escapeHtml(m.name || m.id) + '</span>' +
@@ -5668,14 +5669,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     }
 
-    function showOllamaBanner(modelName) {
+    function showOllamaBanner(modelName, cloud) {
       const existing = document.getElementById('ollama-detected-banner');
       if (existing) existing.remove();
       const banner = document.createElement('div');
       banner.className = 'ollama-detected-banner';
       banner.id = 'ollama-detected-banner';
-      banner.innerHTML = '<span><strong>Local Ollama detected</strong> (' + escapeHtml(modelName) + ')! Ready to code with 0 API keys &amp; 100% privacy.</span>' +
-        '<button class="banner-dismiss" data-action="dismiss-ollama-banner" title="Dismiss banner">&times;</button>';
+      const detail = cloud
+        ? ' runs on Ollama\\'s cloud, so your prompts leave this computer.'
+        : ' runs on this computer. No API key needed, and your prompts stay here.';
+      banner.innerHTML = '<span><strong>Connected to Ollama</strong>: ' + escapeHtml(modelName) + detail + '</span>' +
+        '<button class="banner-dismiss" data-action="dismiss-ollama-banner" title="Dismiss">&times;</button>';
       const promptBox = document.querySelector('.prompt-box');
       if (promptBox && promptBox.parentElement) {
         promptBox.parentElement.insertBefore(banner, promptBox);
@@ -9446,6 +9450,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     ${getStreamingRenderScript()}
     ${getTurnRailScript()}
 
+    const QUIET_THINKING_NOTE_AFTER_S = 30;
+
+    function turnLoaderText(elapsed) {
+      const found = allModels.find(m => m.id === currentModel);
+      const name = compactModelName(found ? (found.name || found.id) : formatModelDisplayName(currentModel)) || 'The model';
+      if (elapsed < QUIET_THINKING_NOTE_AFTER_S) return name + ' is thinking… ' + elapsed + 's';
+      return name + ' is still thinking… ' + elapsed + 's · some models don\\'t show their reasoning until they answer';
+    }
+
     function removeTurnLoader() {
       const el = document.getElementById('turn-loading-indicator');
       if (el) el.remove();
@@ -9515,7 +9528,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const loader = document.createElement('div');
       loader.className = 'andromity-turn-loader';
       loader.id = 'turn-loading-indicator';
-      loader.innerHTML = orbMarkup('connecting') + ' <span class="thinking-text">Waiting for ' + escapeHtml(currentModel || 'model') + '... (0s)</span>';
+      loader.innerHTML = orbMarkup('connecting') + ' <span class="thinking-text status-shimmer">' + escapeHtml(turnLoaderText(0)) + '</span>';
       wrap.appendChild(loader);
 
       const loaderTimer = setInterval(() => {
@@ -9524,8 +9537,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           clearInterval(loaderTimer);
           return;
         }
-        const elapsed = Math.floor((Date.now() - currentTurnStartTime) / 1000);
-        textSpan.textContent = 'Waiting for ' + (currentModel || 'model') + '... (' + elapsed + 's)';
+        textSpan.textContent = turnLoaderText(Math.floor((Date.now() - currentTurnStartTime) / 1000));
       }, 1000);
 
       currentAssistantContent = null;
@@ -10078,9 +10090,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (gatewaySubInit && isInitialAuthed) {
             gatewaySubInit.innerHTML = '&bull; Active Gateway';
           }
-          if (msg.ollamaDetectedModel) {
-            showOllamaBanner(msg.ollamaDetectedModel);
-          }
           if (msg.ollamaStatus) {
             updateOllamaStatusUI(msg.ollamaStatus);
           }
@@ -10101,7 +10110,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             allModels = msg.models;
             updateModelBadge();
           }
-          if (msg.model) showOllamaBanner(msg.model);
+          if (msg.announce && msg.announce.model) showOllamaBanner(msg.announce.model, !!msg.announce.cloud);
           if (msg.status) updateOllamaStatusUI(msg.status);
           break;
         }

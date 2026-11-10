@@ -22,7 +22,7 @@ function harness(remembered: { allowed_commands?: unknown; allowed_domains?: unk
   panel._rpcClient = {
     call: async (method: string, params: any) => {
       calls.push({ method, params });
-      if (method === "config.get") return { config: { default: remembered } };
+      if (method === "config.get") return { config: {}, ...remembered };
       if (method === "config.set" && failSet) throw new Error("daemon offline");
       return { success: true };
     },
@@ -65,10 +65,12 @@ describe("removing remembered approvals", () => {
     assert.deepEqual(set?.params.value, ["npm test"], "removing something absent adds nothing");
   });
 
-  it("tolerates a missing or malformed list and reports a failed save", async () => {
+  it("never rewrites a list it could not read, and reports a failed save", async () => {
+    errors.length = 0;
     const h = harness({ allowed_commands: "npm test" as unknown });
     await h.panel._handleMessage({ type: "forget_approval", kind: "command", value: "npm test" });
-    assert.deepEqual(h.calls.find(c => c.method === "config.set")?.params.value, []);
+    assert.equal(h.calls.find(c => c.method === "config.set"), undefined);
+    assert.match(errors[0], /Could not remove the remembered approval/);
 
     errors.length = 0;
     const failing = harness({ allowed_commands: ["npm test"] }, true);

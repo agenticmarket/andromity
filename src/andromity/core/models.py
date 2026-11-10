@@ -1,5 +1,6 @@
 """Model catalog - available models per provider with descriptions."""
 import errno
+import re
 from pathlib import Path
 import threading
 from typing import Any
@@ -506,10 +507,13 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
             size_bytes = item.get("size", 0)
             size_gb = f"{size_bytes / (1024**3):.1f}GB" if size_bytes else ""
             num_ctx = get_ollama_num_ctx(name, ollama_root)
+            cloud = bool(item.get("remote_host") or item.get("remote_model")) or bool(
+                re.search(r"(?:^|[:-])cloud$", name, re.IGNORECASE))
+            local_desc = f"Locally installed ({size_gb})" if size_gb else "Locally installed"
             models.append({
                 "id": name,
                 "name": name,
-                "desc": f"Locally installed ({size_gb})" if size_gb else "Locally installed",
+                "desc": "Runs on Ollama's cloud" if cloud else local_desc,
                 "context": f"{num_ctx // 1024}K" if num_ctx else "Local",
             })
         return _cache_and_return(provider_key, models)
