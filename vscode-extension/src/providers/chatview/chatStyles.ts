@@ -1755,7 +1755,7 @@ ${STATUS_SHIMMER_STYLES}
     }
 
     .flyout-item-info {
-      flex: 1 0 45%;
+      flex: 1 0 58%;
       min-width: 0;
       display: flex;
       align-items: center;

@@ -51,6 +51,7 @@ export class SettingsPanel {
   private _onConfigChangeCallback?: () => void;
   private _initialTab: string = "models";
   private _loadingPromise: Promise<void> | null = null;
+  private _approvalRemovals: Promise<void> = Promise.resolve();
   private _disposed = false;
 
   public static extensionContext?: vscode.ExtensionContext;
@@ -886,6 +887,10 @@ export class SettingsPanel {
       case "forget_approval": {
         const key = message.kind === "command" ? "allowed_commands" : message.kind === "domain" ? "allowed_domains" : null;
         if (!key || typeof message.value !== "string") break;
+        const previous = this._approvalRemovals;
+        let release = () => {};
+        this._approvalRemovals = new Promise<void>((resolve) => { release = resolve; });
+        await previous;
         try {
           const current = await this._rpcClient.call<any>("config.get", {});
           const remembered = current?.[key];
@@ -896,6 +901,8 @@ export class SettingsPanel {
         } catch (err: any) {
           vscode.window.showErrorMessage(`Could not remove the remembered approval: ${err.message}`);
           await this.loadData(true);
+        } finally {
+          release();
         }
         break;
       }
@@ -5593,7 +5600,7 @@ SOFTWARE.</pre>
       if (!list) return;
       const defaults = currentConfig || {};
       const group = (title, kind, values) => {
-        const items = Array.isArray(values) ? values.map(String).filter(Boolean) : [];
+        const items = Array.isArray(values) ? values.filter(v => typeof v === "string" && v) : [];
         return '<div style="font-size: 11px; font-weight: 600; color: var(--text-muted); margin-top: 4px;">' + title + ' (' + items.length + ')</div>' +
           (items.length ? items.map(value =>
             '<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 10px; background: rgba(var(--tint), 0.03); border: 1px solid var(--card-border); border-radius: 4px;">' +

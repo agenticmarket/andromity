@@ -74,6 +74,13 @@ export interface OllamaStatus {
   bestModel: string | null;
   host: string;
   cloudModels?: string[];
+  bestLocalModel?: string | null;
+}
+
+interface OllamaDetection {
+  model: string;
+  connected: boolean;
+  status: OllamaStatus;
 }
 
 const OLLAMA_BANNER_SHOWN_KEY = "andromity.ollamaBannerShown";
@@ -83,10 +90,14 @@ function isOllamaCloudEntry(entry: any): boolean {
   return Boolean(entry?.remote_host || entry?.remote_model) || /(?:^|[:-])cloud$/i.test(name);
 }
 
+function isInstalledOllamaModel(models: string[], name: string): boolean {
+  return models.includes(name) || (!name.includes(":") && models.includes(name + ":latest"));
+}
+
 function isLoopbackHost(host: string): boolean {
   try {
     const name = new URL(host).hostname.replace(/^\[|\]$/g, "").toLowerCase();
-    return name === "localhost" || name.endsWith(".localhost") || name === "::1" || /^127\./.test(name);
+    return name === "localhost" || name.endsWith(".localhost") || name === "::1" || /^127(?:\.\d{1,3}){3}$/.test(name);
   } catch {
     return false;
   }
@@ -1989,7 +2000,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 list.find((m: string) => /mistral/i.test(m)) ||
                 list[0] ||
                 null;
-              const bestModel = pick(localModels) || pick(models);
+              const bestLocalModel = pick(localModels);
+              const bestModel = bestLocalModel || pick(models);
 
               resolve({
                 running: true,
@@ -1998,6 +2010,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 bestModel,
                 host: cleanHost,
                 cloudModels,
+                bestLocalModel,
               });
             } catch {
               resolve({ running: true, installed: true, models: [], bestModel: null, host: cleanHost });
@@ -2218,31 +2231,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     t.sendText(`ollama pull ${raw}`);
   }
 
-  private async _checkAndAutoConnectOllama(providers: ProviderInfo[]): Promise<{ model: string; connected: boolean } | null> {
+  private async _checkAndAutoConnectOllama(providers: ProviderInfo[]): Promise<OllamaDetection | null> {
     const hasAnyKey = providers.some((p) => p.has_key);
     const status = await this.probeOllama();
     if (!status.running || !status.bestModel) return null;
     const alreadyOllama = this._currentProvider === "ollama";
-    if (alreadyOllama && this._currentModel && status.models.includes(this._currentModel)) {
-      return { model: this._currentModel, connected: false };
+    if (alreadyOllama && this._currentModel && isInstalledOllamaModel(status.models, this._currentModel)) {
+      return { model: this._currentModel, connected: false, status };
     }
-    if (!hasAnyKey || alreadyOllama) {
+    const localModel = status.bestLocalModel;
+    if ((!hasAnyKey || alreadyOllama) && localModel) {
       this._currentProvider = "ollama";
-      this._currentModel = status.bestModel;
+      this._currentModel = localModel;
       void this._rpcClient?.call("config.set", { section: "default", key: "provider", value: "ollama" }).catch(() => {});
-      void this._rpcClient?.call("config.set", { section: "default", key: "model", value: status.bestModel }).catch(() => {});
-      return { model: status.bestModel, connected: !alreadyOllama };
+      void this._rpcClient?.call("config.set", { section: "default", key: "model", value: localModel }).catch(() => {});
+      return { model: localModel, connected: !alreadyOllama, status };
     }
-    return { model: status.bestModel, connected: false };
+    return { model: status.bestModel, connected: false, status };
   }
 
-  private _ollamaAnnouncement(model: string, connected: boolean): { model: string; cloud: boolean } | null {
+  /** The once-ever Ollama notice, for someone not already using Ollama; null once it has been shown. */
+  private _ollamaAnnouncement(detected: OllamaDetection, providerBefore: string): { model: string; cloud: boolean; connected: boolean } | null {
     const state = this._context?.globalState;
-    if (!connected || !state || state.get<boolean>(OLLAMA_BANNER_SHOWN_KEY, false)) return null;
-    void state.update(OLLAMA_BANNER_SHOWN_KEY, true);
-    const status = this._lastOllamaStatus;
-    const cloud = Boolean(status?.cloudModels?.includes(model)) || !isLoopbackHost(status?.host || "");
-    return { model, cloud };
+    if (providerBefore === "ollama" || !state || !this._view) return null;
+    try {
+      if (state.get<boolean>(OLLAMA_BANNER_SHOWN_KEY, false)) return null;
+    } catch {
+      return null;
+    }
+    Promise.resolve(state.update(OLLAMA_BANNER_SHOWN_KEY, true)).catch(() => {});
+    const cloud = Boolean(detected.status.cloudModels?.includes(detected.model)) || !isLoopbackHost(detected.status.host);
+    return { model: detected.model, cloud, connected: detected.connected };
   }
 
   private _addOllamaModel(model: string) {
@@ -2274,7 +2293,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this._addOllamaModel(detected.model);
           this._postToWebview({
             type: "ollama_detected", model: detected.model, models: this._models, status,
-            announce: this._ollamaAnnouncement(detected.model, detected.connected),
+            announce: this._ollamaAnnouncement(detected, providerBefore),
           });
           if (providerBefore === "ollama" && this._currentProvider === "ollama") {
             this._postToWebview({ type: "config_updated", key: "model", value: this._currentModel, provider: "ollama" });
@@ -3342,6 +3361,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this._rpcClient?.call("trust.revoke", { project_path: workspaceFolder });
           vscode.window.showInformationMessage("Workspace trust revoked. File editing and shell commands blocked.");
           this._postToWebview({ type: "trust_updated", isTrusted: false });
+          this._sidePanelFeed.refresh(["changes"]);
           SettingsPanel.currentPanel?.loadData();
         }
         break;
@@ -3921,26 +3941,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               }
               break;
             }
-            case "provider": {
-              this._currentProvider = value;
-              const foundModel = this._models.find((m: any) => m.id === this._currentModel && m.provider === value);
-              modelReasoningCap = (foundModel as any)?.reasoning;
-              if (this._rpcClient && this._currentModel) {
-                try {
-                  modelReasoningCap = await this._rpcClient.call("model.reasoning_capability", {
-                    provider: value,
-                    model: this._currentModel,
-                  });
-                } catch {
-                  // Keep cached capabilities if discovery is unavailable.
-                }
-              }
-              if (modelReasoningCap && typeof modelReasoningCap === "object") {
-                modelReasoningCap._modelId = this._currentModel;
-                modelReasoningCap._providerId = value;
-              }
-              break;
-            }
+            case "provider": this._currentProvider = value; break;
             case "profile": this._currentProfile = value; break;
             case "reasoningEffort": this._currentReasoning = value; break;
           }

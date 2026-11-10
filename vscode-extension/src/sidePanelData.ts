@@ -49,7 +49,7 @@ export async function loadSidePanelData(rpc: RpcLike, projectPath: string, parts
     }).catch(() => { data.mcp = []; }));
   }
   if (parts.includes("changes")) {
-    tasks.push(rpc.call<any>("trust.status", { project_path: projectPath }).then((trust): Promise<[any, any]> | [null, null] => trust?.is_trusted === false
+    tasks.push(rpc.call<any>("trust.status", { project_path: projectPath }).then((trust): Promise<[any, any]> | [null, null] => trust?.is_trusted !== true
       ? [null, null]
       : Promise.all([
         rpc.call<any>("git.status", { project_path: projectPath }),

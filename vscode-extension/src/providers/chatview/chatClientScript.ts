@@ -5669,16 +5669,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     }
 
-    function showOllamaBanner(modelName, cloud) {
+    function showOllamaBanner(modelName, cloud, connected) {
       const existing = document.getElementById('ollama-detected-banner');
       if (existing) existing.remove();
       const banner = document.createElement('div');
       banner.className = 'ollama-detected-banner';
       banner.id = 'ollama-detected-banner';
-      const detail = cloud
-        ? ' runs on Ollama\\'s cloud, so your prompts leave this computer.'
-        : ' runs on this computer. No API key needed, and your prompts stay here.';
-      banner.innerHTML = '<span><strong>Connected to Ollama</strong>: ' + escapeHtml(modelName) + detail + '</span>' +
+      const where = cloud
+        ? ' runs on Ollama\\'s cloud, so prompts sent to it leave this computer.'
+        : ' runs on this computer, so prompts sent to it stay here.';
+      const lead = connected ? '<strong>Connected to Ollama</strong>: ' : '<strong>Ollama is running</strong>: ';
+      const hint = connected ? '' : ' Choose it in the model picker to use it.';
+      banner.innerHTML = '<span>' + lead + escapeHtml(modelName) + where + hint + '</span>' +
         '<button class="banner-dismiss" data-action="dismiss-ollama-banner" title="Dismiss">&times;</button>';
       const promptBox = document.querySelector('.prompt-box');
       if (promptBox && promptBox.parentElement) {
@@ -9453,8 +9455,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const QUIET_THINKING_NOTE_AFTER_S = 30;
 
     function turnLoaderText(elapsed) {
-      const found = allModels.find(m => m.id === currentModel);
-      const name = compactModelName(found ? (found.name || found.id) : formatModelDisplayName(currentModel)) || 'The model';
+      const provider = currentProvider || 'openrouter';
+      const found = allModels.find(m => m.id === currentModel && (m.provider || 'openrouter') === provider)
+        || allModels.find(m => m.id === currentModel);
+      const label = currentModel ? (found ? (found.name || found.id) : formatModelDisplayName(currentModel)) : '';
+      const name = label && label !== 'Choose a model' && label !== 'Loading model...' ? compactModelName(label) : 'The model';
       if (elapsed < QUIET_THINKING_NOTE_AFTER_S) return name + ' is thinking… ' + elapsed + 's';
       return name + ' is still thinking… ' + elapsed + 's · some models don\\'t show their reasoning until they answer';
     }
@@ -10110,7 +10115,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             allModels = msg.models;
             updateModelBadge();
           }
-          if (msg.announce && msg.announce.model) showOllamaBanner(msg.announce.model, !!msg.announce.cloud);
+          if (msg.announce && msg.announce.model) showOllamaBanner(msg.announce.model, !!msg.announce.cloud, !!msg.announce.connected);
           if (msg.status) updateOllamaStatusUI(msg.status);
           break;
         }
@@ -10207,11 +10212,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             syncKeyRequiredNote();
           } else if (msg.key === 'provider') {
             currentProvider = msg.value;
-            if (msg.reasoningCapability) {
-              currentModelReasoningCapability = { ...msg.reasoningCapability, _modelId: currentModel, _providerId: currentProvider };
-            } else {
-              currentModelReasoningCapability = null;
-            }
+            currentModelReasoningCapability = null;
             updateReasoningBadge();
             updateModelBadge();
             syncKeyRequiredNote();
