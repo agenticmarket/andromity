@@ -516,6 +516,39 @@ class MCPSseSession:
         pass
 
 
+_REPORTED_CONFIG_ERRORS: set = set()
+
+
+def read_mcp_servers(path: Path) -> Dict[str, Any]:
+    """Servers one MCP config file declares. An empty or unreadable file declares none.
+
+    A broken file is reported once per version of it, not on every read.
+    """
+    try:
+        if not path.is_file():
+            return {}
+        info = path.stat()
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not text.strip():
+        return {}
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        version = (str(path), info.st_mtime_ns, info.st_size)
+        if version in _REPORTED_CONFIG_ERRORS:
+            log.debug("MCP config at %s is still not valid JSON: %s", path, e)
+        else:
+            _REPORTED_CONFIG_ERRORS.add(version)
+            log.warning("Failed to parse MCP config at %s: %s", path, e)
+        return {}
+    servers = (data.get("mcpServers") or data.get("servers") or {}) if isinstance(data, dict) else {}
+    if not isinstance(servers, dict):
+        return {}
+    return {name: entry for name, entry in servers.items() if isinstance(entry, dict)}
+
+
 class MCPClientManager:
     """Manages all configured MCP servers and tool dispatching for Andromity."""
 
@@ -618,15 +651,9 @@ class MCPClientManager:
         ]
         merged_servers: Dict[str, Any] = {}
         for p in candidates:
-            if p.is_file():
-                try:
-                    data = json.loads(p.read_text(encoding="utf-8"))
-                    servers = data.get("mcpServers") or data.get("servers") or {}
-                    for k, v in servers.items():
-                        if k not in merged_servers and isinstance(v, dict):
-                            merged_servers[k] = v
-                except Exception as e:
-                    log.warning("Failed to parse MCP config at %s: %s", p, e)
+            for k, v in read_mcp_servers(p).items():
+                if k not in merged_servers:
+                    merged_servers[k] = v
         return {"mcpServers": merged_servers}
 
     async def start_all(self):

@@ -408,11 +408,10 @@ async def stream_completion(
     max_tokens: Optional[int] = None,
     least_reasoning: bool = False,
 ) -> AsyncGenerator[StreamEvent, None]:
-    # Lazy-import litellm — it has a heavy import chain (~2-4s), so we defer
-    # it until the first actual AI call rather than paying the cost at startup.
     _ensure_litellm_stub()
-    import litellm
-    from litellm import acompletion
+    from andromity.core.litellm_loader import load_litellm
+    litellm = await load_litellm()
+    acompletion = litellm.acompletion
     litellm.drop_params = True
     litellm.suppress_debug_info = True
     _record_unprocessable_rejections()

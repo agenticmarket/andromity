@@ -110,6 +110,7 @@ from andromity.server.protocol import (
     METHOD_NOT_FOUND,
     SESSION_NOT_FOUND,
     JsonRpcNotification,
+    RpcRefusal,
     JsonRpcRequest,
     JsonRpcResponse,
 )
@@ -201,6 +202,8 @@ class JsonRpcHandler:
         self._git_mutating_roots: Set[str] = set()
         self._mcp_manager: Optional[Any] = None
         self._mcp_started: bool = False
+        self._mcp_start_task: Optional[asyncio.Task] = None
+        self._mcp_start_key: Optional[str] = None
         self._user_killed_processes: Set[str | tuple[str, str]] = set()
         self._model_refreshes: Dict[tuple[str, str], "asyncio.Future[Dict[str, Any]]"] = {}
         try:
@@ -545,6 +548,11 @@ class JsonRpcHandler:
             if request.is_notification():
                 return None
             return JsonRpcResponse.err(request.id, -32000, "Request cancelled")
+        except RpcRefusal as e:
+            log.debug("RPC method %s declined: %s", request.method, e)
+            if request.is_notification():
+                return None
+            return JsonRpcResponse.err(request.id, INTERNAL_ERROR, str(e))
         except Exception as e:
             log.exception("Error executing RPC method %s: %s", request.method, e)
             if request.is_notification():
@@ -692,6 +700,37 @@ class JsonRpcHandler:
                     log.warning("MCP start_all failed: %s", e)
                     raise
             return mgr
+
+    @staticmethod
+    def _mcp_project_key(project_path: Optional[str]) -> str:
+        return str(Path(project_path).resolve()) if project_path else str(Path.cwd().resolve())
+
+    def _started_mcp_manager(self, project_path: Optional[str]) -> Optional[Any]:
+        mgr = self._mcp_manager
+        if not self._mcp_started or mgr is None:
+            return None
+        if project_path and self._mcp_project_key(project_path) != self._mcp_project_key(mgr.project_path):
+            return None
+        return mgr
+
+    def start_mcp_soon(self, project_path: Optional[str] = None) -> asyncio.Task:
+        """Start MCP servers in the background once per project; callers never wait for them."""
+        key = self._mcp_project_key(project_path)
+        task = self._mcp_start_task
+        if task is not None and not task.done() and self._mcp_start_key == key:
+            return task
+        self._mcp_start_key = key
+        self._mcp_start_task = asyncio.create_task(self._start_mcp_and_report(project_path))
+        return self._mcp_start_task
+
+    async def _start_mcp_and_report(self, project_path: Optional[str]) -> None:
+        try:
+            mgr = await self._ensure_mcp_started(project_path)
+        except Exception as e:
+            log.debug("MCP background start failed: %s", e)
+            return
+        for name, status in list((mgr.server_status or {}).items()):
+            self.notify("mcp/statusChanged", {"name": name, "status": dict(status)})
 
     # ── Session Methods ─────────────────────────────────────────────────────────
 
@@ -2267,8 +2306,8 @@ class JsonRpcHandler:
                         with open(_price_file, "w") as _f:
                             _f.write("{}")
 
-            import litellm
-            litellm.suppress_debug_info = True
+            from andromity.core.litellm_loader import load_litellm
+            litellm = await load_litellm()
 
             messages = [{"role": "user", "content": prompt}]
             kwargs: Dict[str, Any] = {
@@ -3206,18 +3245,18 @@ class JsonRpcHandler:
     def _review_repo(self, params: Dict[str, Any], mutate: bool = False):
         project_path = Path(params.get("project_path") or Path.cwd()).resolve()
         if not config.is_trusted(str(project_path)):
-            raise ValueError("Trust this workspace before reviewing or reverting files.")
+            raise RpcRefusal("Trust this workspace before reviewing or reverting files.")
         repo = get_repo(project_path)
         if mutate and repo:
             root = Path(repo.working_tree_dir).resolve()
             if str(root) in self._git_mutating_roots:
-                raise ValueError("Another file restoration is in progress. Wait for it to finish.")
+                raise RpcRefusal("Another file restoration is in progress. Wait for it to finish.")
             for sid, task in self._running_tasks.items():
                 session = self._active_sessions.get(sid)
                 if not task.done() and session:
                     active_repo = get_repo(Path(session.project_path))
                     if active_repo and Path(active_repo.working_tree_dir).resolve() == root:
-                        raise ValueError("Wait for all agent turns in this repository to finish before reverting.")
+                        raise RpcRefusal("Wait for all agent turns in this repository to finish before reverting.")
         return repo
 
     async def rpc_git_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -3896,7 +3935,8 @@ class JsonRpcHandler:
                         os.makedirs(os.path.dirname(_price_file), exist_ok=True)
                         with open(_price_file, "w") as _f:
                             _f.write("{}")
-            import litellm
+            from andromity.core.litellm_loader import load_litellm
+            litellm = await load_litellm()
             if not provider or not model:
                 provider = config.get("default", "provider", "")
                 model = config.get("default", "model", "")
@@ -4028,15 +4068,10 @@ Your output must be:
             from andromity.core.mcp import MCPClientManager
             from andromity.core import tools as _tools_mod
             params = params or {}
-            # Prefer daemon's own manager, fallback to global tools manager
-            live_manager = self._mcp_manager or getattr(_tools_mod, "_mcp_manager", None)
-            # Ensure manager is started at least once so status is live, but don't block on error
-            if not self._mcp_started or params.get("project_path"):
-                try:
-                    # lazy start for first list call
-                    live_manager = await self._ensure_mcp_started(params.get("project_path"))
-                except Exception:
-                    live_manager = self._mcp_manager
+            live_manager = self._started_mcp_manager(params.get("project_path"))
+            starting = live_manager is None
+            if starting:
+                self.start_mcp_soon(params.get("project_path"))
 
             # Load raw config entries
             project_path = params.get("project_path") or str(Path.cwd().resolve())
@@ -4061,7 +4096,7 @@ Your output must be:
                 status_entry = live_status.get(name, {})
                 session = live_sessions.get(name)
                 tools_count = len(session.tools) if session and hasattr(session, "tools") else status_entry.get("tools", 0)
-                status = status_entry.get("status", "unknown")
+                status = status_entry.get("status", "starting" if starting else "unknown")
                 command = srv_conf.get("command") or srv_conf.get("serverUrl") or srv_conf.get("url") or ""
                 args = srv_conf.get("args", [])
                 result.append({

@@ -66,9 +66,8 @@ def _prewarm_dependencies():
     """Background pre-warm for heavy AI packages so the first turn starts with 0ms import delay."""
     try:
         _ensure_litellm_stub()
-        import litellm
-        litellm.suppress_debug_info = True
-        litellm.drop_params = True
+        from andromity.core.litellm_loader import import_litellm
+        import_litellm()
     except Exception:
         pass
 
@@ -86,6 +85,20 @@ from pathlib import Path
 from andromity.config import get_config_dir
 
 MAX_LINE_LENGTH = 64 * 1024 * 1024  # 64MB max line size (supports massive 1M+ token context & rich sessions)
+
+# Quick calls the user waits on directly; slow requests holding every dispatch slot must not queue them.
+UNQUEUED_METHODS = frozenset({
+    "session.create", "session.get", "session.list", "config.status", "trust.status", "trust.set",
+    "agent.prompt", "agent.cancel", "agent.approve_tool", "agent.reject_tool", "agent.answer_question",
+})
+
+
+async def _dispatch_limited(semaphore: asyncio.Semaphore, msg_data: dict, run) -> None:
+    if msg_data.get("method") in UNQUEUED_METHODS:
+        await run(msg_data)
+        return
+    async with semaphore:
+        await run(msg_data)
 
 
 def _get_or_create_daemon_token() -> str:
@@ -162,21 +175,19 @@ async def start_stdio_server():
         log.warning("Database schema initialization failed: %s", e)
 
     handler = JsonRpcHandler(send_notification=_send_notification)
-    # Start MCP manager in background (non-blocking) so mcp.list reports live status immediately
-    try:
-        asyncio.create_task(handler._ensure_mcp_started())
-    except Exception as e:
-        log.debug("MCP background start failed: %s", e)
+    handler.start_mcp_soon()
+
+    async def _run_request(msg_data: dict):
+        try:
+            req = JsonRpcRequest.from_dict(msg_data)
+            resp = await handler.handle_request(req)
+            if resp is not None:
+                await _send_dict(resp.to_dict())
+        except Exception as e:
+            log.exception("Error processing RPC request: %s", e)
 
     async def _dispatch_request(msg_data: dict):
-        async with semaphore:
-            try:
-                req = JsonRpcRequest.from_dict(msg_data)
-                resp = await handler.handle_request(req)
-                if resp is not None:
-                    await _send_dict(resp.to_dict())
-            except Exception as e:
-                log.exception("Error processing RPC request: %s", e)
+        await _dispatch_limited(semaphore, msg_data, _run_request)
 
     log.info("Andromity JSON-RPC stdio server ready and listening.")
     loop.call_later(PREWARM_DELAY_S, _start_prewarm)
@@ -237,22 +248,21 @@ async def start_tcp_server(host: str = "127.0.0.1", port: int = 8765, allow_remo
             await _send_dict(notif.to_dict())
 
         handler = JsonRpcHandler(send_notification=_send_notification)
-        try:
-            asyncio.create_task(handler._ensure_mcp_started())
-        except Exception:
-            pass
+        handler.start_mcp_soon()
         peer = writer.get_extra_info("peername")
         log.info("Client connected: %s", peer)
 
+        async def _run_request(msg_data: dict):
+            try:
+                req = JsonRpcRequest.from_dict(msg_data)
+                resp = await handler.handle_request(req)
+                if resp is not None:
+                    await _send_dict(resp.to_dict())
+            except Exception as e:
+                log.exception("Error processing TCP RPC request: %s", e)
+
         async def _dispatch_request(msg_data: dict):
-            async with semaphore:
-                try:
-                    req = JsonRpcRequest.from_dict(msg_data)
-                    resp = await handler.handle_request(req)
-                    if resp is not None:
-                        await _send_dict(resp.to_dict())
-                except Exception as e:
-                    log.exception("Error processing TCP RPC request: %s", e)
+            await _dispatch_limited(semaphore, msg_data, _run_request)
 
         authenticated = False
         try:

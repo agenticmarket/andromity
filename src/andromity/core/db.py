@@ -12,6 +12,7 @@ _local = threading.local()
 _CUSTOM_DB_PATH: Optional[Path] = None
 _INIT_LOCK = threading.Lock()
 _SCHEMA_INITIALIZED = False
+_SCHEMA_READY: Dict[tuple, int] = {}
 
 
 def set_custom_db_path(path: Optional[Path]) -> None:
@@ -19,6 +20,7 @@ def set_custom_db_path(path: Optional[Path]) -> None:
     global _CUSTOM_DB_PATH, _SCHEMA_INITIALIZED
     _CUSTOM_DB_PATH = path
     _SCHEMA_INITIALIZED = False
+    _SCHEMA_READY.clear()
     close_conn()
 
 
@@ -81,6 +83,22 @@ def get_conn() -> sqlite3.Connection:
 
 
 
+def _schema_key(conn: sqlite3.Connection) -> Optional[tuple]:
+    """Identity of the database file, so a file replaced at the same path gets its schema again."""
+    path = get_db_path()
+    if str(path) == ":memory:":
+        return ("memory", id(conn))
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    return ("file", str(path), info.st_dev, info.st_ino)
+
+
+def _schema_version(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("PRAGMA schema_version").fetchone()[0])
+
+
 def init_schema() -> None:
     """Execute DDL schema to ensure all tables and indexes exist."""
     global _SCHEMA_INITIALIZED
@@ -88,6 +106,9 @@ def init_schema() -> None:
     # executescript commits an open transaction. Callers initialize the
     # schema before beginning a transaction, including legacy imports.
     if conn.in_transaction:
+        return
+    key = _schema_key(conn)
+    if key is not None and _SCHEMA_READY.get(key) == _schema_version(conn):
         return
     with _INIT_LOCK:
         schema_path = Path(__file__).parent / "schema.sql"
@@ -198,6 +219,9 @@ def init_schema() -> None:
                 conn.execute(f"ALTER TABLE cron_runs ADD COLUMN {col_name} {col_type};")
 
         _SCHEMA_INITIALIZED = True
+        key = _schema_key(conn)
+        if key is not None:
+            _SCHEMA_READY[key] = _schema_version(conn)
 
 
 @contextmanager
