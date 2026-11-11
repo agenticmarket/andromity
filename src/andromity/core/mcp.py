@@ -1,9 +1,12 @@
 """Model Context Protocol (MCP) client manager — connects to MCP servers over stdio JSON-RPC."""
 import asyncio
+import concurrent.futures
+import importlib
 import json
 import logging
 import os
 import sys
+import threading
 import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -54,6 +57,63 @@ def sdk_tool_info(server_name: str, tool: Any) -> MCPToolInfo:
         description=getattr(tool, "description", "") or "",
         input_schema=schema or {},
     )
+
+
+_SDK_MODULES = {
+    "sse": ("mcp.client.session", "mcp.client.sse"),
+    "http": ("mcp.client.session", "mcp.client.streamable_http"),
+}
+SDK_UNAVAILABLE = "The MCP client library could not be loaded. Reinstall Andromity, then retry."
+_sdk_ready = threading.Event()
+_sdk_loaded: set = set()
+_sdk_loads: Dict[str, "concurrent.futures.Future[None]"] = {}
+_sdk_lock = threading.Lock()
+
+
+def _sdk_key(transport: str) -> str:
+    return "sse" if transport == "sse" else "http"
+
+
+def _import_sdk(transport: str = "http") -> None:
+    key = _sdk_key(transport)
+    for name in _SDK_MODULES[key]:
+        importlib.import_module(name)
+    if key == "http" and getattr(sys.modules["mcp.client.streamable_http"], "streamablehttp_client", None) is None:
+        importlib.import_module("httpx2")
+    try:
+        importlib.import_module("jsonschema")
+    except ImportError:
+        pass
+
+
+def _load_on_thread(key: str, future: "concurrent.futures.Future[None]") -> None:
+    try:
+        _import_sdk(key)
+    except BaseException as exc:
+        with _sdk_lock:
+            _sdk_loads.pop(key, None)
+        future.set_exception(exc)
+        return
+    with _sdk_lock:
+        _sdk_loaded.add(key)
+        _sdk_loads.pop(key, None)
+    _sdk_ready.set()
+    future.set_result(None)
+
+
+async def load_mcp_sdk(transport: str = "http") -> None:
+    """Import the MCP SDK on one shared worker thread: it pulls in pydantic and httpx, which blocks for seconds on a cold disk."""
+    key = _sdk_key(transport)
+    if _sdk_ready.is_set() and key in _sdk_loaded:
+        return
+    with _sdk_lock:
+        future = _sdk_loads.get(key)
+        if future is None:
+            future = concurrent.futures.Future()
+            future.set_running_or_notify_cancel()
+            _sdk_loads[key] = future
+            threading.Thread(target=_load_on_thread, args=(key, future), name="mcp-sdk-import", daemon=True).start()
+    await asyncio.wrap_future(future)
 
 
 def open_remote_transport(transport: str, url: str, headers: Dict[str, str]) -> AsyncContextManager[Any]:
@@ -437,7 +497,17 @@ class MCPSseSession:
         return self._session is not None
 
     async def _run(self):
-        from mcp.client.session import ClientSession
+        try:
+            await load_mcp_sdk(self.transport)
+            from mcp.client.session import ClientSession
+        except asyncio.CancelledError:
+            self._init_event.set()
+            return
+        except Exception as e:
+            self.error = SDK_UNAVAILABLE
+            log.warning("MCP client library could not be loaded for '%s' (%s)", self.name, type(e).__name__)
+            self._init_event.set()
+            return
 
         try:
             async with open_remote_transport(self.transport, self.url, self.headers) as streams:
