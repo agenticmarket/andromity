@@ -3445,10 +3445,14 @@ class JsonRpcHandler:
         from andromity.core.git_review import numstat
         repo = self._review_repo(params)
         try:
-            stats = await asyncio.to_thread(numstat, repo) if repo else {}
             project = Path(params.get("project_path") or Path.cwd()).resolve()
-            return {"files": {name: value for name, value in stats.items()
-                              if (Path(repo.working_tree_dir) / name).resolve().is_relative_to(project)}}
+
+            def _project_stats():
+                return {name: value for name, value in numstat(repo).items()
+                        if (Path(repo.working_tree_dir) / name).resolve().is_relative_to(project)}
+
+            # Resolving paths touches the disk, so it must not run on the event loop.
+            return {"files": await asyncio.to_thread(_project_stats) if repo else {}}
         finally:
             if repo:
                 await asyncio.to_thread(repo.close)
