@@ -26,7 +26,7 @@ const Module = nodeRequire("module");
 const originalRequire = Module.prototype.require;
 
 const EXT = fs.existsSync(path.join(process.cwd(), "src/panels/ReceiptPanel.ts")) ? process.cwd() : path.resolve(__dirname, "../..");
-const readSource = (rel: string) => fs.readFileSync(path.join(EXT, rel), "utf8");
+const readSource = (rel: string) => fs.readFileSync(path.join(EXT, rel), "utf8").replace(/\r\n/g, "\n");
 
 /* ------------------------------------------------------------------ */
 /* Fakes                                                                */
