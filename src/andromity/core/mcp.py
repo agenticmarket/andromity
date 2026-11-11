@@ -63,11 +63,30 @@ _SDK_MODULES = {
     "sse": ("mcp.client.session", "mcp.client.sse"),
     "http": ("mcp.client.session", "mcp.client.streamable_http"),
 }
+REMOTE_TOOL_TIMEOUT_S = 600
+DROP_GRACE_S = 0.1
+CANCEL_WAIT_S = 1.0
 SDK_UNAVAILABLE = "The MCP client library could not be loaded. Reinstall Andromity, then retry."
 _sdk_ready = threading.Event()
 _sdk_loaded: set = set()
 _sdk_loads: Dict[str, "concurrent.futures.Future[None]"] = {}
 _sdk_lock = threading.Lock()
+
+
+def _retrieve(task: "asyncio.Future[Any]") -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+async def _settle(task: "asyncio.Future[Any]") -> None:
+    """Cancel a task and collect its outcome, without waiting on one that ignores cancellation."""
+    if not task.done():
+        task.cancel()
+        await asyncio.wait({task}, timeout=CANCEL_WAIT_S)
+    if task.done():
+        _retrieve(task)
+    else:
+        task.add_done_callback(_retrieve)
 
 
 def _sdk_key(transport: str) -> str:
@@ -567,14 +586,33 @@ class MCPSseSession:
         return self.tools
         
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        if not self._session:
-            return f"Session '{self.name}' not connected"
+        session, connection = self._session, self._bg_task
+        if not session or connection is None or connection.done():
+            return f"Error: MCP server '{self.name}' is not connected. Reconnect it, then retry '{tool_name}'."
+        call = asyncio.ensure_future(session.call_tool(tool_name, arguments))
+        timed_out = False
         try:
-            resp = await self._session.call_tool(tool_name, arguments)
-            # The SDK returns CallToolResult with .content array of TextContent
-            return "\n".join(c.text for c in resp.content if hasattr(c, 'text'))
+            await asyncio.wait({call, connection}, timeout=REMOTE_TOOL_TIMEOUT_S, return_when=asyncio.FIRST_COMPLETED)
+            if not call.done() and connection.done():
+                await asyncio.wait({call}, timeout=DROP_GRACE_S)
+            timed_out = not call.done() and not connection.done()
+        finally:
+            await _settle(call)
+        if not call.done() or call.cancelled():
+            if connection.done():
+                again = "Authenticate it again" if self.needs_auth else "Reconnect it"
+                return (f"Error: the connection to MCP server '{self.name}' was lost while '{tool_name}' was running, "
+                        f"so its result is unknown. {again}, and if the tool changes anything, check whether it ran before retrying.")
+            if timed_out:
+                return f"Error: MCP server '{self.name}' did not answer '{tool_name}' within {REMOTE_TOOL_TIMEOUT_S} seconds."
+            return f"Error: '{tool_name}' on MCP server '{self.name}' was cancelled before it finished."
+        error = call.exception()
+        if error is not None:
+            return f"Error executing tool '{tool_name}': {str(error) or type(error).__name__}"
+        try:
+            return "\n".join(c.text for c in call.result().content if hasattr(c, 'text'))
         except Exception as e:
-            return f"Error executing tool '{tool_name}': {e}"
+            return f"Error reading the result of '{tool_name}' from MCP server '{self.name}': {type(e).__name__}"
             
     async def send_request(self, method: str, params: Dict[str, Any], timeout: float = 30.0) -> Optional[Dict[str, Any]]:
         # Map internal JSON-RPC calls to SDK calls if necessary, but TUI usually uses call_tool directly.
