@@ -9,6 +9,7 @@ import { getThinkingOrbsScript } from "./thinkingOrbs.js";
 import { getToolTargetsScript } from "./toolTargets.js";
 import { getStreamingRenderScript } from "./streamingRender.js";
 import { getTurnRailScript } from "./turnRail.js";
+import { getActionRailScript } from "./actionRail.js";
 import { DOCS } from "../../docsLinks.js";
 import { SHELL_LANGUAGES } from "../../integrations/shellLanguages.js";
 import { normalizeSidePanelPreferences } from "../../sidePanelPreferences.js";
@@ -4386,7 +4387,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           btnReasoningEl.classList.remove('active');
         }
       }
-      const isSessionTrigger = e.target.closest('#btn-session-picker');
+      const isSessionTrigger = e.target.closest('#btn-session-picker, [data-rail-action="sessions"]');
       if (sessionsFlyout && !sessionsFlyout.contains(e.target) && !isSessionTrigger) {
         sessionsFlyout.style.display = 'none';
       }
@@ -9451,6 +9452,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     ${getStreamingRenderScript()}
     ${getTurnRailScript()}
+    ${state.actionRail === true ? getActionRailScript() : ""}
 
     const QUIET_THINKING_NOTE_AFTER_S = 30;
 

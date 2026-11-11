@@ -4112,6 +4112,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       extensionVersion: customState?.extensionVersion ?? (this._context?.extension?.packageJSON?.version || "0.2.15"),
       sidePanelOff: this._context?.globalState?.get<boolean>("andromity.sidePanelOff"),
       sidePanelPreferences: sidePanelPreferences === undefined ? undefined : normalizeSidePanelPreferences(sidePanelPreferences),
+      actionRail: customState?.actionRail === true,
     });
   }
 }
