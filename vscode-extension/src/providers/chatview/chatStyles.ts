@@ -1,5 +1,6 @@
 import { getPromptStyles } from "./chatPromptStyles.js";
 import { getTurnRailStyles } from "./turnRail.js";
+import { getActionRailStyles } from "./actionRail.js";
 
 /** Shimmering text for live statuses; needs a `--fg` variable in the page. */
 export const STATUS_SHIMMER_STYLES = `
@@ -9672,5 +9673,6 @@ ${STATUS_SHIMMER_STYLES}
 
     ${getPromptStyles()}
     ${getTurnRailStyles()}
+    ${getActionRailStyles()}
 `;
 }

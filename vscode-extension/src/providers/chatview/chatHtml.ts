@@ -7,6 +7,7 @@ import { getChatClientScript } from "./chatClientScript.js";
 import { getChatActivityScript } from "./chatActivityRow.js";
 import { getChatAmbientScript, WallpaperConfig } from "./chatAmbientScript.js";
 import type { SidePanelPreferences } from "../../sidePanelTypes.js";
+import { getActionRailHtml } from "./actionRail.js";
 
 export interface ChatViewState {
   currentSessionId: string;
@@ -25,6 +26,7 @@ export interface ChatViewState {
   extensionVersion?: string;
   sidePanelOff?: boolean;
   sidePanelPreferences?: SidePanelPreferences;
+  actionRail?: boolean;
 }
 
 export function formatModelDisplayName(id?: string, models?: { id: string; name: string }[]): string {
@@ -269,7 +271,7 @@ ${styles}
       </div>
     </div>
   </div>
-
+${state.actionRail === true ? getActionRailHtml() : ""}
   <div class="account-popover" id="account-popover" style="display:none;" role="dialog" aria-label="Cloud account and daily allowance">
     <div class="account-section-label">Cloud account</div>
     <div class="account-popover-header">
