@@ -148,6 +148,7 @@ function load(container: Node, sessionsState: Record<string, any> = {}) {
     chatContainer: container, sessionsState, currentSessionId: "s1",
     Node: { DOCUMENT_POSITION_FOLLOWING: 4 }, Array, Number, Math, Object, String, Boolean, parseInt, isNaN,
     document: { createElement: () => new Node([]) }, FOOTER_RECEIPT_ICON: "<svg></svg>",
+    vscode: { postMessage() {} },
   };
   vm.createContext(sandbox);
   vm.runInContext(script.slice(start, end), sandbox);
@@ -351,7 +352,7 @@ describe("receipt badge in the chat", () => {
     assert.match(script, /if \(!m\.steering\) currentTurnKey = typeof m\.turn_key === 'string' \? m\.turn_key : null;/);
     assert.match(script, /startsWith\('\[Previous context summary'\)\) \{\s*currentTurnKey = null;/);
     assert.match(script, /receiptAction: true,\s*receiptTurnKey: currentTurnKey,/);
-    assert.match(script, /case 'receipt_ready': \{\s*const readyEntry = rememberReceiptReady\(msg\);\s*if \(readyEntry && msg\.session_id === currentSessionId\) \{\s*applyReceiptBadge\(receiptButtonForEntry\(readyEntry\) \|\| newestUnclaimedReceiptButton\(\), readyEntry\);/);
+    assert.match(script, /case 'receipt_ready': \{\s*const readyEntry = rememberReceiptReady\(msg\);\s*if \(readyEntry && msg\.session_id === currentSessionId\) \{\s*(?:if \()?applyReceiptBadge\(receiptButtonForEntry\(readyEntry\) \|\| newestUnclaimedReceiptButton\(\), readyEntry\)/);
     assert.match(script, /case 'open-receipt': \{\s*const receiptTurn = parseInt\(target\.getAttribute\('data-turn'\) \|\| '', 10\);/);
     assert.match(script, /rememberReceiptTurns\(currentSessionId, msg\.session && msg\.session\.receipt_turns\);\s*applyStoredReceiptBadges\(\);/);
   });

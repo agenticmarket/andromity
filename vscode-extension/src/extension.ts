@@ -197,6 +197,7 @@ function registerTrackedCommand(id: string, handler: (...args: any[]) => any): v
 export async function activate(context: vscode.ExtensionContext) {
   setFeatureUsageGate(() =>
     (vscode.env.isTelemetryEnabled ?? true) && vscode.workspace.getConfiguration("andromity").get<boolean>("telemetry", true) !== false);
+  ReceiptPanel.configureFeedback(context.globalState, String(context.extension.packageJSON.version || ""));
   const outputChannel = vscode.window.createOutputChannel("Andromity");
   context.subscriptions.push(outputChannel);
   const log = (msg: string) => {
@@ -893,6 +894,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage("Start a chat first. Each finished turn gets a receipt.");
         return;
       }
+      recordFeatureUse("receipt_opened_cmd", { sessionId });
       ReceiptPanel.createOrShow(context.extensionUri, sessionId, sessionName, pythonBridge?.getClient() || null);
     }),
 

@@ -1,10 +1,13 @@
 import * as vscode from "vscode";
 import { escapeHtml, getNonce } from "../webviewSecurity.js";
 import { getReceiptStyles } from "./receiptStyles.js";
+import { MAX_FEEDBACK_LENGTH } from "../../engagement/feedbackSubmit.js";
+import { RECEIPT_NOTE_PREFIX_MAX } from "../../engagement/receiptFeedback.js";
 import type {
   Receipt,
   ReceiptCheck,
   ReceiptCommand,
+  ReceiptFeedbackStep,
   ReceiptFileChange,
   ReceiptFinding,
   ReceiptResponse,
@@ -445,6 +448,36 @@ function renderTurnNav(turns: number[], current: number | null): string {
     </nav>`;
 }
 
+const NOTE_PROMPTS: Record<"up" | "down", string> = {
+  up: "What was useful? (optional)",
+  down: "What was missing or confusing? (optional)",
+};
+/** The longest note that still fits the feedback limit once its "[receipt note down] " prefix is added. */
+const NOTE_MAX_LENGTH = MAX_FEEDBACK_LENGTH - RECEIPT_NOTE_PREFIX_MAX;
+
+export function renderFeedbackStrip(step: ReceiptFeedbackStep | undefined): string {
+  const asking = step === "ask";
+  const noting = step === "note-up" || step === "note-down";
+  if (!asking && !noting) return "";
+  const rating = step === "note-down" ? "down" : "up";
+  return `<section class="rc-feedback" id="rc-feedback" aria-label="Receipt feedback">
+      <div class="rc-fb-step" data-step="ask"${asking ? "" : " hidden"}>
+        <span class="rc-fb-q">Was this receipt useful?</span>
+        <button type="button" class="rc-btn" data-action="rate-up">Useful</button>
+        <button type="button" class="rc-btn" data-action="rate-down">Not useful</button>
+        <button type="button" class="rc-link" data-action="rate-never">Don't ask again</button>
+        <span class="rc-fb-hint">Your answer is sent anonymously.</span>
+      </div>
+      <div class="rc-fb-step" data-step="note"${noting ? "" : " hidden"}>
+        <label class="rc-fb-q" id="rc-fb-label" for="rc-fb-note" data-up="${escapeHtml(NOTE_PROMPTS.up)}" data-down="${escapeHtml(NOTE_PROMPTS.down)}">${escapeHtml(NOTE_PROMPTS[rating])}</label>
+        <input type="text" id="rc-fb-note" class="rc-fb-note" maxlength="${NOTE_MAX_LENGTH}" autocomplete="off">
+        <button type="button" class="rc-btn rc-btn-primary" data-action="send-note">Send</button>
+        <button type="button" class="rc-link" data-action="skip-note">Skip</button>
+      </div>
+      <p class="rc-fb-status" id="rc-fb-status" role="status" aria-live="polite"></p>
+    </section>`;
+}
+
 function errorView(message: string, pinned: boolean): string {
   return `<div class="rc-empty" role="status"><p>${escapeHtml(message)}</p>
       <div class="rc-actions">
@@ -482,8 +515,9 @@ export function renderReceiptBody(state: ReceiptViewState): string {
           <button type="button" class="rc-btn" data-action="export-json" title="Save the full receipt as JSON">Save JSON</button>
         </div>`
       : "";
+    const feedback = receipt && !state.loading ? renderFeedbackStrip(state.feedback) : "";
     return `${header(renderTurnNav(state.turns, receipt ? receipt.turn_index : null), actions)}
-      <main class="rc-main" aria-busy="${state.loading ? "true" : "false"}">${main}</main>`;
+      <main class="rc-main" aria-busy="${state.loading ? "true" : "false"}">${main}${feedback}</main>`;
   } catch {
     return `${header("", "")}<main class="rc-main" aria-busy="false">${errorView(UNREADABLE, state.pinned)}</main>`;
   }
@@ -492,6 +526,8 @@ export function renderReceiptBody(state: ReceiptViewState): string {
 function receiptScript(): string {
   return `(function () {
   const vscode = acquireVsCodeApi();
+  let feedbackBusy = false;
+  let feedbackClosing = false;
   document.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target.closest('[data-action]') : null;
     if (!target || target.hasAttribute('disabled')) return;
@@ -510,8 +546,97 @@ function receiptScript(): string {
       vscode.postMessage({ type: 'refresh' });
     } else if (action === 'latest') {
       vscode.postMessage({ type: 'latest' });
+    } else if (action === 'rate-up' || action === 'rate-down') {
+      if (feedbackBusy) return;
+      setFeedbackBusy(true);
+      feedbackStatus('Sending...');
+      vscode.postMessage({ type: 'receipt_rate', rating: action === 'rate-up' ? 'up' : 'down' });
+    } else if (action === 'rate-never') {
+      vscode.postMessage({ type: 'receipt_feedback_never' });
+      closeFeedback('');
+    } else if (action === 'send-note') {
+      sendNote();
+    } else if (action === 'skip-note') {
+      vscode.postMessage({ type: 'receipt_note_skip' });
+      closeFeedback('Thanks for the feedback.');
     }
   });
+  const feedback = () => document.getElementById('rc-feedback');
+  const feedbackStatus = (text) => {
+    const status = document.getElementById('rc-fb-status');
+    if (status) status.textContent = text;
+  };
+  function setFeedbackBusy(busy) {
+    feedbackBusy = busy;
+    const root = feedback();
+    if (root) root.querySelectorAll('button, input').forEach((element) => { element.disabled = busy; });
+  }
+  function showFeedbackStep(step, focusNote) {
+    const root = feedback();
+    if (!root) return;
+    const ask = root.querySelector('[data-step="ask"]');
+    const note = root.querySelector('[data-step="note"]');
+    const noting = step === 'note-up' || step === 'note-down';
+    if (ask) ask.hidden = step !== 'ask';
+    if (note) note.hidden = !noting;
+    if (!noting) return;
+    const label = document.getElementById('rc-fb-label');
+    if (label) label.textContent = label.getAttribute(step === 'note-up' ? 'data-up' : 'data-down') || '';
+    const input = document.getElementById('rc-fb-note');
+    if (input && focusNote) input.focus();
+  }
+  function closeFeedback(text) {
+    const root = feedback();
+    if (!root) return;
+    feedbackClosing = true;
+    root.querySelectorAll('.rc-fb-step').forEach((step) => { step.hidden = true; });
+    feedbackStatus(text);
+    const main = document.querySelector('.rc-main');
+    if (main) {
+      main.setAttribute('tabindex', '-1');
+      main.focus({ preventScroll: true });
+    }
+    if (text) setTimeout(() => { const gone = feedback(); if (gone) gone.remove(); }, 2500);
+    else root.remove();
+  }
+  function sendNote() {
+    if (feedbackBusy) return;
+    const input = document.getElementById('rc-fb-note');
+    const text = input ? input.value.trim() : '';
+    if (!text) {
+      feedbackStatus('Write a note first, or choose Skip.');
+      return;
+    }
+    setFeedbackBusy(true);
+    feedbackStatus('Sending...');
+    vscode.postMessage({ type: 'receipt_note', message: text });
+  }
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && event.target instanceof HTMLInputElement && event.target.id === 'rc-fb-note') {
+      event.preventDefault();
+      sendNote();
+    }
+  });
+  window.addEventListener('message', (event) => {
+    const message = event.data;
+    const root = feedback();
+    if (!root || feedbackClosing || !message || message.type !== 'receipt_feedback_state') return;
+    const wasBusy = feedbackBusy;
+    setFeedbackBusy(message.busy === true);
+    const error = typeof message.error === 'string' ? message.error : '';
+    if (message.step === 'ask' || message.step === 'note-up' || message.step === 'note-down') {
+      const asking = !root.querySelector('[data-step="ask"]').hidden;
+      showFeedbackStep(message.step, asking && message.step !== 'ask');
+      feedbackStatus(error);
+      if (wasBusy && message.busy !== true && !(asking && message.step !== 'ask')) {
+        const target = message.step === 'ask' ? root.querySelector('[data-action="rate-up"]') : document.getElementById('rc-fb-note');
+        if (target) target.focus();
+      }
+      return;
+    }
+    closeFeedback(typeof message.notice === 'string' ? message.notice : error);
+  });
+  if (feedback()) vscode.postMessage({ type: 'receipt_feedback_sync' });
   document.addEventListener('change', (event) => {
     const target = event.target;
     if (target instanceof HTMLSelectElement && target.getAttribute('data-action') === 'pick-turn' && target.value !== '') {

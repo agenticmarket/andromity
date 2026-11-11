@@ -7796,7 +7796,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       button.title = count > 0
         ? count + (count === 1 ? ' thing' : ' things') + ' in this turn ' + (count === 1 ? 'needs' : 'need') + ' your eyes'
         : 'What this turn read, changed and ran';
-      button.hidden = Boolean(applyReceiptLine(button, entry, count, high));
+      var lineShown = Boolean(applyReceiptLine(button, entry, count, high));
+      button.hidden = lineShown;
+      return lineShown;
+    }
+
+    var receiptLineNotedFor = Object.create(null);
+    function noteReceiptLineShown() {
+      if (receiptLineNotedFor[currentSessionId]) return;
+      receiptLineNotedFor[currentSessionId] = true;
+      try {
+        vscode.postMessage({ type: 'telemetry_feature', feature: 'receipt_line_shown', once: true });
+      } catch {}
     }
 
     /** Replace what the chat knows with the engine's list; counts seen live are kept only where the engine has none. */
@@ -7835,7 +7846,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       var receipts = state && state.receipts ? state.receipts : {};
       Object.keys(receipts).forEach(function (id) {
         var entry = receipts[id];
-        applyReceiptBadge(receiptButtonForEntry(entry), entry);
+        if (applyReceiptBadge(receiptButtonForEntry(entry), entry)) noteReceiptLineShown();
       });
     }
 
@@ -11811,7 +11822,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'receipt_ready': {
           const readyEntry = rememberReceiptReady(msg);
           if (readyEntry && msg.session_id === currentSessionId) {
-            applyReceiptBadge(receiptButtonForEntry(readyEntry) || newestUnclaimedReceiptButton(), readyEntry);
+            if (applyReceiptBadge(receiptButtonForEntry(readyEntry) || newestUnclaimedReceiptButton(), readyEntry)) noteReceiptLineShown();
           }
           break; }
 
