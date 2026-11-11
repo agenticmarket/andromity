@@ -183,8 +183,10 @@ Notes on each:
   shape asks, and the listener's hit list is asserted empty at the end.
 - **Runaway loop.** Measured before the fix: a turn whose model answers every
   tool result with another tool call made 881 model calls in 10 seconds and was
-  still going, because `Agent._run` had no bound. `max_tool_rounds` (default 60,
-  configurable) now ends the turn with a message naming the limit. The test sets
+  still going, because `Agent._run` had no bound. `max_tool_rounds` (default 200,
+  configurable) now pauses the turn and asks whether to keep going; with no
+  interactive UI, or any answer but "Keep going", it ends with a message naming
+  the limit. The test sets
   it to 8 and asserts exactly 8 model calls, 8 tool results and
   `Done.error_type == "tool_round_limit"`.
 - **Writes outside the workspace.** `../shared-config.json`, `../outside/…`,
