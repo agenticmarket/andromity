@@ -21,6 +21,7 @@ import { DOCS, INTEGRATIONS_URL } from "../docsLinks.js";
 import { CONNECTOR_ICONS } from "./connectorIcons.js";
 import { CONNECTOR_GUIDE_SLUGS } from "./connectorGuides.js";
 import { applyGitSetting, getGitSettingsPane, gitSettingsClient, gitSettingsState, signInToGitHub } from "./settings/gitSettings.js";
+import { getHubSearchStyles, HUB_SEARCH_MARKUP, hubSearchClient } from "./settings/hubSearch.js";
 
 // Hub actions recorded as anonymous feature use (the action name only, never the values).
 const HUB_FEATURES: Record<string, string> = {
@@ -51,6 +52,7 @@ export class SettingsPanel {
   private _onConfigChangeCallback?: () => void;
   private _initialTab: string = "models";
   private _loadingPromise: Promise<void> | null = null;
+  private _approvalRemovals: Promise<void> = Promise.resolve();
   private _disposed = false;
 
   public static extensionContext?: vscode.ExtensionContext;
@@ -886,15 +888,22 @@ export class SettingsPanel {
       case "forget_approval": {
         const key = message.kind === "command" ? "allowed_commands" : message.kind === "domain" ? "allowed_domains" : null;
         if (!key || typeof message.value !== "string") break;
+        const previous = this._approvalRemovals;
+        let release = () => {};
+        this._approvalRemovals = new Promise<void>((resolve) => { release = resolve; });
+        await previous;
         try {
           const current = await this._rpcClient.call<any>("config.get", {});
-          const remembered = current?.config?.default?.[key];
-          const next = Array.isArray(remembered) ? remembered.filter((entry: unknown) => entry !== message.value) : [];
+          const remembered = current?.[key];
+          if (!Array.isArray(remembered)) throw new Error("the current list could not be read");
+          const next = remembered.filter((entry: unknown) => entry !== message.value);
           await this._rpcClient.call("config.set", { section: "default", key, value: next });
           await this.loadData(true);
         } catch (err: any) {
           vscode.window.showErrorMessage(`Could not remove the remembered approval: ${err.message}`);
           await this.loadData(true);
+        } finally {
+          release();
         }
         break;
       }
@@ -3377,6 +3386,7 @@ export class SettingsPanel {
     #usage-share-preview { max-width:100%; max-height:420px; object-fit:contain; border-radius:8px; }
     .setting-group-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); margin: 18px 0 8px; }
     .git-setting-error { color: var(--vscode-errorForeground); }
+    ${getHubSearchStyles()}
   </style>
 </head>
 <body>
@@ -3394,6 +3404,7 @@ export class SettingsPanel {
         </div>
       </div>
     </div>
+${HUB_SEARCH_MARKUP}
 
     <div class="nav-tabs" id="nav-tabs-container">
       <button class="nav-tab active" data-tab="models" id="tab-btn-models" data-tooltip="Model Hub" aria-label="Model Hub">
@@ -3696,6 +3707,13 @@ export class SettingsPanel {
             <div class="cron-form-col"><label for="connection-type">LiteLLM provider type</label><input id="connection-type" value="openai" placeholder="openai"></div>
             <div class="cron-form-col"><label for="connection-version">API version · optional</label><input id="connection-version"></div>
           </div>
+          <div class="cron-form-row">
+            <div class="cron-form-col">
+              <label for="connection-reasoning-efforts">Supported reasoning efforts · optional</label>
+              <input id="connection-reasoning-efforts" placeholder="low, medium, high, xhigh">
+              <p class="setting-desc">Comma-separated effort names supported by this endpoint. Leave blank for provider default.</p>
+            </div>
+          </div>
           <p class="setting-desc">OpenAI-compatible is the default. Other adapters can use the runtime's standard environment credentials.</p>
         </details>
         <div style="display:flex; justify-content:flex-end; gap:8px;">
@@ -3931,8 +3949,8 @@ export class SettingsPanel {
         </div>
 
         <div class="settings-card">
-          <div class="setting-label">Remembered approvals</div>
-          <div class="setting-desc">Commands and web domains you chose to always allow. In TRUST mode they run without asking. Remove any you no longer want.</div>
+          <div class="setting-label">Allowed commands and domains</div>
+          <div class="setting-desc">In TRUST mode these run without asking. The list is <code>allowed_commands</code> and <code>allowed_domains</code> under <code>[default]</code> in your config file, and "Always allow" adds to it. Remove any you no longer want.</div>
           <div id="remembered-approvals-list" style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;"></div>
         </div>
 
@@ -4970,7 +4988,8 @@ SOFTWARE.</pre>
         const value = (id) => document.getElementById(id).value.trim();
         const connection = { id: value("connection-id"), display_name: value("connection-name"),
           base_url: value("connection-url"), model: value("connection-model"),
-          type: value("connection-type") || "openai", api_version: value("connection-version") };
+          type: value("connection-type") || "openai", api_version: value("connection-version"),
+          reasoning_efforts: value("connection-reasoning-efforts") };
         if (value("connection-key")) connection.api_key = value("connection-key");
         vscode.postMessage({ type: "save_provider", connection });
       } else if (action === "test-provider") {
@@ -5582,9 +5601,9 @@ SOFTWARE.</pre>
     function renderRememberedApprovals() {
       const list = document.getElementById("remembered-approvals-list");
       if (!list) return;
-      const defaults = (currentConfig && currentConfig.config && currentConfig.config.default) || {};
+      const defaults = currentConfig || {};
       const group = (title, kind, values) => {
-        const items = Array.isArray(values) ? values.map(String).filter(Boolean) : [];
+        const items = Array.isArray(values) ? values.filter(v => typeof v === "string" && v) : [];
         return '<div style="font-size: 11px; font-weight: 600; color: var(--text-muted); margin-top: 4px;">' + title + ' (' + items.length + ')</div>' +
           (items.length ? items.map(value =>
             '<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 10px; background: rgba(var(--tint), 0.03); border: 1px solid var(--card-border); border-radius: 4px;">' +
@@ -5786,7 +5805,7 @@ SOFTWARE.</pre>
                 '<span class="badge blue">' + escapeHtml(m.provider) + '</span>' +
               '</div>' +
             '</div>' +
-            '<div class="model-desc">' + escapeHtml(m.desc || "High-performance AI model.") + '</div>' +
+            '<div class="model-desc" title="' + escapeHtml(m.desc || "High-performance AI model.") + '">' + escapeHtml(m.desc || "High-performance AI model.") + '</div>' +
             '<div class="model-badges">' +
               (m.needs_key ? '<span class="badge orange" title="Set your ' + escapeHtml(providerName(m.provider)) + ' API key to use this model">Needs API key</span>' : '') +
               (ctxStr ? '<span class="badge purple">' + escapeHtml(ctxStr) + '</span>' : '') +
@@ -5808,9 +5827,11 @@ SOFTWARE.</pre>
 
     function editProvider(id) {
       const provider = allProviders.find(p => p.id === id) || {};
+      const efforts = Array.isArray(provider.reasoning_efforts) ? provider.reasoning_efforts.join(", ") : (provider.reasoning_efforts || "");
       const fields = { "connection-id": provider.id || "", "connection-name": provider.name || "",
         "connection-url": provider.base_url || "", "connection-model": provider.model || "",
-        "connection-type": provider.type || "openai", "connection-version": provider.api_version || "", "connection-key": "" };
+        "connection-type": provider.type || "openai", "connection-version": provider.api_version || "",
+        "connection-reasoning-efforts": efforts, "connection-key": "" };
       Object.keys(fields).forEach(key => document.getElementById(key).value = fields[key]);
       document.getElementById("connection-id").disabled = Boolean(id);
       document.getElementById("connection-editor").style.display = "block";
@@ -5995,6 +6016,7 @@ SOFTWARE.</pre>
 
     ${getUsageScript()}
     (${gitSettingsClient.toString()})(vscode);
+    (${hubSearchClient.toString()})(switchTab);
 
     function renderUsageChart(sessions, range) {
       const container = document.getElementById("usage-bar-chart-container");

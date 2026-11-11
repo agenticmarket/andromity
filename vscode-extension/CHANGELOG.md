@@ -2,6 +2,27 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.27] — 2026-11-11
+
+### Added
+- **Search the Hub.** A search box at the top of the Andromity Hub sidebar finds sections, settings, models, MCP servers and skills, tolerates typos, and jumps to the match. Press `/` or Ctrl+F (Cmd+F) to start typing.
+- **Actions in the full-screen chat tab.** A rail on the left of the chat tab reaches New Session, Sessions History, Changes Review, Pull Requests and Issues, File Diffs and Settings, with a More menu for Setup Check, Restart Engine, Compact, Undo and Welcome.
+- **"Was this receipt useful?"** A quiet strip under a receipt asks whether it helped, with an optional note and Don't ask again. Answers are anonymous, and receipt actions are counted by fixed feature names (see TELEMETRY.md).
+- **Effort picker.** A stepped rail with only the levels the model supports, an Auto switch and a hint per level. Custom OpenAI-compatible connections can declare their effort levels (thanks to Nikunj Maheshwari, #19).
+
+### Changed
+- **Long turns ask before stopping.** After 200 tool rounds the chat asks whether to keep going, instead of stopping at 60.
+- **Thinking shows as it happens** for Claude models, and the chat says the model is thinking while a reply hasn't started.
+- **The Ollama notice appears once** and says whether the model runs on this computer or on Ollama's cloud.
+- **Full model names** on hover in the model picker.
+
+### Fixed
+- **MCP tool calls no longer stay "running" forever** when a remote server's connection drops or its sign-in expires.
+- **No more freeze on the first launch after a restart.** The engine loads the MCP library in the background, so the chat answers right away even from a cold disk.
+- **No more stall after VS Code starts.** Sessions and prompts no longer wait for MCP servers, the chat appears without waiting for every list, and request timeouts start once the engine is running ("RPC timeout (30000ms) for method: session.create").
+- **Long thinking was cut off at 60 seconds** and retried three times.
+- **Trust & Security lists your allowed commands** from config.toml, and removing one never erases the rest.
+
 ## [0.2.26] — 2026-11-10
 
 ### Added

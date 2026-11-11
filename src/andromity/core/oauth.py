@@ -23,6 +23,7 @@ import asyncio
 import base64
 import hashlib
 import html
+import importlib
 import json
 import logging
 import os
@@ -30,6 +31,7 @@ import re
 import secrets
 import socket
 import stat
+import sys
 import time
 import urllib.parse
 import webbrowser
@@ -208,9 +210,27 @@ def _find_free_port(start: int = 54321, attempts: int = 10) -> int:
 
 # ── OAuth Metadata Discovery (RFC 9728) ───────────────────────────────────────
 
+async def _httpx():
+    """httpx, imported on a worker thread: a cold import blocks the event loop for seconds."""
+    module = sys.modules.get("httpx")
+    if module is not None and not getattr(getattr(module, "__spec__", None), "_initializing", False):
+        return module
+    return await asyncio.to_thread(_import_httpx)
+
+
+def _import_httpx():
+    module = importlib.import_module("httpx")
+    for name in ("httpcore._backends.anyio", "anyio._backends._asyncio"):
+        try:
+            importlib.import_module(name)
+        except ImportError:
+            pass
+    return module
+
+
 async def discover_metadata(server_url: str) -> Optional[dict]:
     """Discover the resource's authorization server, including RFC 9728 challenges."""
-    import httpx
+    httpx = await _httpx()
     parsed = urllib.parse.urlparse(server_url)
     base = f"{parsed.scheme}://{parsed.netloc}"
     resource = base + parsed.path
@@ -282,7 +302,7 @@ async def dynamic_register(registration_endpoint: str, redirect_uri: str, auth_m
     Register Andromity using the authorization server's supported auth method.
     Returns registration dict (containing client_id) or None.
     """
-    import httpx
+    httpx = await _httpx()
 
     payload = {
         "client_name":                f"{CLIENT_NAME} v{CLIENT_VERSION}",
@@ -407,7 +427,7 @@ async def exchange_code(
     client_secret: Optional[str] = None,
     auth_method: str = "none",
 ) -> Optional[dict]:
-    import httpx
+    httpx = await _httpx()
     payload = {
         "grant_type":    "authorization_code",
         "code":          code,
@@ -447,7 +467,7 @@ async def refresh_access_token(
     client_secret: Optional[str] = None,
     auth_method: str = "none",
 ) -> Optional[dict]:
-    import httpx
+    httpx = await _httpx()
     payload = {
         "grant_type":    "refresh_token",
         "refresh_token": refresh_token,

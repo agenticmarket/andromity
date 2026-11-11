@@ -49,10 +49,12 @@ export async function loadSidePanelData(rpc: RpcLike, projectPath: string, parts
     }).catch(() => { data.mcp = []; }));
   }
   if (parts.includes("changes")) {
-    tasks.push(Promise.all([
-      rpc.call<any>("git.status", { project_path: projectPath }),
-      rpc.call<any>("git.diff_numstat", { project_path: projectPath }).catch(() => ({ files: {} })),
-    ]).then(([status, numstat]) => {
+    tasks.push(rpc.call<any>("trust.status", { project_path: projectPath }).then((trust): Promise<[any, any]> | [null, null] => trust?.is_trusted !== true
+      ? [null, null]
+      : Promise.all([
+        rpc.call<any>("git.status", { project_path: projectPath }),
+        rpc.call<any>("git.diff_numstat", { project_path: projectPath }).catch(() => ({ files: {} })),
+      ])).then(([status, numstat]) => {
       if (!status?.is_git) {
         data.changes = null;
         return;

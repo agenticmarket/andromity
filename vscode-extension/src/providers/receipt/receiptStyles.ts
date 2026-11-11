@@ -167,6 +167,31 @@ h3 { margin: 0 0 4px; font-size: 1em; font-weight: 400; color: var(--rc-muted); 
 .rc-foot p { margin: 0 0 4px; }
 .rc-notes { margin: 0 0 4px; padding-left: 16px; }
 
+.rc-feedback { margin-top: 20px; padding: 10px 12px; border: 1px solid var(--rc-border); border-radius: 6px; }
+.rc-fb-step { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+.rc-fb-step[hidden] { display: none; }
+.rc-fb-q { margin-right: 4px; }
+.rc-fb-note {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 3px 6px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--rc-border));
+  border-radius: 3px;
+}
+.rc-link {
+  padding: 0;
+  color: var(--rc-link);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.rc-link:hover { text-decoration: underline; }
+.rc-feedback button:disabled, .rc-fb-note:disabled { opacity: .5; cursor: default; }
+.rc-fb-hint { color: var(--rc-muted); font-size: .92em; }
+.rc-fb-status { min-height: 1.4em; margin: 4px 0 0; color: var(--rc-muted); }
+
 @media (max-width: 560px) {
   .rc-head, .rc-main { padding-left: 12px; padding-right: 12px; }
   .rc-row-cmd { grid-template-columns: 76px minmax(0, 1fr); }

@@ -1,12 +1,13 @@
 """Backward-compatible imports for the model effort engine."""
 from andromity.core.effort import (
-    ReasoningCapability, ReasoningMode, apply_reasoning_to_request,
+    KNOWN_EFFORTS, ReasoningCapability, ReasoningMode, apply_reasoning_to_request,
     discover_model_reasoning_capability, get_model_reasoning_capability,
+    validate_reasoning_efforts,
 )
 __all__ = [
-    "ReasoningCapability", "ReasoningMode", "apply_reasoning_to_request",
+    "KNOWN_EFFORTS", "ReasoningCapability", "ReasoningMode", "apply_reasoning_to_request",
     "discover_model_reasoning_capability", "get_model_reasoning_capability",
-    "ordered_reasoning_efforts",
+    "ordered_reasoning_efforts", "validate_reasoning_efforts",
 ]
 
 

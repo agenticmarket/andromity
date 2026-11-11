@@ -275,6 +275,7 @@ describe("turning air-gap mode on", () => {
 
 describe("session panel feed", () => {
   const rpc = { call: async (method: string) => method === "mcp.list" ? [{ name: "supabase", status: "running", tools_count: 2 }]
+    : method === "trust.status" ? { is_trusted: true }
     : method === "git.status" ? { is_git: true, branch: "dev", files: [{ path: "a.ts", status: "M" }] }
     : { files: { "a.ts": { additions: 3, deletions: 1 } } } };
 

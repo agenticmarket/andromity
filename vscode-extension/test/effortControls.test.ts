@@ -13,7 +13,7 @@ function harness() {
   const elements = new Map<string, any>();
   const create = () => {
     const element: any = {
-      children: [], style: {}, classList: { toggle() {}, remove() {} },
+      children: [], style: { setProperty(this: any, key: string, value: string) { this[key] = value; } }, classList: { toggle() {}, remove() {} },
       removeAttribute() {}, setAttribute(key: string, value: string) { this[key] = value; },
       addEventListener() {}, appendChild(child: any) { this.children.push(child); },
     };
@@ -41,7 +41,7 @@ describe("Model-specific effort controls", () => {
       supported_efforts: ["max", "high", "low"], default_effort: "auto",
     } }];
     h.run("updateReasoningUI()");
-    assert.deepEqual(h.elements.get("reasoning-slider-labels").children.map((b: any) => b.textContent), ["Auto", "Low", "High", "Max"]);
+    assert.deepEqual(h.elements.get("reasoning-slider-labels").children.map((b: any) => b.textContent), ["Low", "High", "Max"]);
   });
 
   it("renders the exact enum including future levels and adjusts slider bounds", () => {
@@ -50,8 +50,8 @@ describe("Model-specific effort controls", () => {
       mode: "configurable", supported_efforts: ["low", "xhigh", "ultra"], default_effort: "low",
     } }];
     h.run("updateReasoningUI()");
-    assert.deepEqual(h.elements.get("reasoning-slider-labels").children.map((b: any) => b.textContent), ["Auto", "Low", "Xhigh", "Ultra"]);
-    assert.equal(h.elements.get("reasoning-slider-range").max, "3");
+    assert.deepEqual(h.elements.get("reasoning-slider-labels").children.map((b: any) => b.textContent), ["Low", "X-High", "Ultra"]);
+    assert.equal(h.elements.get("reasoning-slider-range").max, "2");
     assert.equal(h.context.currentReasoning, "low");
     h.run("setReasoningLevel('off', true)");
     assert.equal(h.posts.length, 0);
@@ -73,7 +73,7 @@ describe("Model-specific effort controls", () => {
     const h = harness();
     h.run("currentModelReasoningCapability = { _modelId: 'custom', _providerId: 'anthropic', supported_efforts: ['high'] }");
     h.run("updateReasoningUI()");
-    assert.equal(h.elements.get("reasoning-slider-labels").children.length, 1);
+    assert.equal(h.elements.get("reasoning-slider-labels").children.length, 0);
     assert.equal(h.context.currentReasoning, "auto");
     assert.equal(h.elements.get("reasoning-slider-range").disabled, true);
     assert.equal(h.elements.get("btn-prompt-reasoning").disabled, true);
@@ -89,7 +89,7 @@ describe("Model-specific effort controls", () => {
     } }];
     h.run("updateReasoningUI()");
     assert.equal(h.elements.get("btn-prompt-reasoning").disabled, false);
-    assert.deepEqual(h.elements.get("reasoning-slider-labels").children.map((b: any) => b.textContent), ["Auto", "Off", "On"]);
+    assert.deepEqual(h.elements.get("reasoning-slider-labels").children.map((b: any) => b.textContent), ["Off", "On"]);
   });
 
   it("validates token budgets and clears unsupported values when switching models", () => {
@@ -106,5 +106,43 @@ describe("Model-specific effort controls", () => {
     h.run("updateReasoningUI()");
     assert.equal(h.context.currentReasoning, "auto");
     assert.equal(h.elements.get("reasoning-budget-row").hidden, true);
+  });
+
+  it("unlocks reasoning effort controls for custom provider with declared efforts", () => {
+    const h = harness();
+    h.context.currentProvider = "example-endpoint";
+    h.context.currentModel = "cx/gpt-6-luna";
+    h.context.allModels = [{
+      id: "cx/gpt-6-luna",
+      provider: "example-endpoint",
+      reasoning: {
+        mode: "configurable",
+        supported_efforts: ["low", "medium", "high", "xhigh"],
+        default_effort: "auto",
+        request_format: "openai",
+      },
+    }];
+    h.run("updateReasoningUI()");
+    assert.equal(h.elements.get("btn-prompt-reasoning").disabled, false);
+    assert.deepEqual(
+      h.elements.get("reasoning-slider-labels").children.map((b: any) => b.textContent),
+      ["Low", "Medium", "High", "X-High"]
+    );
+    h.run("setReasoningLevel('high', true)");
+    assert.equal(h.posts.length, 1);
+    assert.equal(h.posts[0].value, "high");
+  });
+
+  it("locks reasoning effort controls to auto when custom provider has no declared efforts", () => {
+    const h = harness();
+    h.context.currentProvider = "example-endpoint";
+    h.context.currentModel = "cx/gpt-6-luna";
+    h.context.allModels = [{
+      id: "cx/gpt-6-luna",
+      provider: "example-endpoint",
+    }];
+    h.run("updateReasoningUI()");
+    assert.equal(h.elements.get("btn-prompt-reasoning").disabled, true);
+    assert.equal(h.elements.get("prompt-reasoning-label").textContent, "N/A");
   });
 });

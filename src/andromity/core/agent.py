@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import json
+import re
 import sys
 import time
 from contextlib import aclosing
@@ -135,8 +136,11 @@ def model_supports_vision(provider: str, model: str) -> bool:
         or (cfg.get("type") and cfg.get("type") != provider)
     if routed_or_local:
         return True
+    from andromity.core.litellm_loader import loaded_litellm
+    litellm = loaded_litellm()
+    if litellm is None:
+        return True
     try:
-        import litellm
         return litellm.supports_vision(litellm_model) is not False
     except Exception:
         return True
@@ -167,7 +171,20 @@ _ERROR_FEATURE_NAMES = {
 }
 
 
-DEFAULT_MAX_TOOL_ROUNDS = 60
+DEFAULT_MAX_TOOL_ROUNDS = 200
+KEEP_GOING = "Keep going"
+STOP_HERE = "Stop here"
+
+
+def _chose(answer: Any, option: str) -> bool:
+    """Whether the answer to one question is exactly this option, bare or as the client's line "1. question: option"."""
+    lines = [line.strip() for line in str(answer).splitlines() if line.strip()]
+    if lines and lines[0].lower() == "user answers:":
+        lines = lines[1:]
+    if len(lines) != 1:
+        return False
+    line = lines[0]
+    return line.lower() == option.lower() or re.fullmatch(r"1\. [^:]*: " + re.escape(option), line, re.IGNORECASE) is not None
 
 
 def _max_tool_rounds() -> int:
@@ -176,9 +193,12 @@ def _max_tool_rounds() -> int:
     Without a bound, a model that answers every tool result with another tool call
     runs until the context fills: spend, edits and commands with nobody watching.
     """
+    raw = config.get("default", "max_tool_rounds", DEFAULT_MAX_TOOL_ROUNDS)
+    if isinstance(raw, bool):
+        return DEFAULT_MAX_TOOL_ROUNDS
     try:
-        value = int(config.get("default", "max_tool_rounds", DEFAULT_MAX_TOOL_ROUNDS))
-    except (TypeError, ValueError):
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
         return DEFAULT_MAX_TOOL_ROUNDS
     return value if value > 0 else DEFAULT_MAX_TOOL_ROUNDS
 
@@ -709,6 +729,7 @@ class Agent:
         if hasattr(self, "orchestrator") and self.orchestrator:
             setattr(self.orchestrator, "current_turn_id", user_turn_id)
         iteration_idx = 0
+        round_limit = self.max_tool_rounds
         self._suggested_last_step = False
         # Set when the loop goes round again only to take in messages sent meanwhile.
         resumed_for_steering = False
@@ -1283,17 +1304,33 @@ class Agent:
                     break
                 resumed_for_steering = True
 
-            if iteration_idx >= self.max_tool_rounds:
+            if iteration_idx >= round_limit:
+                if await self._keep_going_after(iteration_idx):
+                    round_limit = iteration_idx + self.max_tool_rounds
+                    continue
                 notice = (
-                    f"\n**[Stopped after {iteration_idx} tool rounds]** This turn kept calling tools without "
-                    "finishing. Nothing further ran. Send the next instruction to continue, or raise "
-                    "`max_tool_rounds` in your config if the task genuinely needs more steps.\n"
+                    f"\n**[Paused after {iteration_idx} tool rounds]** Nothing further ran. Send \"continue\" "
+                    "to pick up where it stopped, or raise `max_tool_rounds` in your config to pause less often.\n"
                 )
                 self.session.add_message("assistant", content=notice, turn_id=turn_id, model=self._model_id())
                 yield TextDelta(text=notice)
                 yield Done(usage=last_usage, outcome="error", error_type="tool_round_limit")
                 self._fire_session_end(had_error=True, error_type="tool_round_limit")
                 break
+
+    async def _keep_going_after(self, rounds: int) -> bool:
+        """Ask whether a long turn should go on. No answer, no UI or any other answer stops it."""
+        if not self.on_questions:
+            return False
+        question = {"question": f"This turn has run {rounds} tool rounds. Keep going?", "type": "single",
+                    "options": [STOP_HERE, KEEP_GOING]}
+        superseded = object()
+        try:
+            answer = await self.input_queue.interaction(self.on_questions([question]), superseded, self.steering_adds_input)
+        except Exception as e:
+            log.warning("Asking whether to continue failed: %s", type(e).__name__)
+            return False
+        return answer is superseded or _chose(answer, KEEP_GOING)
 
     def _tools_for_this_call(self) -> list:
         """Collaboration tools only when another session is around or something is waiting for this one."""

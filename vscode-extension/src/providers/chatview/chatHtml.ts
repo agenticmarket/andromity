@@ -7,6 +7,7 @@ import { getChatClientScript } from "./chatClientScript.js";
 import { getChatActivityScript } from "./chatActivityRow.js";
 import { getChatAmbientScript, WallpaperConfig } from "./chatAmbientScript.js";
 import type { SidePanelPreferences } from "../../sidePanelTypes.js";
+import { getActionRailHtml } from "./actionRail.js";
 
 export interface ChatViewState {
   currentSessionId: string;
@@ -25,6 +26,7 @@ export interface ChatViewState {
   extensionVersion?: string;
   sidePanelOff?: boolean;
   sidePanelPreferences?: SidePanelPreferences;
+  actionRail?: boolean;
 }
 
 export function formatModelDisplayName(id?: string, models?: { id: string; name: string }[]): string {
@@ -84,8 +86,6 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
   const activityScript = getChatActivityScript();
   const clientScript = getChatClientScript(sidebarIconUri.toString(), state);
   const ambientScript = getChatAmbientScript(defaultWallpaperUri, state.wallpaperConfig);
-
-  const activeReasoning = { label: "Auto", idx: 0, pct: 0 };
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -271,7 +271,7 @@ ${styles}
       </div>
     </div>
   </div>
-
+${state.actionRail === true ? getActionRailHtml() : ""}
   <div class="account-popover" id="account-popover" style="display:none;" role="dialog" aria-label="Cloud account and daily allowance">
     <div class="account-section-label">Cloud account</div>
     <div class="account-popover-header">
@@ -971,17 +971,24 @@ ${styles}
         <div class="drag-dropped-files-bar" id="drag-dropped-files-bar" style="display:none;"></div>
         <textarea id="prompt-input" autofocus placeholder="Ask Andromity…" rows="1" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-haspopup="listbox" aria-label="Ask Andromity or type slash for commands, @ for skills" title="Enter to send · Shift+Enter for a new line · / commands · @ skills"></textarea>
 
-        <!-- Stepped Reasoning Effort Popover (Clean & Minimal) -->
-        <div class="reasoning-popover" id="reasoning-popover" style="display:none;" role="dialog" aria-label="Thinking Effort">
+        <div class="reasoning-popover" id="reasoning-popover" style="display:none;" role="dialog" aria-label="Thinking effort">
+          <div class="reasoning-head">
+            <span class="reasoning-title">Thinking effort</span>
+            <button type="button" class="reasoning-auto" id="reasoning-auto" role="switch" aria-checked="false" aria-label="Auto: let the model decide how long to think">
+              <span class="reasoning-auto-switch" aria-hidden="true"></span>Auto
+            </button>
+          </div>
           <div class="reasoning-slider-container">
-            <div class="reasoning-slider-track-wrap">
-              <input type="range" class="reasoning-slider-range" id="reasoning-slider-range" min="0" max="0" step="1" value="${activeReasoning.idx}" aria-label="Thinking effort level">
+            <div class="reasoning-slider-track-wrap" id="reasoning-slider-wrap">
+              <div class="reasoning-bubble" id="reasoning-bubble" aria-hidden="true"></div>
               <div class="reasoning-slider-track" id="reasoning-slider-track">
-                <div class="reasoning-slider-fill fill-${activeReasoning.label.toLowerCase()}" id="reasoning-slider-fill" style="width: ${activeReasoning.pct}%;"></div>
+                <div class="reasoning-slider-fill" id="reasoning-slider-fill"></div>
               </div>
-              <div class="reasoning-slider-ticks" id="reasoning-slider-ticks"></div>
+              <div class="reasoning-slider-ticks" id="reasoning-slider-ticks" aria-hidden="true"></div>
+              <input type="range" class="reasoning-slider-range" id="reasoning-slider-range" min="0" max="0" step="1" value="0" aria-label="Thinking effort level">
             </div>
-            <div class="reasoning-slider-labels" id="reasoning-slider-labels"></div>
+            <div class="reasoning-slider-labels" id="reasoning-slider-labels" aria-hidden="true"></div>
+            <p class="reasoning-hint" id="reasoning-hint"></p>
             <div id="reasoning-budget-row" hidden>
               <label for="reasoning-budget-input">Thinking tokens</label>
               <input type="number" id="reasoning-budget-input" step="1" aria-label="Thinking token budget">
@@ -1074,12 +1081,8 @@ ${styles}
               </svg>
             </button>
             <button class="prompt-btn is-unsupported" id="btn-prompt-reasoning" title="Loading model thinking controls" aria-label="Reasoning effort" aria-haspopup="dialog" aria-expanded="false" aria-disabled="true" disabled>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path>
-                <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path>
-                <path d="M12 5v13"></path>
-              </svg>
-              <span id="prompt-reasoning-label">${activeReasoning.label}</span>
+              <span class="effort-glyph" id="effort-glyph" data-lit="0" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+              <span id="prompt-reasoning-label">Auto</span>
               <svg class="chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="6 9 12 15 18 9"></polyline>
               </svg>

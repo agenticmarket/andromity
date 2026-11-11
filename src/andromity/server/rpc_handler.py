@@ -110,11 +110,14 @@ from andromity.server.protocol import (
     METHOD_NOT_FOUND,
     SESSION_NOT_FOUND,
     JsonRpcNotification,
+    RpcRefusal,
     JsonRpcRequest,
     JsonRpcResponse,
 )
 
 log = logging.getLogger("andromity.server")
+
+MCP_START_RETRY_AFTER_S = 30.0
 
 MODEL_REFRESH_FAILURES = {
     "no_key": "No API key set.",
@@ -201,6 +204,8 @@ class JsonRpcHandler:
         self._git_mutating_roots: Set[str] = set()
         self._mcp_manager: Optional[Any] = None
         self._mcp_started: bool = False
+        self._mcp_start_tasks: Dict[str, asyncio.Task] = {}
+        self._mcp_start_failures: Dict[str, tuple[float, str]] = {}
         self._user_killed_processes: Set[str | tuple[str, str]] = set()
         self._model_refreshes: Dict[tuple[str, str], "asyncio.Future[Dict[str, Any]]"] = {}
         try:
@@ -545,6 +550,11 @@ class JsonRpcHandler:
             if request.is_notification():
                 return None
             return JsonRpcResponse.err(request.id, -32000, "Request cancelled")
+        except RpcRefusal as e:
+            log.debug("RPC method %s declined: %s", request.method, e)
+            if request.is_notification():
+                return None
+            return JsonRpcResponse.err(request.id, INTERNAL_ERROR, str(e))
         except Exception as e:
             log.exception("Error executing RPC method %s: %s", request.method, e)
             if request.is_notification():
@@ -692,6 +702,53 @@ class JsonRpcHandler:
                     log.warning("MCP start_all failed: %s", e)
                     raise
             return mgr
+
+    @staticmethod
+    def _mcp_project_key(project_path: Optional[str]) -> str:
+        return str(Path(project_path).resolve()) if project_path else str(Path.cwd().resolve())
+
+    def _started_mcp_manager(self, project_path: Optional[str]) -> Optional[Any]:
+        mgr = self._mcp_manager
+        if not self._mcp_started or mgr is None:
+            return None
+        if project_path and self._mcp_project_key(project_path) != self._mcp_project_key(mgr.project_path):
+            return None
+        return mgr
+
+    def _mcp_start_failure(self, project_path: Optional[str]) -> Optional[str]:
+        """Why the last background start for this project failed, while it is too recent to retry."""
+        failed = self._mcp_start_failures.get(self._mcp_project_key(project_path))
+        if failed and time.monotonic() - failed[0] < MCP_START_RETRY_AFTER_S:
+            return failed[1]
+        return None
+
+    def start_mcp_soon(self, project_path: Optional[str] = None) -> Optional[asyncio.Task]:
+        """Start MCP servers in the background once per project; callers never wait for them."""
+        key = self._mcp_project_key(project_path)
+        task = self._mcp_start_tasks.get(key)
+        if task is not None and not task.done():
+            return task
+        if self._mcp_start_failure(project_path) is not None:
+            return None
+        task = asyncio.create_task(self._start_mcp_and_report(project_path, key))
+        self._mcp_start_tasks[key] = task
+        return task
+
+    async def _start_mcp_and_report(self, project_path: Optional[str], key: str) -> None:
+        try:
+            mgr = await self._ensure_mcp_started(project_path)
+        except Exception as e:
+            log.debug("MCP background start failed: %s", e)
+            self._mcp_start_failures[key] = (time.monotonic(), "MCP servers could not be started. Try again shortly.")
+            return
+        finally:
+            self._mcp_start_tasks.pop(key, None)
+        self._mcp_start_failures.pop(key, None)
+        for name, status in list((mgr.server_status or {}).items()):
+            try:
+                self.notify("mcp/statusChanged", {"name": name, "status": dict(status)})
+            except Exception as e:
+                log.debug("MCP status notification failed: %s", e)
 
     # ── Session Methods ─────────────────────────────────────────────────────────
 
@@ -2267,8 +2324,8 @@ class JsonRpcHandler:
                         with open(_price_file, "w") as _f:
                             _f.write("{}")
 
-            import litellm
-            litellm.suppress_debug_info = True
+            from andromity.core.litellm_loader import load_litellm
+            litellm = await load_litellm()
 
             messages = [{"role": "user", "content": prompt}]
             kwargs: Dict[str, Any] = {
@@ -2524,7 +2581,14 @@ class JsonRpcHandler:
             "include_assisted_by": config.get("default", "include_assisted_by", False),
             "is_trusted": config.is_trusted(params.get("project_path") or str(Path.cwd())) if params else False,
             "pinned_models": config.get_pinned_models(),
+            "allowed_commands": self._configured_strings("allowed_commands"),
+            "allowed_domains": self._configured_strings("allowed_domains"),
         }
+
+    @staticmethod
+    def _configured_strings(key: str) -> List[str]:
+        values = config.get("default", key, [])
+        return [value for value in values if isinstance(value, str) and value] if isinstance(values, list) else []
 
     def _airgap_summary(self) -> Dict[str, Any]:
         from andromity.core import network_policy
@@ -2695,62 +2759,63 @@ class JsonRpcHandler:
                 except Exception:
                     pass
 
-            for p in providers_to_check:
-                cached = get_cached_live_models(p)
-                if p == "ollama":
-                    saved = config.get_provider_config(p) or {}
-                    try:
-                        cached = await asyncio.wait_for(asyncio.to_thread(
-                            fetch_live_models_sync, p, base_url=saved.get("base_url"),
-                        ), timeout=3.0)
-                    except Exception:
-                        cached = []
-                    if not cached:
-                        continue
-                if p == "openrouter" and openrouter_cached and not cached:
-                    cached = openrouter_cached
+            ollama_models: List[Dict[str, Any]] = []
+            if "ollama" in providers_to_check:
+                saved = config.get_provider_config("ollama") or {}
+                try:
+                    ollama_models = await asyncio.wait_for(asyncio.to_thread(
+                        fetch_live_models_sync, "ollama", base_url=saved.get("base_url"),
+                    ), timeout=3.0) or []
+                except Exception:
+                    ollama_models = []
 
+            def _build_rows() -> List[Dict[str, Any]]:
+                from andromity.core.models import get_models_for_provider
+                rows: List[Dict[str, Any]] = []
+                for p in providers_to_check:
+                    if p == "ollama":
+                        cached = ollama_models
+                        if not cached:
+                            continue
+                    else:
+                        cached = get_cached_live_models(p)
+                        if p == "openrouter" and openrouter_cached and not cached:
+                            cached = openrouter_cached
+                    try:
+                        flags = _key_flags(p)
+                        entries = cached or get_models_for_provider(p)
+                    except Exception as e:
+                        log.warning("Could not list models for %s: %s", p, e)
+                        continue
+                    for m in entries:
+                        m_id = m.get("id") if isinstance(m, dict) else None
+                        if not isinstance(m_id, str) or not m_id:
+                            continue
+                        try:
+                            rows.append(_row(p, m, m_id, cached, flags))
+                        except Exception as e:
+                            log.debug("Skipped a model row for %s: %s", p, e)
+                return rows
+
+            def _row(p: str, m: Dict[str, Any], m_id: str, cached: Any, flags: Dict[str, bool]) -> Dict[str, Any]:
                 from andromity.core.reasoning import get_model_reasoning_capability
-                flags = _key_flags(p)
-                if cached:
-                    for m in cached:
-                        m_id = m.get("id")
-                        models.append({
-                            "id": m_id,
-                            "name": m.get("name", m_id),
-                            "desc": m.get("desc", ""),
-                            "provider": p,
-                            "context": m.get("context", ""),
-                            "context_limit": m.get("context_limit") or get_context_limit_for_model(p, m_id),
-                            "pricing": m.get("pricing", ""),
-                            "is_free": m.get("is_free", False) or m_id.lower().endswith(":free"),
-                            "tags": m.get("tags", []),
-                            "is_pinned": _is_pinned(m_id, p),
-                            "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
-                            "source": "live",
-                            **flags,
-                        })
-                else:
-                    # Fallback to catalog instantly
-                    from andromity.core.models import get_models_for_provider
-                    for m in get_models_for_provider(p):
-                        m_id = m.get("id")
-                        ctx = get_context_limit_for_model(p, m_id)
-                        models.append({
-                            "id": m_id,
-                            "name": m.get("name", m_id),
-                            "desc": m.get("desc", ""),
-                            "provider": p,
-                            "context": m.get("context", ""),
-                            "context_limit": ctx,
-                            "pricing": m.get("pricing", ""),
-                            "is_free": m.get("is_free", False) or m_id.lower().endswith(":free"),
-                            "tags": m.get("tags", []),
-                            "is_pinned": _is_pinned(m_id, p),
-                            "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
-                            "source": "catalog",
-                            **flags,
-                        })
+                return {
+                    "id": m_id,
+                    "name": m.get("name", m_id),
+                    "desc": m.get("desc", ""),
+                    "provider": p,
+                    "context": m.get("context", ""),
+                    "context_limit": (m.get("context_limit") if cached else None) or get_context_limit_for_model(p, m_id),
+                    "pricing": m.get("pricing", ""),
+                    "is_free": m.get("is_free", False) or m_id.lower().endswith(":free"),
+                    "tags": m.get("tags", []),
+                    "is_pinned": _is_pinned(m_id, p),
+                    "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
+                    "source": "live" if cached else "catalog",
+                    **flags,
+                }
+
+            models = await asyncio.to_thread(_build_rows)
         except Exception as e:
             log.warning("Error listing models: %s", e)
         return models
@@ -3206,18 +3271,18 @@ class JsonRpcHandler:
     def _review_repo(self, params: Dict[str, Any], mutate: bool = False):
         project_path = Path(params.get("project_path") or Path.cwd()).resolve()
         if not config.is_trusted(str(project_path)):
-            raise ValueError("Trust this workspace before reviewing or reverting files.")
+            raise RpcRefusal("Trust this workspace before reviewing or reverting files.")
         repo = get_repo(project_path)
         if mutate and repo:
             root = Path(repo.working_tree_dir).resolve()
             if str(root) in self._git_mutating_roots:
-                raise ValueError("Another file restoration is in progress. Wait for it to finish.")
+                raise RpcRefusal("Another file restoration is in progress. Wait for it to finish.")
             for sid, task in self._running_tasks.items():
                 session = self._active_sessions.get(sid)
                 if not task.done() and session:
                     active_repo = get_repo(Path(session.project_path))
                     if active_repo and Path(active_repo.working_tree_dir).resolve() == root:
-                        raise ValueError("Wait for all agent turns in this repository to finish before reverting.")
+                        raise RpcRefusal("Wait for all agent turns in this repository to finish before reverting.")
         return repo
 
     async def rpc_git_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -3896,7 +3961,8 @@ class JsonRpcHandler:
                         os.makedirs(os.path.dirname(_price_file), exist_ok=True)
                         with open(_price_file, "w") as _f:
                             _f.write("{}")
-            import litellm
+            from andromity.core.litellm_loader import load_litellm
+            litellm = await load_litellm()
             if not provider or not model:
                 provider = config.get("default", "provider", "")
                 model = config.get("default", "model", "")
@@ -4028,15 +4094,12 @@ Your output must be:
             from andromity.core.mcp import MCPClientManager
             from andromity.core import tools as _tools_mod
             params = params or {}
-            # Prefer daemon's own manager, fallback to global tools manager
-            live_manager = self._mcp_manager or getattr(_tools_mod, "_mcp_manager", None)
-            # Ensure manager is started at least once so status is live, but don't block on error
-            if not self._mcp_started or params.get("project_path"):
-                try:
-                    # lazy start for first list call
-                    live_manager = await self._ensure_mcp_started(params.get("project_path"))
-                except Exception:
-                    live_manager = self._mcp_manager
+            live_manager = self._started_mcp_manager(params.get("project_path"))
+            start_failure = None
+            starting = live_manager is None
+            if starting:
+                self.start_mcp_soon(params.get("project_path"))
+                start_failure = self._mcp_start_failure(params.get("project_path"))
 
             # Load raw config entries
             project_path = params.get("project_path") or str(Path.cwd().resolve())
@@ -4061,7 +4124,8 @@ Your output must be:
                 status_entry = live_status.get(name, {})
                 session = live_sessions.get(name)
                 tools_count = len(session.tools) if session and hasattr(session, "tools") else status_entry.get("tools", 0)
-                status = status_entry.get("status", "unknown")
+                pending = "error" if start_failure else "starting" if starting else "unknown"
+                status = status_entry.get("status", "disabled" if srv_conf.get("disabled") else pending)
                 command = srv_conf.get("command") or srv_conf.get("serverUrl") or srv_conf.get("url") or ""
                 args = srv_conf.get("args", [])
                 result.append({
@@ -4072,7 +4136,8 @@ Your output must be:
                     "tools_count": tools_count,
                     "tools": [{"name": tool.name, "description": tool.description}
                               for tool in session.tools] if session and hasattr(session, "tools") else [],
-                    "error": status_entry.get("error") or srv_conf.get("error") or None,
+                    "error": status_entry.get("error") or srv_conf.get("error") or (
+                        start_failure if status == "error" else None),
                     "error_detail": status_entry.get("error_detail") or None,
                     "disabled": srv_conf.get("disabled", False),
                     "remote": bool(srv_conf.get("serverUrl") or srv_conf.get("url") or "mcp-remote" in args or "mcp-remote" in str(srv_conf.get("command", ""))),

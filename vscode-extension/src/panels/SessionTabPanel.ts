@@ -18,6 +18,7 @@ import { runCodeBlockInTerminal } from "../integrations/TerminalRunner.js";
 import { airGapPillMessage } from "../airgapState.js";
 import { copySessionAsMarkdown } from "../chatMarkdown.js";
 import { runSidePanelCommand, SidePanelFeed } from "../sidePanelFeed.js";
+import { actionRailCommand } from "../providers/chatview/actionRail.js";
 import { confirmRewindAndResend, resendPromptOf } from "../integrations/rewind.js";
 import { handlePromptImageMessage, undonePromptOf } from "../integrations/promptImages.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
@@ -192,6 +193,7 @@ export class SessionTabPanel {
       currentMode: this._currentMode,
       currentProfile: this._currentProfile,
       currentReasoning: this._currentReasoning,
+      actionRail: true,
     });
     // In an editor tab, hide the redundant "Open in tab" action button in the top bar
     html = html.replace(
@@ -451,6 +453,18 @@ export class SessionTabPanel {
       return;
     }
 
+    if (message.type === "run_action") {
+      const command = actionRailCommand(message.action);
+      if (command) {
+        try {
+          await vscode.commands.executeCommand(command);
+        } catch {
+          vscode.window.showErrorMessage("Andromity could not run that action. Try it from the Command Palette instead.");
+        }
+      }
+      return;
+    }
+
     if (message.type === "copy_chat_markdown") {
       await copySessionAsMarkdown(this._rpcClient, this._sessionId);
       return;
@@ -539,7 +553,7 @@ export class SessionTabPanel {
     }
 
     if (message.type === "open_diff" || message.type === "open_review_tab" || message.type === "open_changes_review") {
-      this._viewProvider.openReviewWebview(message.filePath, message.turnFiles, this._viewProvider.turnRefFrom(message, this._sessionId));
+      this._viewProvider.openReviewWebview(message.filePath, message.turnFiles === undefined ? null : message.turnFiles, this._viewProvider.turnRefFrom(message, this._sessionId));
       return;
     }
 
@@ -701,6 +715,7 @@ export class SessionTabPanel {
         }
         const trust = await this._rpcClient.call<{ is_trusted: boolean }>("trust.set", { project_path: workspaceFolder });
         this._postMessage({ type: "trust_updated", isTrusted: trust.is_trusted });
+        this._sidePanelFeed.refresh(["changes"]);
         break;
       }
       case "toggle_pin": {

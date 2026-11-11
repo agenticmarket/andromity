@@ -54,6 +54,10 @@ ProviderConnectionScreen { align: center middle; }
                     yield Input(value=self.saved.get("type", "openai"), id="connection-type")
                     yield Label("API version (optional)")
                     yield Input(value=self.saved.get("api_version", ""), id="connection-version")
+                    efforts = self.saved.get("reasoning_efforts") or []
+                    efforts_str = ", ".join(efforts) if isinstance(efforts, list) else str(efforts)
+                    yield Label("Supported reasoning efforts (optional)")
+                    yield Input(value=efforts_str, placeholder="low, medium, high, xhigh", id="connection-efforts")
                     yield Static("OpenAI-compatible is the default. Other adapters can use the runtime's standard environment credentials.")
                 yield Static("", id="connection-status")
             with Horizontal(id="connection-actions"):
@@ -71,6 +75,7 @@ ProviderConnectionScreen { align: center middle; }
         values = {key: self.query_one(selector, Input).value.strip() for key, selector in {
             "id": "#connection-id", "display_name": "#connection-name", "base_url": "#connection-url",
             "model": "#connection-model", "type": "#connection-type", "api_version": "#connection-version",
+            "reasoning_efforts": "#connection-efforts",
         }.items()}
         key = self.query_one("#connection-key", Input).value.strip()
         if key:

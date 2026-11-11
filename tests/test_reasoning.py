@@ -156,7 +156,7 @@ def test_anthropic_live_effort_flags_and_adaptive_request():
     assert cap.supported_efforts == ["low", "xhigh"]
     request = apply_reasoning_to_request("anthropic", "future", "xhigh", {}, cap)
     assert request["output_config"] == {"effort": "xhigh"}
-    assert request["thinking"] == {"type": "adaptive"}
+    assert request["thinking"] == {"type": "adaptive", "display": "summarized"}
     assert apply_reasoning_to_request("anthropic", "future", "off", {}, cap) == {}
 
 
@@ -268,7 +268,7 @@ def test_anthropic_off_rules_from_live_official_table(model, off, mandatory):
     assert ("off" in cap.supported_efforts) is off
     assert cap.is_mandatory is mandatory
     request = apply_reasoning_to_request("anthropic", model, "off", {}, cap)
-    assert bool(request) is off
+    assert (request.get("thinking", {}).get("type") == "disabled") is off
     if model == "claude-opus-5":
         assert request["output_config"] == {"effort": "high"}
 
@@ -279,3 +279,41 @@ def test_refresh_invalidates_discovered_capabilities():
     assert get_model_reasoning_capability("openai", "custom") == cap
     effort.invalidate_reasoning_capabilities("openai")
     assert get_model_reasoning_capability("openai", "custom").mode == ReasoningMode.UNKNOWN
+
+
+def test_custom_provider_reasoning_capabilities_and_request_body(monkeypatch):
+    from andromity.config import config
+    monkeypatch.setattr(config, "get_provider_config", lambda p: {
+        "name": "example-endpoint", "type": "openai", "model": "cx/gpt-6-luna",
+    })
+    cap = get_model_reasoning_capability("example-endpoint", "cx/gpt-6-luna")
+    assert cap.mode == ReasoningMode.UNKNOWN
+    assert cap.supported_efforts == []
+    req = apply_reasoning_to_request("example-endpoint", "cx/gpt-6-luna", "high", {})
+    assert "reasoning_effort" not in req
+
+    monkeypatch.setattr(config, "get_provider_config", lambda p: {
+        "name": "example-endpoint", "type": "openai", "model": "cx/gpt-6-luna",
+        "reasoning_efforts": ["low", "medium", "high", "xhigh"],
+    })
+    effort.invalidate_reasoning_capabilities("example-endpoint")
+    cap = get_model_reasoning_capability("example-endpoint", "cx/gpt-6-luna")
+    assert cap.mode == ReasoningMode.CONFIGURABLE
+    assert cap.supported_efforts == ["low", "medium", "high", "xhigh"]
+    assert cap.default_effort == "auto"
+    assert cap.request_format == "openai"
+
+    for value in ("high", "low", "xhigh"):
+        assert apply_reasoning_to_request("example-endpoint", "cx/gpt-6-luna", value, {}) == {
+            "reasoning_effort": value, "allowed_openai_params": ["reasoning_effort"]}
+    for value in ("auto", None, "ultra", "off"):
+        assert apply_reasoning_to_request("example-endpoint", "cx/gpt-6-luna", value, {}) == {}
+
+    monkeypatch.setattr(config, "get_provider_config", lambda p: {
+        "name": "example-endpoint-off", "type": "openai", "model": "cx/gpt-6-luna",
+        "reasoning_efforts": ["off", "low", "high"],
+    })
+    effort.invalidate_reasoning_capabilities("example-endpoint-off")
+    for value in ("off", "none"):
+        assert apply_reasoning_to_request("example-endpoint-off", "cx/gpt-6-luna", value, {}) == {
+            "reasoning_effort": "none", "allowed_openai_params": ["reasoning_effort"]}

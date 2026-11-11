@@ -110,6 +110,9 @@ export interface ReceiptReadyEvent {
   commands_failed?: number | null;
 }
 
+/** Where the "was this receipt useful" strip is: not decided yet, asking, taking a note after a rating, or gone. */
+export type ReceiptFeedbackStep = "unknown" | "ask" | "note-up" | "note-down" | "none";
+
 export interface ReceiptViewState {
   sessionName: string;
   response: ReceiptResponse | null;
@@ -118,4 +121,5 @@ export interface ReceiptViewState {
   turns: number[];
   /** True while a specific turn is chosen rather than the latest. */
   pinned: boolean;
+  feedback?: ReceiptFeedbackStep;
 }

@@ -179,7 +179,7 @@ provider = "anthropic"
 model    = "claude-sonnet-4-5"
 profile  = "builder"
 telemetry = true        # set to false to opt out
-max_tool_rounds = 60    # tool rounds one turn may take before the agent stops and reports
+max_tool_rounds = 200   # tool rounds before the agent pauses and asks whether to keep going
 
 [[providers]]
 name = "anthropic"

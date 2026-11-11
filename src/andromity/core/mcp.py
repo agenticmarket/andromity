@@ -1,9 +1,12 @@
 """Model Context Protocol (MCP) client manager — connects to MCP servers over stdio JSON-RPC."""
 import asyncio
+import concurrent.futures
+import importlib
 import json
 import logging
 import os
 import sys
+import threading
 import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -54,6 +57,82 @@ def sdk_tool_info(server_name: str, tool: Any) -> MCPToolInfo:
         description=getattr(tool, "description", "") or "",
         input_schema=schema or {},
     )
+
+
+_SDK_MODULES = {
+    "sse": ("mcp.client.session", "mcp.client.sse"),
+    "http": ("mcp.client.session", "mcp.client.streamable_http"),
+}
+REMOTE_TOOL_TIMEOUT_S = 600
+DROP_GRACE_S = 0.1
+CANCEL_WAIT_S = 1.0
+SDK_UNAVAILABLE = "The MCP client library could not be loaded. Reinstall Andromity, then retry."
+_sdk_ready = threading.Event()
+_sdk_loaded: set = set()
+_sdk_loads: Dict[str, "concurrent.futures.Future[None]"] = {}
+_sdk_lock = threading.Lock()
+
+
+def _retrieve(task: "asyncio.Future[Any]") -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+async def _settle(task: "asyncio.Future[Any]") -> None:
+    """Cancel a task and collect its outcome, without waiting on one that ignores cancellation."""
+    if not task.done():
+        task.cancel()
+        await asyncio.wait({task}, timeout=CANCEL_WAIT_S)
+    if task.done():
+        _retrieve(task)
+    else:
+        task.add_done_callback(_retrieve)
+
+
+def _sdk_key(transport: str) -> str:
+    return "sse" if transport == "sse" else "http"
+
+
+def _import_sdk(transport: str = "http") -> None:
+    key = _sdk_key(transport)
+    for name in _SDK_MODULES[key]:
+        importlib.import_module(name)
+    if key == "http" and getattr(sys.modules["mcp.client.streamable_http"], "streamablehttp_client", None) is None:
+        importlib.import_module("httpx2")
+    try:
+        importlib.import_module("jsonschema")
+    except ImportError:
+        pass
+
+
+def _load_on_thread(key: str, future: "concurrent.futures.Future[None]") -> None:
+    try:
+        _import_sdk(key)
+    except BaseException as exc:
+        with _sdk_lock:
+            _sdk_loads.pop(key, None)
+        future.set_exception(exc)
+        return
+    with _sdk_lock:
+        _sdk_loaded.add(key)
+        _sdk_loads.pop(key, None)
+    _sdk_ready.set()
+    future.set_result(None)
+
+
+async def load_mcp_sdk(transport: str = "http") -> None:
+    """Import the MCP SDK on one shared worker thread: it pulls in pydantic and httpx, which blocks for seconds on a cold disk."""
+    key = _sdk_key(transport)
+    if _sdk_ready.is_set() and key in _sdk_loaded:
+        return
+    with _sdk_lock:
+        future = _sdk_loads.get(key)
+        if future is None:
+            future = concurrent.futures.Future()
+            future.set_running_or_notify_cancel()
+            _sdk_loads[key] = future
+            threading.Thread(target=_load_on_thread, args=(key, future), name="mcp-sdk-import", daemon=True).start()
+    await asyncio.wrap_future(future)
 
 
 def open_remote_transport(transport: str, url: str, headers: Dict[str, str]) -> AsyncContextManager[Any]:
@@ -437,7 +516,17 @@ class MCPSseSession:
         return self._session is not None
 
     async def _run(self):
-        from mcp.client.session import ClientSession
+        try:
+            await load_mcp_sdk(self.transport)
+            from mcp.client.session import ClientSession
+        except asyncio.CancelledError:
+            self._init_event.set()
+            return
+        except Exception as e:
+            self.error = SDK_UNAVAILABLE
+            log.warning("MCP client library could not be loaded for '%s' (%s)", self.name, type(e).__name__)
+            self._init_event.set()
+            return
 
         try:
             async with open_remote_transport(self.transport, self.url, self.headers) as streams:
@@ -497,14 +586,33 @@ class MCPSseSession:
         return self.tools
         
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        if not self._session:
-            return f"Session '{self.name}' not connected"
+        session, connection = self._session, self._bg_task
+        if not session or connection is None or connection.done():
+            return f"Error: MCP server '{self.name}' is not connected. Reconnect it, then retry '{tool_name}'."
+        call = asyncio.ensure_future(session.call_tool(tool_name, arguments))
+        timed_out = False
         try:
-            resp = await self._session.call_tool(tool_name, arguments)
-            # The SDK returns CallToolResult with .content array of TextContent
-            return "\n".join(c.text for c in resp.content if hasattr(c, 'text'))
+            await asyncio.wait({call, connection}, timeout=REMOTE_TOOL_TIMEOUT_S, return_when=asyncio.FIRST_COMPLETED)
+            if not call.done() and connection.done():
+                await asyncio.wait({call}, timeout=DROP_GRACE_S)
+            timed_out = not call.done() and not connection.done()
+        finally:
+            await _settle(call)
+        if not call.done() or call.cancelled():
+            if connection.done():
+                again = "Authenticate it again" if self.needs_auth else "Reconnect it"
+                return (f"Error: the connection to MCP server '{self.name}' was lost while '{tool_name}' was running, "
+                        f"so its result is unknown. {again}, and if the tool changes anything, check whether it ran before retrying.")
+            if timed_out:
+                return f"Error: MCP server '{self.name}' did not answer '{tool_name}' within {REMOTE_TOOL_TIMEOUT_S} seconds."
+            return f"Error: '{tool_name}' on MCP server '{self.name}' was cancelled before it finished."
+        error = call.exception()
+        if error is not None:
+            return f"Error executing tool '{tool_name}': {str(error) or type(error).__name__}"
+        try:
+            return "\n".join(c.text for c in call.result().content if hasattr(c, 'text'))
         except Exception as e:
-            return f"Error executing tool '{tool_name}': {e}"
+            return f"Error reading the result of '{tool_name}' from MCP server '{self.name}': {type(e).__name__}"
             
     async def send_request(self, method: str, params: Dict[str, Any], timeout: float = 30.0) -> Optional[Dict[str, Any]]:
         # Map internal JSON-RPC calls to SDK calls if necessary, but TUI usually uses call_tool directly.
@@ -514,6 +622,39 @@ class MCPSseSession:
 
     async def send_notification(self, method: str, params: Dict[str, Any]):
         pass
+
+
+_REPORTED_CONFIG_ERRORS: set = set()
+
+
+def read_mcp_servers(path: Path) -> Dict[str, Any]:
+    """Servers one MCP config file declares. An empty or unreadable file declares none.
+
+    A broken file is reported once per version of it, not on every read.
+    """
+    info = None
+    try:
+        if not path.is_file():
+            return {}
+        info = path.stat()
+        text = path.read_text(encoding="utf-8-sig")
+        if not text.strip():
+            return {}
+        data = json.loads(text)
+    except OSError:
+        return {}
+    except (ValueError, RecursionError) as e:
+        version = (str(path), info.st_mtime_ns if info else 0, info.st_size if info else 0)
+        if version in _REPORTED_CONFIG_ERRORS:
+            log.debug("MCP config at %s is still not valid JSON: %s", path, e)
+        else:
+            _REPORTED_CONFIG_ERRORS.add(version)
+            log.warning("Failed to parse MCP config at %s: %s", path, e)
+        return {}
+    servers = (data.get("mcpServers") or data.get("servers") or {}) if isinstance(data, dict) else {}
+    if not isinstance(servers, dict):
+        return {}
+    return {name: entry for name, entry in servers.items() if isinstance(entry, dict)}
 
 
 class MCPClientManager:
@@ -618,15 +759,9 @@ class MCPClientManager:
         ]
         merged_servers: Dict[str, Any] = {}
         for p in candidates:
-            if p.is_file():
-                try:
-                    data = json.loads(p.read_text(encoding="utf-8"))
-                    servers = data.get("mcpServers") or data.get("servers") or {}
-                    for k, v in servers.items():
-                        if k not in merged_servers and isinstance(v, dict):
-                            merged_servers[k] = v
-                except Exception as e:
-                    log.warning("Failed to parse MCP config at %s: %s", p, e)
+            for k, v in read_mcp_servers(p).items():
+                if k not in merged_servers:
+                    merged_servers[k] = v
         return {"mcpServers": merged_servers}
 
     async def start_all(self):
