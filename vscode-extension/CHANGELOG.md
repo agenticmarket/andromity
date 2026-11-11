@@ -11,6 +11,7 @@ All notable changes to the "andromity" extension will be documented in this file
 - **Effort picker.** A stepped rail with only the levels the model supports, an Auto switch and a hint per level. Custom OpenAI-compatible connections can declare their effort levels (thanks to Nikunj Maheshwari, #19).
 
 ### Changed
+- **Long turns ask before stopping.** After 200 tool rounds the chat asks whether to keep going, instead of stopping at 60.
 - **Thinking shows as it happens** for Claude models, and the chat says the model is thinking while a reply hasn't started.
 - **The Ollama notice appears once** and says whether the model runs on this computer or on Ollama's cloud.
 - **Full model names** on hover in the model picker.
